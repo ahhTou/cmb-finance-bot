@@ -1,0 +1,9 @@
+/var/*
+!/var/.gitkeep
+/.venv/
+/config/local.json
+/config/credentials.json
+/config/credentials.enc
+__pycache__/
+*.pyc
+.DS_Store

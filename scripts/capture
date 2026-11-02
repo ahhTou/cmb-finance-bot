@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SDK=${ANDROID_SDK_ROOT:-"$ROOT/var/android-sdk"}
+OUT="$ROOT/var/screenshots/current.png"
+umask 077
+mkdir -p "$ROOT/var/screenshots"
+TMP="$OUT.tmp.$$"
+trap 'rm -f "$TMP"' EXIT HUP INT TERM
+"$SDK/platform-tools/adb" -P 15039 -s emulator-15554 exec-out screencap -p > "$TMP"
+if ! [ -s "$TMP" ]; then
+  echo '截图失败：模拟器没有返回图像。' >&2
+  exit 1
+fi
+mv -f "$TMP" "$OUT"
+printf '%s\n' "$OUT"
