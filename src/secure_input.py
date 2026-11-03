@@ -65,8 +65,11 @@ def screen_protected():
         raise RuntimeError("无法判断截图状态。")
     return len(data) < 12000
 
-def login(provided=None):
-    root = screen()
+def login(provided=None, root=None):
+    """`root` lets a caller pass a tree it read itself: `uiautomator dump`
+    fails while a UiAutomator2 server holds the UiAutomation connection."""
+    if root is None:
+        root = screen()
     if not (has(root, "我的头像") and has(root, "更多选项")):
         raise RuntimeError("页面不符合已观察到的招行九宫格登录页。")
     if not screen_protected():

@@ -17,6 +17,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import keychain_store
@@ -45,6 +46,32 @@ BALANCE_TEMPLATE = Path(__file__).with_name("templates") / "balance_label.json"
 
 class Stop(Exception):
     pass
+
+
+MAX_AMOUNT = Decimal("50000")   # guard against a mistyped amount
+
+
+def parse_amount(value):
+    """Validate a purchase amount and return it as 'N.NN'."""
+    try:
+        amount = Decimal(str(value).replace(",", ""))
+    except InvalidOperation:
+        raise Stop("金额格式不正确。")
+    if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+        raise Stop("金额必须是正数，最多两位小数。")
+    if amount > MAX_AMOUNT:
+        raise Stop(f"金额超过上限 {MAX_AMOUNT} 元；确需更大金额请先改 MAX_AMOUNT。")
+    return f"{amount:.2f}"
+
+
+def yuan_amounts(text):
+    """All ￥ amounts in `text` as Decimals; accepts 5000, 5000.00, 5,000.00."""
+    return {Decimal(m.replace(",", "")) for m in re.findall(r"[￥¥]\s*([\d,]+(?:\.\d+)?)", text)}
+
+
+def plain_amounts(text):
+    """All numbers in `text`, with or without ￥ or thousands separators."""
+    return {Decimal(m.replace(",", "")) for m in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
 
 
 def tap(xy):
@@ -139,7 +166,6 @@ def js_prefill_and_buy(amount, code, timeout=3.0):
 
     end = time.monotonic() + timeout
     detail = None
-    fallback = None
     while time.monotonic() < end:
         try:
             pages = jsonlib.load(urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=1))
@@ -147,16 +173,11 @@ def js_prefill_and_buy(amount, code, timeout=3.0):
                 url = p.get("url", "")
                 if "financedetail.html" not in url:
                     continue
+                # Exact product match only: never goBuy() on another product.
                 query = parse_qs(urlparse(url).query)
                 if (query.get("XRIPINN") or [""])[0] == code:
                     detail = p
                     break
-                try:
-                    if jsonlib.loads(p.get("description", "{}")).get("visible"):
-                        fallback = p
-                except Exception:
-                    pass
-            detail = detail or fallback
             if detail:
                 break
         except Exception:
@@ -193,6 +214,59 @@ def js_prefill_and_buy(amount, code, timeout=3.0):
 
     if asyncio.run(call()) != "ok":
         raise Stop("JS 预填金额失败。")
+
+
+BUY_URL = (
+    "https://mobile.cmbchina.com/IEntrustFinance/subsidiaryfinancing/saentrustbuy.html"
+    "?SaaCod=D07&CodeInn={code}&FndInn={code}&CurDepositBuyAmount={amount}&CommendCode="
+    "&PosSce=&refOrderNo=&refFrom=&videoChannel=&videoSerialID=&prodSeqNbr=&SubAccount="
+    "&PosTag=&AccountUID="
+)
+
+
+def app_link(url):
+    """The app's own deep link for opening a URL in a new WebView; the same
+    entry cmblife and shared links use (see jumpBuy on the detail page)."""
+    from urllib.parse import quote
+    return ("cmbmobilebank://cmbls/FunctionJump/?action=gourl&src=" + quote(url, safe="")
+            + "&closeCurrentView=false&needlogin=true")
+
+
+def buy_page_shown(code):
+    """True when a visible, full-size WebView holds the purchase form for
+    exactly `code`. The native tree alone cannot tell one product's form from
+    another's (a stale form may still be on top while a new link loads)."""
+    import json as jsonlib
+    import urllib.request
+    from urllib.parse import urlparse, parse_qs
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=1) as r:
+            pages = jsonlib.load(r)
+    except (OSError, ValueError):
+        return False
+    for p in pages:
+        url = urlparse(p.get("url", ""))
+        if "saentrustbuy.html" not in url.path:
+            continue
+        if (parse_qs(url.query).get("CodeInn") or [""])[0] != code:
+            continue
+        try:
+            d = jsonlib.loads(p.get("description") or "{}")
+        except ValueError:
+            d = {}
+        if d.get("visible") and (d.get("width") or 0) >= 300 and (d.get("height") or 0) >= 500:
+            return True
+    return False
+
+
+def open_buy_link(code, amount):
+    """Open the H5 purchase form for `code` through the app's deep link: a
+    fresh WebView container, like goBuy() would open, with no detail page.
+    Opening a form submits nothing; it is safe to repeat until
+    同意协议下一步 is tapped."""
+    url = BUY_URL.format(code=code, amount=amount)
+    adb("shell", "am", "start", "-a", "android.intent.action.VIEW",
+        "-d", "'" + app_link(url) + "'", "cmb.pb")
 
 
 def parse_at(value):
