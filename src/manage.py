@@ -158,3 +158,11 @@ if __name__ == "__main__":
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         sys.exit(1)
+
+
+def status_info():
+    state = load()
+    return {key: {"running": owned(state.get(key, {}).get("pid", -1),
+                                  state.get(key, {}).get("tokens", ["__missing__"])),
+                  "pid": state.get(key, {}).get("pid")}
+            for key in ("adb", "emulator")}

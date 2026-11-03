@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec /usr/bin/xcodebuild -project "$ROOT/app/CMBFinanceBot/CMBFinanceBot.xcodeproj" \
+  -scheme CMBFinanceBot -configuration Release \
+  -derivedDataPath "$ROOT/app/CMBFinanceBot/build" build

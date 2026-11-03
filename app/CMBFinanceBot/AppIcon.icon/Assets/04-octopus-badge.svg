@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>红色圆徽与放大八爪鱼，触手伸出圆徽，横线连接身体，眼睛镂空</title>
+<defs>
+ <clipPath id="badge"><circle cx="512" cy="512" r="410"/></clipPath>
+
+</defs>
+<circle cx="512" cy="512" r="410" fill="#CF0A2C"/>
+<g clip-path="url(#badge)"><rect x="760" y="340" width="250" height="18" fill="white"/><rect x="760" y="380" width="250" height="18" fill="white"/><rect x="760" y="420" width="250" height="18" fill="white"/><rect x="760" y="460" width="250" height="18" fill="white"/><rect x="760" y="500" width="250" height="18" fill="white"/><rect x="760" y="540" width="250" height="18" fill="white"/><rect x="760" y="580" width="250" height="18" fill="white"/><rect x="760" y="620" width="250" height="18" fill="white"/></g>
+<g transform="translate(80 45) scale(13.5)" fill="white" stroke="white" stroke-linejoin="round">
+ <path d="M13.500 36 H18.125 V40 L11.000 53 H6.7 L13.500 40 Z M18.125 36 H22.750 V40 L17.600 55.5 H13.3 L18.125 40 Z M22.750 36 H27.375 V40 L24.200 57 H19.9 L22.750 40 Z M27.375 36 H32.000 V40 L30.800 58 H26.5 L27.375 40 Z M32.000 36 H36.625 V40 L37.400 58 H33.1 L32.000 40 Z M36.625 36 H41.250 V40 L44.000 57 H39.7 L36.625 40 Z M41.250 36 H45.875 V40 L50.600 55.5 H46.3 L41.250 40 Z M45.875 36 H50.500 V40 L57.200 53 H52.9 L45.875 40 Z" stroke-width="2"/>
+ <path d="M23 8 H41.5 L52 19.5 V40 H12 V19 Z M27.4 24.5 a1.9 3.1 0 1 0 -3.8 0 a1.9 3.1 0 1 0 3.8 0 Z M40.4 24.5 a1.9 3.1 0 1 0 -3.8 0 a1.9 3.1 0 1 0 3.8 0 Z" fill-rule="evenodd" stroke="none"/>
+ <path d="M28.6 30.6 q1.7 2.8 3.4 0 q1.7 2.8 3.4 0" fill="none" stroke="#CF0A2C" stroke-width="1.5" stroke-linecap="round"/>
+</g>
+</svg>

@@ -25,6 +25,9 @@ Rules kept from AGENT_WORKFLOW.md: one submission only, never retry; an
 unknown result is reported, not resubmitted.
 """
 import argparse
+import fcntl
+import uuid
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -78,14 +81,132 @@ def load_task():
     return json.loads(TASK.read_text(encoding="utf-8")) if TASK.exists() else None
 
 
+@contextmanager
+def task_lock(blocking=True):
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "task.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            raise Abort("另一个布防操作正在进行，请稍后再试。")
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def save_task(task):
     STATE.mkdir(parents=True, exist_ok=True)
     tmp = TASK.with_suffix(".tmp")
     tmp.write_text(json.dumps(task, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.chmod(tmp, 0o600)
     os.replace(tmp, TASK)
 
 
+def persist(task):
+    """A previous worker must never overwrite a replacement or cancelled task."""
+    with task_lock():
+        current = load_task()
+        if (not current or current.get("task_id") != task.get("task_id")
+                or current.get("generation") != task.get("generation")
+                or current.get("phase") == "disarmed"):
+            raise Abort("任务已被替换或取消，旧值守停止。")
+        if current.get("fired_at") and task.get("phase") == "firing":
+            raise Abort("任务已进入过提交，禁止再次执行。")
+        if current.get("fired_at") and task.get("fired_at") != current["fired_at"]:
+            raise Abort("不能删除或更改提交标记。")
+        if task.get("patterns_sent", 0) < current.get("patterns_sent", 0):
+            raise Abort("不能减少已输入图案次数。")
+        save_task(task)
+        if task.get("phase") in ("done", "aborted", "disarmed"):
+            record_history(task)
+
+
+def record_history(task):
+    record = {k: task.get(k) for k in ("task_id", "armed_at", "code", "amount", "at",
+              "dry_run", "phase", "result", "fired_at", "resumes")}
+    record["ended_at"] = datetime.now().isoformat()
+    with (STATE / "history.jsonl").open("a", encoding="utf-8") as out:
+        out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def status_info(lines=30):
+    task = load_task()
+    tick = task and task.get("last_tick")
+    age = (datetime.now() - datetime.fromisoformat(tick)).total_seconds() if tick else None
+    return {"task": task, "running": bool(task and alive(task.get("pid"))),
+            "legacy": bool(task and task.get("version") != 2),
+            "last_tick_age_s": age, "stale": age is not None and age > 300,
+            "logs": LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+                    if LOG.exists() else []}
+
+
+def spawn_watch(task):
+    with LOG.open("ab") as out:
+        proc = subprocess.Popen(["/usr/bin/caffeinate", "-dimsu", sys.executable, "-B",
+                                 str(Path(__file__).resolve()), "run",
+                                 "--generation", task["generation"]],
+                                stdout=out, stderr=out, stdin=subprocess.DEVNULL,
+                                cwd=ROOT, start_new_session=True)
+    task["pid"] = proc.pid
+    save_task(task)
+
+
+def stop_watch(task):
+    pid = task.get("pid")
+    if not alive(pid):
+        return
+    cmd = manage.command(pid)
+    if "caffeinate" not in cmd or str(Path(__file__).resolve()) not in cmd or os.getpgid(pid) != pid:
+        raise Abort("进程身份无法确认，拒绝终止；请人工检查。")
+    os.killpg(pid, signal.SIGTERM)
+    end = time.monotonic() + 10
+    while alive(pid) and time.monotonic() < end:
+        time.sleep(.1)
+    if alive(pid):
+        os.killpg(pid, signal.SIGKILL)
+        end = time.monotonic() + 2
+        while alive(pid) and time.monotonic() < end:
+            time.sleep(.1)
+        if alive(pid):
+            raise Abort("旧值守未退出，不能恢复。")
+
+
+def resume_task(reason, by="user", kill_stale=False, after_manual_login=False):
+    with task_lock(False):
+        task = load_task()
+        if not task or task.get("version") != 2:
+            raise Abort("旧版本任务，不能恢复；请查交易记录后重新布防。")
+        if task.get("fired_at") or task.get("phase") not in ("armed", "preparing", "aborted"):
+            raise Abort("任务已提交或阶段不允许恢复；请查交易记录，不要重试。")
+        if datetime.fromisoformat(task["fire_at"]) - datetime.now() <= timedelta(minutes=3):
+            raise Abort("距开售不足三分钟，不能恢复。")
+        if len(task.get("resumes", [])) >= 2:
+            raise Abort("已恢复两次，不能继续恢复。")
+        if task.get("patterns_sent", 0) >= LOGIN_TRIES and not after_manual_login:
+            raise Abort("图案次数已用完，请手动登录。")
+        if not reason.strip() or len(reason) > 200:
+            raise Abort("请填写 1–200 字的恢复原因。")
+        if not (emulator_running() and booted()):
+            raise Abort("模拟器没有运行或尚未开机。")
+        if alive(task.get("pid")):
+            tick = task.get("last_tick")
+            if not kill_stale or not tick or (datetime.now() - datetime.fromisoformat(tick)).total_seconds() <= 300:
+                raise Abort("值守仍在运行且不满足卡住条件。")
+            stop_watch(task)
+        task.pop("result", None)
+        task.setdefault("resumes", []).append({"at": datetime.now().isoformat(), "reason": reason, "by": by})
+        task.update(phase="armed", generation=uuid.uuid4().hex,
+                    after_manual_login=after_manual_login, last_tick=datetime.now().isoformat())
+        save_task(task)
+        spawn_watch(task)
+    alert(f"值守已恢复（第 {len(task['resumes'])} 次，原因：{reason}）")
+    return task
+
+
 def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except (OSError, TypeError):
@@ -116,12 +237,24 @@ def parse_target(value, now=None, prep_minutes=PREP_MINUTES):
 # ---------------------------------------------------------------- arm / disarm
 
 def arm(args):
+    with task_lock(False):
+        return _arm(args)
+
+
+def arm_task(code, amount, at=None, dry_run=False, prep_minutes=15, now=False):
+    return arm(argparse.Namespace(code=code, amount=amount, at=at, dry_run=dry_run,
+                                  prep_minutes=prep_minutes, now=now))
+
+
+def _arm(args):
     task = load_task()
-    if task and alive(task.get("pid")):
+    if task and (alive(task.get("pid")) or task.get("phase") == "firing"):
         raise Abort("已有值守在运行；先 status 查看或 disarm 取消。")
     if not re.fullmatch(r"[A-Za-z0-9]{4,20}", args.code):
         raise Abort("产品代码格式不正确。")
     amount = fast_buy.parse_amount(args.amount)
+    if not MIN_PREP_MINUTES <= args.prep_minutes <= PREP_MINUTES:
+        raise Abort("准备时间必须为 5–15 分钟。")
     if args.now:
         # Rehearsal: preparation starts at once (the sale is already inside
         # the prep window) and leaves ~2 min before the last-minute check.
@@ -139,38 +272,44 @@ def arm(args):
     adb("shell", "am", "force-stop", PACKAGE)   # app stays closed overnight
 
     STATE.mkdir(parents=True, exist_ok=True)
-    save_task({"code": args.code, "amount": amount, "at": when.isoformat(),
-               "fire_at": (when + OPEN_DELAY).isoformat(), "dry_run": args.dry_run,
-               "prep_minutes": args.prep_minutes,
-               "armed_at": datetime.now().isoformat(timespec="seconds"),
-               "phase": "armed", "patterns_sent": 0})
-    with LOG.open("ab") as out:
-        proc = subprocess.Popen(["caffeinate", "-dimsu", sys.executable, "-B",
-                                 str(Path(__file__).resolve()), "run"],
-                                stdout=out, stderr=out, stdin=subprocess.DEVNULL,
-                                cwd=ROOT, start_new_session=True)
-    task = load_task()
-    task["pid"] = proc.pid
+    task = {"code": args.code, "amount": amount, "at": when.isoformat(),
+            "fire_at": (when + OPEN_DELAY).isoformat(), "dry_run": args.dry_run,
+            "prep_minutes": args.prep_minutes, "version": 2,
+            "task_id": uuid.uuid4().hex, "generation": uuid.uuid4().hex,
+            "armed_at": datetime.now().isoformat(timespec="microseconds"),
+            "last_tick": datetime.now().isoformat(), "resumes": [],
+            "phase": "armed", "patterns_sent": 0}
     save_task(task)
+    spawn_watch(task)
     mode = "演练（只到密码页，不提交）" if args.dry_run else "真实提交一次"
     print(f"已布防：{args.code} {amount} 元，开售 {when:%m-%d %H:%M:%S}，"
           f"{OPEN_DELAY.microseconds // 1000}ms 后进入购买页，{mode}。招行 App 已关闭。")
     print(f"日志：{LOG}")
+    return task
 
 
 def disarm(_args):
+    return disarm_task()
+
+
+def disarm_task():
+    with task_lock(False):
+        return _disarm()
+
+
+def _disarm():
     task = load_task()
     if not task:
         print("没有值守任务。")
         return
     if task.get("phase") == "firing":
         raise Abort("正在提交，不能取消；请等结果并查交易记录。")
-    pid = task.get("pid")
-    if alive(pid):
-        os.killpg(pid, signal.SIGTERM)
+    stop_watch(task)
     task["phase"] = "disarmed"
     save_task(task)
+    record_history(task)
     print("已取消值守。")
+    return task
 
 
 def status(_args):
@@ -338,7 +477,7 @@ def login_fresh(task):
             log(f"第 {cycle} 次：读不到登录页控件，重启 App：{exc}")
             continue
         task["patterns_sent"] = task.get("patterns_sent", 0) + 1
-        save_task(task)
+        persist(task)
         log(f"输入图案（第 {task['patterns_sent']}/{LOGIN_TRIES} 次）")
         pattern = keychain_store.load().get("login_pattern")
         try:
@@ -470,7 +609,11 @@ def prepare(task, strikes, done):
     ensure_emulator(strikes)
     ensure_awake()
     if not (done.get("login") and adb("shell", "pidof", PACKAGE).strip()):
-        login_fresh(task)
+        if task.get("after_manual_login"):
+            if not tap_text("我的", timeout=10) or not logged_in() or on_login_page():
+                raise Abort("手动登录状态未确认，不输入图案。")
+        else:
+            login_fresh(task)
         done["login"] = True
     # The purchase form now opens straight from the app link at sale time, so
     # the detail page is only a warm-up (session, network); never fail on it.
@@ -483,7 +626,8 @@ def prepare(task, strikes, done):
 def fire(task, when):
     import fast_buy_uia2
     task["phase"] = "firing"
-    save_task(task)   # before run(): a restarted watcher must never submit again
+    task["fired_at"] = datetime.now().isoformat()
+    persist(task)   # before run(): a restarted watcher must never submit again
     log("交给 fast_buy_uia2.run()")
     try:
         result = fast_buy_uia2.run(task["code"], task["amount"], at=when,
@@ -491,26 +635,29 @@ def fire(task, when):
     except Exception as exc:
         task["phase"] = "done"
         task["result"] = f"停止：{exc}"
-        save_task(task)
+        persist(task)
         alert("购买流程中途停止", f"{exc}\n\n若已出现提交动作，请先查交易记录，不要重试。")
         return
     task["phase"] = "done"
     if task.get("dry_run"):
         task["result"] = "演练完成"
-        save_task(task)
+        persist(task)
         fast_buy_uia2.close_password_panel()
         alert("演练完成：已到密码页，未输入密码、未提交")
         return
     task["result"] = result or "结果未知"
-    save_task(task)
+    persist(task)
     if result in ("提交成功", "购买成功", "交易委托已接受"):
         alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。")
     else:
         alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。")
 
 
-def sleep_until(when, step):
+def sleep_until(when, step, task=None):
     while True:
+        if task is not None:
+            task["last_tick"] = datetime.now().isoformat()
+            persist(task)
         left = (when - datetime.now()).total_seconds()
         if left <= 0:
             return
@@ -518,7 +665,11 @@ def sleep_until(when, step):
 
 
 def run(_args):
-    task = load_task()
+    with task_lock():
+        task = load_task()
+        generation = getattr(_args, "generation", None)
+        if task and task.get("version") == 2 and generation != task.get("generation"):
+            raise Abort("值守代次不匹配，请通过 arm 或 resume 启动。")
     if not task or task.get("phase") != "armed":
         log(f"任务阶段为 {task and task.get('phase')}，不运行")
         return
@@ -541,14 +692,16 @@ def run(_args):
                     reported = str(exc)
                     alert("夜间检查异常，继续值守", f"{type(exc).__name__}: {exc}")
             sleep_until(min(sale - prep_lead, datetime.now() + timedelta(seconds=HEALTH_EVERY)),
-                        HEALTH_EVERY)
+                        HEALTH_EVERY, task)
 
         log("开始准备：冷启动并登录")
         task["phase"] = "preparing"
-        save_task(task)
+        persist(task)
         last = None
         done = {}
         while datetime.now() < sale - FINAL_LEAD:
+            task["last_tick"] = datetime.now().isoformat()
+            persist(task)
             try:
                 prepare(task, strikes, done)
                 break
@@ -562,7 +715,7 @@ def run(_args):
             raise Abort(f"准备阶段一直没有成功：{last}")
         alert("准备完成：已登录", f"{task['code']}，{fire_at:%H:%M:%S.%f}"[:-3] + " 进入购买页。")
 
-        sleep_until(sale - FINAL_LEAD, 5)
+        sleep_until(sale - FINAL_LEAD, 5, task)
         # Look only, never login or tap: fire() opens the form from the app
         # link and stops on its own if the form never shows up.
         if not adb("shell", "pidof", PACKAGE).strip():
@@ -572,7 +725,7 @@ def run(_args):
         if task.get("phase") != "firing":
             task["phase"] = "aborted"
             task["result"] = str(exc)
-            save_task(task)
+            persist(task)
         alert("值守中止，未提交", f"{type(exc).__name__}: {exc}")
         raise
 
@@ -592,9 +745,16 @@ def main():
                    help=f"开售前几分钟开始冷启动登录（{MIN_PREP_MINUTES}–{PREP_MINUTES}，默认 {PREP_MINUTES}）")
     sub.add_parser("status")
     sub.add_parser("disarm")
-    sub.add_parser("run", help="由 arm 在后台启动，不要手动运行")
+    worker = sub.add_parser("run", help="由 arm 在后台启动，不要手动运行")
+    worker.add_argument("--generation")
+    recovery = sub.add_parser("resume")
+    recovery.add_argument("--reason", required=True)
+    recovery.add_argument("--kill-stale", action="store_true")
+    recovery.add_argument("--after-manual-login", action="store_true")
     args = parser.parse_args()
-    {"arm": arm, "status": status, "disarm": disarm, "run": run}[args.cmd](args)
+    {"arm": arm, "status": status, "disarm": disarm, "run": run,
+     "resume": lambda a: resume_task(a.reason, kill_stale=a.kill_stale,
+                                     after_manual_login=a.after_manual_login)}[args.cmd](args)
 
 
 if __name__ == "__main__":

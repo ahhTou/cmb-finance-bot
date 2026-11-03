@@ -102,31 +102,61 @@ def load():
 def update_login():
     if not sys.stdin.isatty():
         raise RuntimeError("请在本机终端输入新的九宫格图案。")
-    data = load()
     first = getpass.getpass("新九宫格编号（输入不显示）: ")
     second = getpass.getpass("再次输入新九宫格编号: ")
     if first != second:
         raise RuntimeError("两次输入不一致。")
-    data["login_pattern"] = first
+    set_login_pattern(first)
+    print("九宫格凭据已更新并验证；支付密码未更改。")
+
+
+
+def credential_info():
+    try:
+        data = json.loads(find())
+        return {"state": "configured" if valid(data) else "invalid"}
+    except ValueError:
+        return {"state": "invalid"}
+    except RuntimeError:
+        return {"state": "unavailable"}
+
+
+def _update(field, value, current=None, service=SERVICE):
+    import hmac
+    data = json.loads(find(service=service))
     if not valid(data):
-        raise RuntimeError("九宫格编号格式无效。")
-    payload = json.dumps(data, separators=(",", ":")).encode("utf-8")
+        raise RuntimeError("凭据格式无效。")
+    if field == "payment_password" and not hmac.compare_digest(data[field], current or ""):
+        raise RuntimeError("当前交易密码不匹配。")
+    data[field] = value
+    if not valid(data):
+        raise RuntimeError("新凭据格式无效。")
+    payload = json.dumps(data, separators=(",", ":")).encode()
     length, content, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
-    status = sec.SecKeychainFindGenericPassword(None, len(SERVICE), SERVICE, len(ACCOUNT), ACCOUNT,
-                                                ctypes.byref(length), ctypes.byref(content), ctypes.byref(item))
+    status = sec.SecKeychainFindGenericPassword(None, len(service), service, len(ACCOUNT), ACCOUNT,
+                                               ctypes.byref(length), ctypes.byref(content), ctypes.byref(item))
     if status != 0:
-        raise RuntimeError(f"无法读取钥匙串条目（系统状态 {status}）。")
+        raise RuntimeError("无法更新钥匙串条目。")
     try:
         buf = ctypes.create_string_buffer(payload)
         status = sec.SecKeychainItemModifyAttributesAndData(item, None, len(payload), buf)
         if status != 0:
-            raise RuntimeError(f"无法更新钥匙串条目（系统状态 {status}）。")
+            raise RuntimeError("钥匙串更新失败。")
     finally:
         sec.SecKeychainItemFreeContent(None, content)
-        core.CFRelease(item)
-    if find() != payload:
-        raise RuntimeError("更新后的读取验证失败。")
-    print("九宫格凭据已更新并验证；支付密码未更改。")
+        if item:
+            core.CFRelease(item)
+    if find(service=service) != payload:
+        raise RuntimeError("钥匙串回读验证失败。")
+
+
+def set_login_pattern(value):
+    _update("login_pattern", value)
+
+
+def set_payment_password(value, current):
+    _update("payment_password", value, current)
+
 
 if __name__ == "__main__":
     try:

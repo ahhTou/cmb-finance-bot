@@ -1,0 +1,31 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "name": "红色圆徽与镂空八爪鱼",
+      "layers": [
+        {
+          "image-name": "04-octopus-badge.svg",
+          "name": "红白圆徽",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

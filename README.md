@@ -65,6 +65,8 @@ python3 -B src/night_watch.py disarm
 | 批量撤单 | 从交易记录逐笔撤销可撤单的订单 | `src/cancel_orders.py` |
 | 自动登录 | 九宫格图案存在 macOS 钥匙串，最多试 3 次防锁定 | `src/secure_input.py`、`src/keychain_store.py` |
 | 邮件通知 | 可选，QQ 邮箱 SMTP，只发时间线和状态 | `src/notify.py` |
+| 管理 App | 前台窗口、状态、布防、凭据同步 | `app/CMBFinanceBot/`、`src/admin_cli.py` |
+| Agent 监听 | 心跳、故障通知、提交前按原任务恢复 | `skills/cmb-watch/SKILL.md` |
 | 模拟器管理 | 启动 / 停止 / 状态、截图 | `scripts/project`、`scripts/capture` |
 
 所有会提交的流程都支持 `--dry-run`：只走到密码页，不输密码、不提交。
@@ -136,9 +138,35 @@ var/                 SDK、虚拟设备、日志、运行状态（Git 忽略，�
 
 SDK 和虚拟设备体积较大，迁移到新机器后建议重新创建虚拟设备。
 
+## 管理 App（第一版）
+
+原生 macOS 前台管理 App「招行理财值守」，采用纯深灰背景、侧边栏导航和无描边卡片布局。窗口保留 macOS 原生圆角、阴影与红绿灯，最低 macOS 13，需要完整 Xcode：
+
+```sh
+./scripts/build-app
+open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
+```
+
+也可以打开 `app/CMBFinanceBot/CMBFinanceBot.xcodeproj`，选择 CMBFinanceBot scheme 运行。自用本机签名，不启用 App Sandbox，无第三方 Swift 依赖。
+
+启动或双击 App 会打开常驻管理窗口，不显示菜单栏或 Dock 图标。点关闭、按 Cmd-W 或 Cmd-Q 都会二次确认；选择“继续打开”保留窗口，选择“关闭并退出”才退出 App。项目目录、Python 路径（默认 `/usr/bin/python3`）和凭据统一放在侧边栏“设置”中；首次使用自动进入设置。侧边栏提供状态、系统、布防、设置四页。窗口顶部空白处可拖动，左上角可关闭、最小化或缩放。演练默认开启；真实布防必须再次输入金额。退出 App 不会取消独立运行的值守。
+
+当前已通过 55 项相关 Python 隔离测试、Swift 桥接测试、Release 构建、签名与界面检查；真实设备演练、凭据同步、退出后值守继续运行、通知和故障恢复尚待账户持有人验收。账户持有人亲自操作布防和凭据页；Agent 只开发和检查。验收清单见 [实现进度](docs/admin-page-plan.md)。修改凭据只同步脚本保存的值，不修改银行设置。
+
+新增 JSON 接口（每次一行，成功退出码 0，失败为 1）：
+
+```sh
+python3 -B src/admin_cli.py status
+python3 -B src/admin_cli.py device
+python3 -B src/admin_cli.py system
+python3 -B src/admin_cli.py history
+```
+
+监听指令与恢复边界见 `skills/cmb-watch/SKILL.md` 和 `AGENT_WORKFLOW.md` §9。旧任务能查看和取消，但不能恢复；版本 2 任务一旦进入提交也不能恢复。
+
 ## 使用须知
 
-- **真实提交、撤单、布防、写凭据**都由账户持有人在自己的终端运行。Agent 只做状态检查、截图、读日志和 `--dry-run`。
+- **真实提交、撤单、布防、写凭据**都由账户持有人亲自操作；命令行在自己的终端运行，App 相关按钮也由本人操作。Agent 只做状态检查、截图、读日志和 `--dry-run`。
 - **Mac 必须接电源**。值守包在 `caffeinate -dimsu` 里，但用电池时合盖仍会睡眠。
 - **正式布防用 Terminal.app**，不要从会被重启的应用（如 Claude App）里的终端启动。
 - **结果不明先查交易记录**，不要补单、不要重试。

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>原创红白银行 App 卡片，无官方标志与文字</title>
+<g transform="rotate(11 575 390)">
+ <rect x="370" y="145" width="410" height="470" rx="86" fill="#8F1029" stroke="#FFC6C8" stroke-width="9"/>
+ <path d="M462 281 L575 218 L688 281 Z" fill="#FFF8F1"/>
+ <rect x="461" y="294" width="228" height="15" rx="7.5" fill="#FFF8F1"/>
+ <g fill="#FFF8F1"><rect x="479" y="324" width="28" height="79" rx="10"/><rect x="561" y="324" width="28" height="79" rx="10"/><rect x="643" y="324" width="28" height="79" rx="10"/><rect x="460" y="415" width="230" height="17" rx="8.5"/></g>
+ <rect x="434" y="475" width="282" height="58" rx="21" fill="#FFF8F1"/>
+ <rect x="459" y="494" width="115" height="15" rx="7.5" fill="#EDACB1"/>
+ <circle cx="679" cy="504" r="12" fill="#8F1029"/>
+</g></svg>
