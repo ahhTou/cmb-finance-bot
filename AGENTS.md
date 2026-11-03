@@ -37,4 +37,4 @@
 
 - Claude Code 提交时写 `Agent: Claude Code`、`Model: <当前模型，如 Claude Opus 5.5>`，并保留 `Co-Authored-By: Claude … <noreply@anthropic.com>` 一行。
 - 代码实际由别的 Agent 写（例如按额度接力交给 DeepSeek Harness 或 Codex）时，署实际写代码的 Agent 和模型，不署负责提交的 Agent；几个 Agent 都写了，就各列一组 `Agent` / `Model`。
-- 只写会话可确认的信息：只知道模型系列就写"具体型号未提供"，完全不知道就写"未知（会话未提供）"，不猜测。
+- 只写会话可确认的具体型号，不猜测。会话中拿不到具体型号时（只知道系列名，或完全不知道），先询问用户再提交；不要写"具体型号未提供""未知"之类的占位。
