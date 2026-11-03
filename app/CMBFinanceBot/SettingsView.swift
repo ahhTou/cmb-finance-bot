@@ -13,6 +13,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(spacing: 16) {
                 ProjectSettingsCard()
+                PurchaseRetrySettingsCard()
                 Card("凭据状态", subtitle: "这里只同步脚本保存的值，不会修改银行 App 中的设置。") {
                     HStack { Detail("登录与交易凭据", m.credentialState); Detail("邮件通知", m.mailConfigured ? "已配置" : "未配置") }
                 }
@@ -105,6 +106,59 @@ private struct ProjectSettingsCard: View {
                 TextField("Python 绝对路径", text: $m.python).cardField().onSubmit { m.saveSettings() }
             }
             HStack { Spacer(); Button("保存设置", action: m.saveSettings).buttonStyle(CardButtonStyle(primary: true)) }
+        }
+    }
+}
+
+private struct PurchaseRetrySettingsCard: View {
+    @EnvironmentObject var m: Model
+    @State private var reopen = "60"
+    @State private var drill = "10"
+    @State private var loaded = false
+    @State private var saved = false
+
+    private var valid: Bool {
+        guard let first = Int(reopen), let second = Int(drill) else { return false }
+        return (1...300).contains(first) && (1...300).contains(second)
+    }
+
+    var body: some View {
+        Card("购买页重试", subtitle: "反复打开购买页、等待购买表单出现的总时限") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("首发值守 / 直接购买（秒）").font(.caption).foregroundStyle(AppPalette.muted)
+                TextField("默认 60 秒", text: $reopen).cardField()
+                Text("单笔购买演练（秒）").font(.caption).foregroundStyle(AppPalette.muted)
+                TextField("默认 10 秒", text: $drill).cardField()
+            }
+            Text("范围 1–300 秒。新布防和后续单笔演练使用新设置；已布防任务保持原值。赎回抢购仍按布防窗口运行。")
+                .font(.caption).foregroundStyle(AppPalette.muted)
+            HStack {
+                if saved { Text("重试设置已保存").font(.caption).foregroundStyle(AppPalette.muted) }
+                Spacer()
+                Button("保存重试设置") {
+                    Task {
+                        saved = await m.action(["settings", "--reopen-deadline", reopen,
+                                                "--drill-form-deadline", drill], label: "保存重试设置")
+                    }
+                }
+                .buttonStyle(CardButtonStyle(primary: true))
+                .disabled(!loaded || !valid || m.busy)
+            }
+        }
+        .disabled(!loaded || m.busy)
+        .onChange(of: reopen) { _ in saved = false }
+        .onChange(of: drill) { _ in saved = false }
+        .task(id: m.root) {
+            loaded = false
+            saved = false
+            guard !m.root.isEmpty else { return }
+            do {
+                let result = try await m.backend.run(["settings"])
+                let values = dictValue(result["settings"])
+                reopen = String((values["reopen_deadline"] as? NSNumber)?.intValue ?? 60)
+                drill = String((values["drill_form_deadline"] as? NSNumber)?.intValue ?? 10)
+                loaded = true
+            } catch { m.message = error.localizedDescription }
         }
     }
 }

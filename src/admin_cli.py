@@ -16,6 +16,8 @@ import time
 
 import night_watch as nw
 import keychain_store
+import purchase_settings
+
 import manage
 import notify
 
@@ -95,8 +97,12 @@ def system():
     result['lock'] = '无法读取；锁屏本身不影响值守'
     task = nw.load_task()
     pid = task and task.get('pid')
-    result['watch_caffeinate'] = bool(pid and any(f'pid {pid}(' in line and
-        'PreventUserIdleSystemSleep' in line for line in result['assertions'].splitlines()))
+    assertions = result['assertions']
+    result['watch_caffeinate'] = bool(pid and (
+        any(f'pid {pid}(' in line and 'PreventUserIdleSystemSleep' in line
+            for line in assertions.splitlines()) or
+        re.search(r'\bDetails:\s*caffeinate asserting\b[^\n]*'
+                  + re.escape(f'(pid {pid})'), assertions)))
     started = time.monotonic()
     try:
         with socket.create_connection(('mobile.cmbchina.com', 443), timeout=3) as sock:
@@ -128,10 +134,15 @@ def parser():
     cancel.add_argument('--dry-run', action='store_true')
     cancel.add_argument('--list', action='store_true')
     cancel.add_argument('--yes', action='store_true')
+    settings = sub.add_parser('settings')
+    settings.add_argument('--reopen-deadline', type=int)
+    settings.add_argument('--drill-form-deadline', type=int)
     buy = sub.add_parser('buy')
     buy.add_argument('--code', required=True)
     buy.add_argument('--amount', required=True)
-    buy.add_argument('--dry-run', action='store_true')
+    buy_mode = buy.add_mutually_exclusive_group()
+    buy_mode.add_argument('--dry-run', action='store_true')
+    buy_mode.add_argument('--confirm-real-payment', action='store_true')
     emulator = sub.add_parser('emulator')
     emulator.add_argument('action', choices=['start', 'stop'])
     arm = sub.add_parser('arm')
@@ -141,7 +152,11 @@ def parser():
     when.add_argument('--at')
     when.add_argument('--now', action='store_true')
     arm.add_argument('--dry-run', action='store_true')
+    arm.add_argument('--confirm-real-payment', action='store_true')
     arm.add_argument('--prep-minutes', type=int, default=15)
+    arm.add_argument('--mode', choices=nw.MODES, default='first_launch')
+    arm.add_argument('--window-minutes', type=int)
+    arm.add_argument('--until')
     resume = sub.add_parser('resume')
     resume.add_argument('--reason', required=True)
     resume.add_argument('--kill-stale', action='store_true')
@@ -154,6 +169,14 @@ def parser():
 
 
 def dispatch(a):
+    if a.cmd == 'settings':
+        updates = {key: getattr(a, key) for key in purchase_settings.DEFAULTS
+                   if getattr(a, key) is not None}
+        with nw.task_lock(False):
+            values = purchase_settings.load()
+            if updates:
+                values = purchase_settings.save(dict(values, **updates))
+        return {'settings': values}
     if a.cmd == 'status': return status()
     if a.cmd == 'device': return device()
     if a.cmd == 'system': return system()
@@ -177,9 +200,10 @@ def dispatch(a):
         return {'path': str(nw.LOG), 'lines': lines[-a.lines:], 'total': len(lines),
                 'exists': nw.LOG.exists()}
     if a.cmd == 'arm':
-        if a.now and not a.dry_run:
-            raise nw.Abort('立即排练必须勾选演练。')
-        return {'task': nw.arm_task(a.code, a.amount, a.at, a.dry_run, a.prep_minutes, a.now)}
+        if a.now and not a.dry_run and not a.confirm_real_payment:
+            raise nw.Abort('立即真实布防必须明确确认实际付款。')
+        return {'task': nw.arm_task(a.code, a.amount, a.at, a.dry_run, a.prep_minutes, a.now,
+                                    mode=a.mode, window_minutes=a.window_minutes, until=a.until)}
     if a.cmd == 'disarm': return {'task': nw.disarm_task()}
     if a.cmd == 'resume':
         return {'task': nw.resume_task(a.reason, 'agent:' + a.session if a.session else 'user',
@@ -198,7 +222,7 @@ def dispatch(a):
         amount = nw.fast_buy.parse_amount(a.amount)
         with nw.task_lock(False):
             task = nw.load_task()
-            if task and (task.get('phase') in ('armed', 'preparing', 'firing') or nw.alive(task.get('pid'))):
+            if task and (task.get('phase') in ('armed', 'preparing', 'waiting', 'firing') or nw.alive(task.get('pid'))):
                 raise nw.Abort('值守任务活动期间不能撤单；先取消防守。')
             args = [sys.executable, '-B', str(nw.ROOT / 'src/cancel_orders.py'), '--amount', amount]
             if a.limit:
@@ -218,25 +242,27 @@ def dispatch(a):
                 raise nw.Abort(message[:300])
             return {'output': output}
     if a.cmd == 'buy':
-        if not a.dry_run:
-            raise nw.Abort('App 内只允许演练购买。')
+        if not a.dry_run and not a.confirm_real_payment:
+            raise nw.Abort('真实单笔购买必须明确确认实际付款。')
         if not re.fullmatch(r'[A-Za-z0-9]{4,20}', a.code):
             raise nw.Abort('产品代码格式不正确。')
         amount = nw.fast_buy.parse_amount(a.amount)
         with nw.task_lock(False):
             task = nw.load_task()
-            if task and (task.get('phase') in ('armed', 'preparing', 'firing') or nw.alive(task.get('pid'))):
-                raise nw.Abort('值守任务活动期间不能演练购买。')
+            if task and (task.get('phase') in ('armed', 'preparing', 'waiting', 'firing') or nw.alive(task.get('pid'))):
+                raise nw.Abort('值守任务活动期间不能单笔购买或演练。')
             import fast_buy_uia2
             buffer = io.StringIO()
             with redirect_stdout(buffer):
-                fast_buy_uia2.run(a.code, amount, dry_run=True)
-        return {'output': buffer.getvalue().splitlines()}
+                result = fast_buy_uia2.run(a.code, amount, dry_run=a.dry_run,
+                                  form_deadline=purchase_settings.load()[
+                                      'drill_form_deadline' if a.dry_run else 'reopen_deadline'])
+        return {'output': buffer.getvalue().splitlines(), 'result': result}
     if a.cmd.startswith('set-'):
         with nw.task_lock(False):
             task = nw.load_task()
-            if task and task.get('phase') in ('preparing', 'firing'):
-                raise nw.Abort('准备或提交期间不能修改凭据。')
+            if task and task.get('phase') in ('preparing', 'waiting', 'firing'):
+                raise nw.Abort('准备、抢购或提交期间不能修改凭据。')
             try:
                 data = json.loads(sys.stdin.read(4097))
                 if not isinstance(data, dict): raise ValueError()
@@ -252,7 +278,7 @@ def dispatch(a):
         with nw.task_lock(False):
             task = nw.load_task()
             if a.action == 'stop':
-                if task and task.get('phase') in ('armed', 'preparing', 'firing'):
+                if task and task.get('phase') in ('armed', 'preparing', 'waiting', 'firing'):
                     raise nw.Abort('值守期间不能关闭模拟器。')
                 manage.stop()
             else:

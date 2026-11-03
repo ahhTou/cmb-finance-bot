@@ -11,6 +11,11 @@ struct DrillView: View {
     @State private var confirmCancel = false
     @State private var error: String?
     @State private var showOutput = false
+    @State private var realBuy = false
+    @State private var confirmBuy = false
+    @State private var buyCode = ""
+    @State private var buyAmount = ""
+    @State private var confirmBuyAmount = ""
 
     var body: some View {
         ScrollView {
@@ -29,12 +34,13 @@ struct DrillView: View {
         .sheet(isPresented: $showArm) { ArmSheet(drill: true).environmentObject(m) }
         .sheet(isPresented: $confirmCancel) { cancelConfirmation }
         .sheet(isPresented: $showOutput) { outputSheet }
+        .sheet(isPresented: $confirmBuy) { buyConfirmation }
     }
 
     private var drillCard: some View {
-        Card("演练布防", subtitle: "走完整冷启动、登录、到密码页的流程", fillHeight: true) {
+        Card("演练布防", subtitle: "走完整冷启动、登录、购买流程", fillHeight: true) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("演练不输入密码、不提交；可以立即开始，也可以指定开售时间。")
+                Text("默认到密码页停止，也可选择实际付款并确认金额；支持立即开始或指定开售时间。")
                     .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("打开演练布防") { showArm = true }
@@ -46,8 +52,13 @@ struct DrillView: View {
                     field("产品代码", $code, "如 JX040229")
                     field("金额", $amount, "0.01")
                 }
+                Toggle("实际付款：输入交易密码并提交", isOn: $realBuy)
+                    .disabled(m.busy || m.active)
+                Text(realBuy ? "立即购买一笔，不创建值守任务；下一步需确认金额。"
+                             : "只到密码页停止，不输入密码、不提交。")
+                    .font(.system(size: 11)).foregroundStyle(realBuy ? AppPalette.warn : AppPalette.muted)
                 HStack(spacing: 8) {
-                    Button("单笔购买演练") { runBuy() }
+                    Button(realBuy ? "直接购买…" : "单笔购买演练") { runBuy() }
                         .disabled(m.busy || m.active || !validCode(code.trimmingCharacters(in: .whitespaces)) || !validAmount(amount))
                     Button("命令输出") { showOutput = true }
                 }
@@ -188,6 +199,30 @@ struct DrillView: View {
         .buttonStyle(CardButtonStyle()).preferredColorScheme(.dark)
     }
 
+    private var buyConfirmation: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("确认真实单笔购买").font(.system(size: 20, weight: .semibold))
+            Text("现在购买产品 \(buyCode)，金额 \(buyAmount) 元。将输入交易密码并提交一次。")
+                .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+            Text("再输入一次金额").font(.caption).foregroundStyle(AppPalette.muted)
+            TextField("金额", text: $confirmBuyAmount).cardField()
+            Text("结果以银行交易记录为准；结果不明时先核对，不要重复购买。")
+                .font(.system(size: 11)).foregroundStyle(AppPalette.warn)
+            HStack(spacing: 10) {
+                Spacer()
+                Button("取消") { confirmBuy = false }
+                Button("确认实际付款") {
+                    confirmBuy = false
+                    executeBuy(code: buyCode, amount: buyAmount, real: true)
+                }
+                .buttonStyle(CardButtonStyle(primary: true))
+                .disabled(m.busy || m.active || confirmBuyAmount != buyAmount)
+            }
+        }
+        .padding(28).frame(width: 480).background(AppPalette.background)
+        .buttonStyle(CardButtonStyle()).preferredColorScheme(.dark)
+    }
+
     private func field(_ title: String, _ text: Binding<String>, _ placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.caption).foregroundStyle(AppPalette.muted)
@@ -216,7 +251,24 @@ struct DrillView: View {
             return
         }
         error = nil
-        Task { await m.action(["buy", "--code", trimmed, "--amount", amount, "--dry-run"], label: "单笔购买演练") }
+        if realBuy {
+            buyCode = trimmed
+            buyAmount = amount
+            confirmBuyAmount = ""
+            confirmBuy = true
+        } else {
+            executeBuy(code: trimmed, amount: amount, real: false)
+        }
+    }
+
+    private func executeBuy(code: String, amount: String, real: Bool) {
+        Task {
+            let ok = await m.action(["buy", "--code", code, "--amount", amount,
+                                     real ? "--confirm-real-payment" : "--dry-run"],
+                                    label: real ? "真实单笔购买" : "单笔购买演练")
+            if ok { showOutput = true }
+            else { error = m.message }
+        }
     }
 
     private func runCancel(list: Bool = false, dry: Bool = false) {

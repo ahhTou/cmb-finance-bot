@@ -40,7 +40,7 @@ struct DashboardView: View {
         DashboardCard("值守", icon: "shield.lefthalf.filled") {
             if m.task.isEmpty {
                 HStack(spacing: 8) { StatusDot(state: nil); Text("未布防").font(.system(size: 12, weight: .medium)) }
-                Text("去任务页选择首发模式布防。").font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+                Text("去任务页选择首发或赎回抢购模式布防。").font(.system(size: 11)).foregroundStyle(AppPalette.muted)
             } else {
                 HStack(spacing: 8) {
                     Badge(text: phaseName(m.phase), color: phaseColor(m.phase))

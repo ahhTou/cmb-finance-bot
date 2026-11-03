@@ -69,11 +69,40 @@ def status():
     print(f"SDK: {SDK}")
     print(f"项目数据: {VAR}")
 
+def adb_service_pid():
+    """PID of a running project ADB server, even one we did not record.
+
+    A crashed emulator leaves this server behind, and an `adb` call made
+    outside `start` can create an unrecorded one. Both must be reused rather
+    than treated as "another process is already running".
+    """
+    try:
+        result = subprocess.run(["ps", "-axo", "pid=,command="],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    needle = str(SDK / "platform-tools" / "adb")
+    for line in result.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if needle not in command:
+            continue
+        if "15039" in command and "nodaemon" in command and command.rstrip().endswith("server"):
+            try:
+                return int(pid)
+            except ValueError:
+                continue
+    return None
+
+
 def start():
     VAR.mkdir(parents=True, exist_ok=True)
     old = load()
-    if any(owned(v.get("pid", -1), v.get("tokens", ["__missing__"])) for v in old.values()):
-        raise RuntimeError("项目进程已在运行，请先执行 status 或 stop。")
+    running = {key: item for key, item in old.items()
+               if owned(item.get("pid", -1), item.get("tokens", ["__missing__"]))}
+    if "emulator" in running:
+        raise RuntimeError("模拟器已在运行，请先执行 status 或 stop。")
     adb = executable("platform-tools/adb")
     emulator = executable("emulator/emulator")
     if not (VAR / "avd" / f"{AVD_NAME}.ini").exists():
@@ -82,23 +111,32 @@ def start():
     if config.exists():
         lines = [line for line in config.read_text().splitlines() if not line.startswith("hw.keyboard=")]
         config.write_text("\n".join(lines + ["hw.keyboard=yes"]) + "\n")
-    if not all(free(p) for p in (ADB_PORT, EMU_PORT, EMU_PORT + 1)):
-        raise RuntimeError("项目专用端口已被占用，请检查 15039、15554、15555。")
+    if not all(free(p) for p in (EMU_PORT, EMU_PORT + 1)):
+        raise RuntimeError("模拟器端口已被占用，请检查 15554、15555。")
+    if "adb" not in running and not free(ADB_PORT):
+        pid = adb_service_pid()
+        if pid is None:
+            raise RuntimeError("15039 端口被其他程序占用；先停掉它再启动模拟器。")
+        running["adb"] = {"pid": pid, "tokens": ["adb", str(ADB_PORT), "nodaemon"]}
+        print("接管已在运行的 ADB 服务。")
     log = open(VAR / "emulator.log", "ab", buffering=0)
-    state = {}
+    state = dict(running)   # stale records are dropped
     try:
-        p = subprocess.Popen([adb, "-L", f"tcp:{ADB_PORT}", "nodaemon", "server"],
-                             env=env(), stdout=log, stderr=log, start_new_session=True)
-        state["adb"] = {"pid": p.pid, "tokens": ["adb", str(ADB_PORT), "nodaemon"]}
-        write(state)
-        for _ in range(50):
-            if p.poll() is not None:
-                raise RuntimeError("ADB 启动失败，请查看 var/emulator.log。")
-            if not free(ADB_PORT):
-                break
-            time.sleep(.1)
+        if "adb" not in running:
+            p = subprocess.Popen([adb, "-L", f"tcp:{ADB_PORT}", "nodaemon", "server"],
+                                 env=env(), stdout=log, stderr=log, start_new_session=True)
+            state["adb"] = {"pid": p.pid, "tokens": ["adb", str(ADB_PORT), "nodaemon"]}
+            write(state)
+            for _ in range(50):
+                if p.poll() is not None:
+                    raise RuntimeError("ADB 启动失败，请查看 var/emulator.log。")
+                if not free(ADB_PORT):
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError("等待 ADB 超时。")
         else:
-            raise RuntimeError("等待 ADB 超时。")
+            print("复用已在运行的 ADB 服务。")
         p = subprocess.Popen([emulator, "-avd", AVD_NAME, "-port", str(EMU_PORT), "-no-snapshot"],
                              env=env(), stdout=log, stderr=log, start_new_session=True)
         state["emulator"] = {"pid": p.pid, "tokens": [AVD_NAME, str(EMU_PORT)]}

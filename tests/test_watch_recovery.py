@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import fcntl
 import multiprocessing
 import os
+import signal
 from pathlib import Path
 import sys
 import tempfile
@@ -102,6 +103,56 @@ class RecoveryTest(unittest.TestCase):
             nw.resume_task('test', kill_stale=True)
         stop.assert_called_once()
         self.assertEqual(stop.call_args.args[0]["pid"], task["pid"])
+
+    def test_disarm_and_stale_resume_accept_execed_python_worker(self):
+        command = f'{sys.executable} -B {Path(nw.__file__).resolve()} run --generation original'
+        for operation in (nw.disarm_task, lambda: nw.resume_task('test', kill_stale=True)):
+            with self.subTest(operation=operation):
+                self.task(pid=123)
+                # resume/disarm checks, stop checks, then the worker has exited.
+                with patch.object(nw, 'alive', side_effect=lambda pid: live[0]), \
+                     patch.object(nw.manage, 'command', return_value=command), \
+                     patch.object(nw.os, 'getpgid', return_value=123), \
+                     patch.object(nw.os, 'killpg', side_effect=lambda *args: live.__setitem__(0, False)) as kill:
+                    live = [True]
+                    operation()
+                kill.assert_called_once_with(123, signal.SIGTERM)
+                self.assertEqual(nw.load_task()['phase'],
+                                 'disarmed' if operation == nw.disarm_task else 'armed')
+
+    def test_stop_refuses_wrong_invocation_generation_or_process_group(self):
+        script = str(Path(nw.__file__).resolve())
+        valid = f'python3 -B {script} run --generation original'
+        cases = [(valid.replace('original', 'original-other'), 123),
+                 (valid.replace(' run ', ' status '), 123),
+                 (valid.replace(script, script + '.other'), 123),
+                 (valid.replace(script, '/other/night_watch.py'), 123),
+                 (valid.replace(' --generation original', ''), 123),
+                 (valid, 999)]
+        for command, pgid in cases:
+            with self.subTest(command=command, pgid=pgid), \
+                 patch.object(nw, 'alive', return_value=True), \
+                 patch.object(nw.manage, 'command', return_value=command), \
+                 patch.object(nw.os, 'getpgid', return_value=pgid), \
+                 patch.object(nw.os, 'killpg') as kill:
+                with self.assertRaises(nw.Abort):
+                    nw.stop_watch({'pid': 123, 'version': 2, 'generation': 'original'})
+                kill.assert_not_called()
+
+    def test_stop_allows_legacy_run_but_not_missing_v2_generation(self):
+        command = f'caffeinate -dimsu python3 -B {Path(nw.__file__).resolve()} run'
+        with patch.object(nw, 'alive', side_effect=[True, False, False]), \
+             patch.object(nw.manage, 'command', return_value=command), \
+             patch.object(nw.os, 'getpgid', return_value=123), \
+             patch.object(nw.os, 'killpg') as kill:
+            nw.stop_watch({'pid': 123})
+        kill.assert_called_once_with(123, signal.SIGTERM)
+        with patch.object(nw, 'alive', return_value=True), \
+             patch.object(nw.manage, 'command', return_value=command), \
+             patch.object(nw.os, 'killpg') as kill:
+            with self.assertRaises(nw.Abort):
+                nw.stop_watch({'pid': 123, 'version': 2})
+        kill.assert_not_called()
 
     def test_lock_excludes_all_control_operations(self):
         self.task()

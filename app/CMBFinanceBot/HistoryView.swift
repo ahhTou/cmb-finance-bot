@@ -105,7 +105,10 @@ struct HistoryView: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
                                     GridItem(.flexible(), spacing: 14),
                                     GridItem(.flexible(), spacing: 14)], alignment: .leading, spacing: 12) {
-                    Detail("开售时间", shortTime(record["at"]))
+                    Detail(stringValue(record["mode"]) == "redemption" ? "额度放出" : "开售时间",
+                           shortTime(record["at"]))
+                    Detail("模式", stringValue(record["mode"]) == "redemption"
+                           ? "赎回抢购 · \(stringValue(record["window_minutes"]) ?? "3") 分钟" : "首发")
                     Detail("布防时间", shortTime(record["armed_at"]))
                     Detail("结束时间", shortTime(record["ended_at"]))
                     Detail("提交时间", shortTime(record["fired_at"]))

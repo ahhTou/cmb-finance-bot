@@ -4,7 +4,12 @@ struct TasksView: View {
     @EnvironmentObject var m: Model
     @Binding var tab: Int
     @State private var showArm = false
+    @State private var armMode: ArmMode = .firstLaunch
     @State private var confirmDisarm = false
+
+    private var taskMode: String { m.task["mode"] as? String ?? "first_launch" }
+    private var firstLaunchActive: Bool { m.active && taskMode != "redemption" }
+    private var redemptionActive: Bool { m.active && taskMode == "redemption" }
 
     var body: some View {
         GeometryReader { geo in
@@ -18,17 +23,12 @@ struct TasksView: View {
                             features: ["反复查看多只理财", "按可购额度比例买入", "白天运行，可设终止时间"],
                             tint: Color(red: 0.35, green: 0.62, blue: 0.95))
                     .frame(height: height)
-                placeholder(icon: "clock.arrow.circlepath",
-                            title: "赎回抢购模式",
-                            text: "00:15 盯住一只理财，等赎回额度放出后立即买入。",
-                            features: ["00:15 开始盯盘", "按可购额度比例买入", "默认运行 3 分钟"],
-                            tint: Color(red: 0.72, green: 0.45, blue: 0.95))
-                    .frame(height: height)
+                redemption.frame(height: height)
             }
             .padding(.horizontal, 26)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .sheet(isPresented: $showArm) { ArmSheet().environmentObject(m) }
+        .sheet(isPresented: $showArm) { ArmSheet(mode: armMode).environmentObject(m) }
         .alert("取消当前布防？", isPresented: $confirmDisarm) {
             Button("继续值守", role: .cancel) {}
             Button("确认取消", role: .destructive) {
@@ -39,12 +39,15 @@ struct TasksView: View {
         }
     }
 
+    // MARK: 首发
+
     private var firstLaunch: some View {
         ModeCard(icon: "bolt.fill", tint: AppPalette.accent, title: "首发模式",
                  subtitle: "开售准点抢一只新发理财",
-                 badge: Badge(text: "可用", color: AppPalette.good)) {
-            if m.active && !m.task.isEmpty {
-                activeSummary
+                 badge: Badge(text: m.active && !firstLaunchActive ? "其他值守中" : "可用",
+                              color: m.active && !firstLaunchActive ? AppPalette.warn : AppPalette.good)) {
+            if firstLaunchActive {
+                activeSummary(redemption: false)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("开售前自动冷启动并登录，开售后 200ms 直达购买页，只提交一次。")
@@ -53,34 +56,83 @@ struct TasksView: View {
                     feature("clock", "开售前 15 分钟冷启动并登录")
                     feature("bolt.fill", "开售 +200ms 打开购买页")
                     feature("checkmark.shield", "只提交一次，失败不重试")
-                    if !m.task.isEmpty {
+                    if !m.task.isEmpty && taskMode != "redemption" {
                         Text("上次任务已结束 · \(phaseName(m.phase))")
                             .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
                     }
                 }
             }
         } actions: {
-            if m.active && !m.task.isEmpty {
+            if firstLaunchActive {
                 Button("刷新") { Task { await m.refresh() } }.disabled(m.busy)
                 Button("取消布防") { confirmDisarm = true }
                     .disabled(m.busy || m.phase == "firing")
             } else {
-                Button("新建布防") { showArm = true }
+                Button("新建布防") { armMode = .firstLaunch; showArm = true }
                     .buttonStyle(CardButtonStyle(primary: true))
+                    .disabled(m.active)
                 Button("查看历史") { tab = 3 }
             }
         }
     }
 
-    private var activeSummary: some View {
+    // MARK: 赎回抢购
+
+    private var redemption: some View {
+        ModeCard(icon: "clock.arrow.circlepath", tint: Color(red: 0.72, green: 0.45, blue: 0.95),
+                 title: "赎回抢购模式", subtitle: "额度放出后，刷新到有额度就买",
+                 badge: Badge(text: redemptionActive ? phaseName(m.phase)
+                                       : (m.active ? "其他值守中" : "可用"),
+                              color: redemptionActive ? phaseColor(m.phase)
+                                   : (m.active ? AppPalette.warn : AppPalette.good))) {
+            if redemptionActive {
+                activeSummary(redemption: true)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("到点后反复打开购买页，页面出现购买表单说明有额度，立即买入；一直报错就不提交。")
+                        .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    feature("clock", "默认 00:15 开始，提前 15 分钟登录")
+                    feature("arrow.triangle.2.circlepath", "窗口内反复打开购买页")
+                    feature("checkmark.shield", "有额度才提交，只提交一次")
+                    if !m.task.isEmpty && taskMode == "redemption" {
+                        Text("上次任务已结束 · \(phaseName(m.phase))")
+                            .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
+                    }
+                }
+            }
+        } actions: {
+            if redemptionActive {
+                Button("刷新") { Task { await m.refresh() } }.disabled(m.busy)
+                Button("取消布防") { confirmDisarm = true }
+                    .disabled(m.busy || m.phase == "firing")
+            } else {
+                Button("新建布防") { armMode = .redemption; showArm = true }
+                    .buttonStyle(CardButtonStyle(primary: true))
+                    .disabled(m.active)
+                Button("查看历史") { tab = 3 }
+            }
+        }
+    }
+
+    private func activeSummary(redemption: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("\(stringValue(m.task["code"]) ?? "—") · \(stringValue(m.task["amount"]) ?? "—") 元")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-            Text("开售 \(shortTime(m.task["at"]))")
-                .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+            if redemption {
+                Text("窗口 \(shortTime(m.task["at"])) 起 \(stringValue(m.task["window_minutes"]) ?? "3") 分钟")
+                    .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+            } else {
+                Text("开售 \(shortTime(m.task["at"]))")
+                    .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+            }
             HStack(spacing: 12) {
                 Metric("最近心跳", ageText(m.status["last_tick_age_s"]))
                 Metric("图案输入", "\(stringValue(m.task["patterns_sent"]) ?? "0") 次")
+            }
+            if m.phase == "waiting" {
+                Text("窗口内反复打开购买页；还没有提交。")
+                    .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
             }
             if m.phase == "firing" && !m.running {
                 Text("提交中进程已退出：先查交易记录，不要补单或重试。")

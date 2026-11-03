@@ -28,9 +28,9 @@ import UserNotifications
     var backend: Backend { Backend(root: root, python: python) }
     var task: [String: Any] { dictValue(status["task"]) }
     var phase: String { task["phase"] as? String ?? "未布防" }
-    var active: Bool { ["armed", "preparing", "firing"].contains(phase) }
+    var active: Bool { ["armed", "preparing", "waiting", "firing"].contains(phase) }
     var running: Bool { boolValue(status["running"]) == true }
-    var credentialsDisabled: Bool { ["preparing", "firing"].contains(phase) }
+    var credentialsDisabled: Bool { ["preparing", "waiting", "firing"].contains(phase) }
     var credentialState: String {
         switch dictValue(status["credentials"])["state"] as? String {
         case "configured": return "已设置"
@@ -224,7 +224,7 @@ import UserNotifications
         case "arm": return "布防"
         case "disarm": return "取消布防"
         case "cancel": return "撤单"
-        case "buy": return "演练购买"
+        case "buy": return args.contains("--confirm-real-payment") ? "真实单笔购买" : "演练购买"
         case "set-login-pattern", "set-payment-password": return "保存凭据"
         case "agent-heartbeat": return "更新心跳"
         default: return "处理中"

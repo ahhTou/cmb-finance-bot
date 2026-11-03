@@ -27,7 +27,8 @@ import uiautomator2 as u2
 
 import fast_buy
 import keychain_store
-from secure_input import center, has, send_commands
+import purchase_settings
+from secure_input import center, has, screen_protected, send_commands
 
 DEVICE = None
 
@@ -43,7 +44,7 @@ FORM_WAIT = 20.0   # goBuy() → 理财购买 form
 STEP_WAIT = 10.0   # risk popup, password page
 REOPEN_AFTER = 5.0      # direct open: reload the buy page if no form by then
 REOPEN_GAP = 1.0        # never reload faster than this
-REOPEN_DEADLINE = 60.0  # give up reopening after this long
+REOPEN_DEADLINE = purchase_settings.DEFAULTS['reopen_deadline']  # default; run() reads saved preferences
 FORM_ERRORS = ("购买失败", "TOPI", "系统繁忙", "网络异常", "请稍后再试")
 
 
@@ -125,6 +126,75 @@ def find_node(root, needle, exact=False):
 
 def center_of(node):
     return center(node.get("bounds"))
+
+
+DIALOG_MARKERS = ("不能小于", "不能大于", "额度不足", "购买失败", "TQHF")
+
+
+def dialog_message(labels):
+    """The bank's rejection text inside a 温馨提示 dialog, if any."""
+    for label in labels:
+        if "TQHF" in label:
+            return label.strip()
+    for label in labels:
+        if any(marker in label for marker in DIALOG_MARKERS):
+            return label.strip()
+    return ""
+
+
+def wait_risk_or_error(timeout=STEP_WAIT):
+    """After 同意协议下一步: the risk dialog, or the page's own rejection.
+
+    An amount below the product minimum (observed: 0.01 → TQHF0I4 购买金额
+    不能小于产品单笔购买下限) never opens the risk dialog. Waiting the full
+    timeout and saying "风险弹窗没有出现" hides the real reason.
+    """
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            root = dump()
+        except Exception:
+            time.sleep(0.1)
+            continue
+        labels = [fast_buy.label(n).strip() for n in root.iter("node")
+                  if fast_buy.label(n).strip()]
+        text = " ".join(labels)
+        if "一键输入" in text:
+            return ""
+        message = dialog_message(labels)
+        if message:
+            return message
+        time.sleep(0.1)
+    raise fast_buy.Stop("风险弹窗没有出现。")
+
+
+def dismiss_dialog():
+    """Acknowledge a 温馨提示-style dialog. It never submits anything."""
+    try:
+        root = dump()
+    except Exception:
+        return
+    for label in ("确认", "我知道了", "返回"):
+        node = find_node(root, label, exact=True)
+        if node is not None:
+            x, y = center_of(node)
+            send_commands([f"input tap {x} {y}"])
+            time.sleep(0.4)
+            return
+
+
+def quota_amount(root):
+    """「单笔可购买额度 ￥200.06」from the purchase form, if the bank shows it.
+
+    The form hides this label for products without a meaningful limit, so
+    None means "not shown", not "zero".
+    """
+    text = " ".join(fast_buy.label(n) for n in root.iter("node"))
+    match = re.search(r"单笔可购买额度\s*[￥¥]?\s*([\d,]+(?:\.\d+)?)\s*(万)?\s*元", text)
+    if not match:
+        return None
+    value = Decimal(match.group(1).replace(",", ""))
+    return value * 10000 if match.group(2) else value
 
 
 def confirm_enabled(root):
@@ -212,19 +282,42 @@ def enter_password(password, confirm_wait=0.15):
     send_commands([f"input tap {submit_xy[0]} {submit_xy[1]}"])
 
 
-def open_form(code, amount):
+def protected_login_page():
+    """A blanked PNG is the login page's signature; a normal page is not.
+
+    Only called when the tree shows the login-page controls, so the extra
+    screencap stays off the fast path and a page transition cannot trigger it.
+    """
+    try:
+        return screen_protected()
+    except Exception:
+        return False
+
+
+def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REOPEN_GAP,
+              tick=None):
     """Open the purchase form straight from the app's deep link and reopen it
     quickly when it does not show up or shows an error page. No detail page
-    is needed. Nothing here confirms anything."""
+    is needed. Nothing here confirms anything.
+
+    `deadline` bounds the whole loop. `wait` is how long one opened page gets
+    to show the form; `gap` is the minimum time before a visible error page is
+    believed — it must outlast the previous page, otherwise a stale error page
+    would keep interrupting a slow load (the redemption window reopens for
+    minutes and must not starve itself). `tick(opens)` runs every tenth open
+    so a long window can keep its heartbeat and probe counter current.
+    """
     start = time.monotonic()
     opens = 0
     while True:
         fast_buy.open_buy_link(code, amount)
         opens += 1
-        if opens > 1:
+        if tick is not None and opens % 10 == 0:
+            tick(opens)
+        if opens > 1 and (opens <= 5 or opens % 10 == 0):
             print(f"第 {opens} 次打开购买页（{time.monotonic() - start:.1f}s）", flush=True)
         opened = time.monotonic()
-        while time.monotonic() - opened < REOPEN_AFTER:
+        while time.monotonic() - opened < wait:
             try:
                 root = dump()
             except Exception:
@@ -234,17 +327,31 @@ def open_form(code, amount):
                 if ("可用余额" in text and "同意协议下一步" in text
                         and fast_buy.buy_page_shown(code)):
                     return root
-                if any(e in text for e in FORM_ERRORS) and time.monotonic() - opened >= REOPEN_GAP:
-                    print(f"购买页报错，重开：{next(e for e in FORM_ERRORS if e in text)}", flush=True)
+                if ("我的头像" in text and "更多选项" in text
+                        and protected_login_page()):
+                    # The buy link bounced to the login page: polling would
+                    # never show a form, and silence would hide the reason.
+                    raise fast_buy.Stop("App 停在登录页，需要重新登录；本轮已停止，未提交。")
+                if any(e in text for e in FORM_ERRORS) and time.monotonic() - opened >= gap:
+                    if opens <= 5 or opens % 10 == 0:
+                        print(f"购买页报错，重开："
+                              f"{next(e for e in FORM_ERRORS if e in text)}", flush=True)
                     break
             time.sleep(0.08)
-        if time.monotonic() - start > REOPEN_DEADLINE:
-            raise fast_buy.Stop(f"{REOPEN_DEADLINE:.0f} 秒内打开 {opens} 次，购买表单都没有出现。")
+        if time.monotonic() - start > deadline:
+            raise fast_buy.Stop(f"打开 {opens} 次，购买表单都没有出现。")
 
 
-def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True):
+def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True,
+        form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None):
     """One purchase. `mark(name, monotonic_time)` is an optional read-only
-    timing hook; it never changes the flow."""
+    timing hook; it never changes the flow.
+
+    `form_deadline` widens the reopen loop for the redemption window, where the
+    purchase page is retried until quota shows up. `before_submit()` runs after
+    the form is verified and before anything that can create an order, so the
+    caller can persist its "submitting" marker at the last safe moment.
+    """
     def note(name, when):
         if mark is not None:
             mark(name, when)
@@ -273,7 +380,11 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     # Pre-submit waits are generous: nothing is confirmed yet, and at 00:30
     # (flaky Wi-Fi, detail page idle 14 min) the form took over 4 s.
     if direct:
-        root = open_form(code, amount)
+        root = open_form(code, amount,
+                         deadline=form_deadline if form_deadline is not None else purchase_settings.load()['reopen_deadline'],
+                         wait=form_wait if form_wait is not None else REOPEN_AFTER,
+                         gap=form_gap if form_gap is not None else REOPEN_GAP,
+                         tick=tick)
         note("gobuy", time.monotonic())
     else:
         fast_buy.js_prefill_and_buy(amount, code)
@@ -294,10 +405,20 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         time.sleep(0.20)
         d.press("back")
         time.sleep(0.30)
+    note("verified", time.monotonic())
+    shown_quota = quota_amount(root)
+    if shown_quota is not None:
+        print(f"购买页显示单笔可购买额度 {shown_quota} 元（本次 {amount} 元）", flush=True)
+        if Decimal(amount) > shown_quota:
+            raise fast_buy.Stop("布防金额高于页面可购额度，已停止，未提交。")
+    if before_submit is not None:
+        before_submit()
     d(text="同意协议下一步").click()
     note("next", time.monotonic())
-    if not d(text="一键输入").wait(timeout=STEP_WAIT):
-        raise fast_buy.Stop("风险弹窗没有出现。")
+    problem = wait_risk_or_error(STEP_WAIT)
+    if problem:
+        dismiss_dialog()
+        raise fast_buy.Stop(f"购买页拒绝：{problem}")
     note("risk", time.monotonic())
     d(text="一键输入").click()
     note("fill", time.monotonic())

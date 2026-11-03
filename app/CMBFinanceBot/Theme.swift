@@ -254,14 +254,15 @@ struct LogText: View {
 }
 
 func phaseName(_ phase: String) -> String {
-    ["armed": "已布防", "preparing": "准备中", "firing": "正在提交", "done": "已完成",
-     "aborted": "已中止", "disarmed": "已取消"][phase] ?? phase
+    ["armed": "已布防", "preparing": "准备中", "waiting": "盯盘中", "firing": "正在提交",
+     "done": "已完成", "aborted": "已中止", "disarmed": "已取消"][phase] ?? phase
 }
 
 func phaseColor(_ phase: String) -> Color {
     switch phase {
     case "armed": return AppPalette.accent
     case "preparing": return AppPalette.warn
+    case "waiting": return AppPalette.accent
     case "firing": return AppPalette.accent
     case "done": return AppPalette.good
     case "aborted": return AppPalette.warn

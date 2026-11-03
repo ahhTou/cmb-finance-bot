@@ -7,7 +7,7 @@ struct Backend {
         switch args.first {
         case "emulator": return args.contains("start") ? 60 : 30
         case "cancel": return 300
-        case "buy": return 120
+        case "buy": return 420
         default: return 30
         }
     }

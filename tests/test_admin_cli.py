@@ -8,7 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import admin_cli as admin
@@ -20,6 +20,7 @@ class AdminTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         state = Path(self.tmp.name)
         self.stack = contextlib.ExitStack()
+        self.stack.enter_context(patch.object(admin.purchase_settings, 'SETTINGS', state / 'purchase-settings.json'))
         for name, value in [('STATE', state), ('TASK', state / 'task.json'), ('LOG', state / 'watch.log')]:
             self.stack.enter_context(patch.object(nw, name, value))
         self.stack.enter_context(patch.object(admin.keychain_store, 'credential_info', return_value={'state': 'configured'}))
@@ -53,6 +54,17 @@ class AdminTest(unittest.TestCase):
         self.assertTrue(data['stale'])
         self.assertEqual(data['credentials'], {'state': 'configured'})
         self.assertNotIn('payment_password', json.dumps(data))
+
+    def test_retry_settings_persist_and_reject_invalid_updates(self):
+        code, data = self.call('settings')
+        self.assertEqual(data['settings'], {'reopen_deadline': 60, 'drill_form_deadline': 10})
+        code, data = self.call('settings', '--reopen-deadline', '120', '--drill-form-deadline', '30')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['settings'], {'reopen_deadline': 120, 'drill_form_deadline': 30})
+        for value in ('0', '-1', '301', '1.5'):
+            code, _ = self.call('settings', '--reopen-deadline', value)
+            self.assertEqual(code, 1)
+        self.assertEqual(self.call('settings')[1]['settings'], data['settings'])
 
     def test_argv_secret_rejected_without_echo(self):
         code, data = self.call('set-payment-password', '--new', 'do-not-echo')
@@ -109,6 +121,30 @@ class AdminTest(unittest.TestCase):
             code, _ = self.call('arm', '--code', 'TEST01', '--amount', '0.01', '--now')
         self.assertEqual(code, 1)
         arm.assert_not_called()
+
+    def test_immediate_real_arm_requires_explicit_payment_confirmation(self):
+        with patch.object(nw, 'arm_task', return_value={'dry_run': False}) as arm:
+            code, data = self.call('arm', '--code', 'TEST01', '--amount', '100', '--now',
+                                   '--confirm-real-payment')
+        self.assertEqual(code, 0)
+        self.assertFalse(data['task']['dry_run'])
+        self.assertEqual(arm.call_args.args, ('TEST01', '100', None, False, 15, True))
+
+    def test_immediate_dry_run_needs_no_payment_confirmation(self):
+        with patch.object(nw, 'arm_task', return_value={'dry_run': True}) as arm:
+            code, _ = self.call('arm', '--code', 'TEST01', '--amount', '100', '--now', '--dry-run')
+        self.assertEqual(code, 0)
+        self.assertTrue(arm.call_args.args[3])
+
+    def test_arm_passes_redemption_window(self):
+        with patch.object(nw, 'arm_task', return_value={'mode': 'redemption'}) as arm:
+            code, data = self.call('arm', '--code', 'JX040229', '--amount', '3000',
+                                   '--at', '2026-11-04T00:15:00', '--mode', 'redemption',
+                                   '--window-minutes', '5')
+        self.assertEqual(code, 0)
+        self.assertEqual(arm.call_args.kwargs['mode'], 'redemption')
+        self.assertEqual(arm.call_args.kwargs['window_minutes'], 5)
+        self.assertEqual(data['task']['mode'], 'redemption')
 
     def test_device_timeouts_are_bounded(self):
         with patch.object(admin.manage, 'status_info', return_value={'emulator': {'running': True}}), \
@@ -185,17 +221,62 @@ class AdminTest(unittest.TestCase):
         self.assertIn('--limit', run.call_args.args[0])
         self.assertIn('1', run.call_args.args[0])
 
-    def test_buy_requires_dry_run_and_is_a_drill(self):
+    def test_buy_requires_explicit_mode_and_dry_run_is_a_drill(self):
         code, _ = self.call('buy', '--code', 'TEST01', '--amount', '0.01')
         self.assertEqual(code, 1)
         module = types.ModuleType('fast_buy_uia2')
         calls = []
-        module.run = lambda code, amount, dry_run: calls.append((code, amount, dry_run))
+        admin.purchase_settings.save({'drill_form_deadline': 25})
+        module.run = lambda code, amount, dry_run, **kwargs: calls.append(
+            (code, amount, dry_run, kwargs))
         with patch.dict(sys.modules, {'fast_buy_uia2': module}):
             code, data = self.call('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run')
         self.assertEqual(code, 0)
-        self.assertEqual(calls, [('TEST01', '0.01', True)])
+        self.assertEqual(calls, [('TEST01', '0.01', True,
+                                  {'form_deadline': 25})])
         self.assertEqual(data['output'], [])
+
+    def test_confirmed_direct_buy_submits_once_without_arming(self):
+        module = types.ModuleType('fast_buy_uia2')
+        module.run = Mock(return_value='提交成功')
+        admin.purchase_settings.save({'reopen_deadline': 90, 'drill_form_deadline': 15})
+        with patch.dict(sys.modules, {'fast_buy_uia2': module}), \
+             patch.object(nw, 'arm_task') as arm, patch.object(nw, 'spawn_watch') as spawn:
+            code, data = self.call('buy', '--code', 'TEST01', '--amount', '100',
+                                   '--confirm-real-payment')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['result'], '提交成功')
+        module.run.assert_called_once_with('TEST01', '100.00', dry_run=False, form_deadline=90)
+        arm.assert_not_called()
+        spawn.assert_not_called()
+        self.assertFalse(nw.TASK.exists())
+
+    def test_direct_buy_failure_is_not_retried(self):
+        module = types.ModuleType('fast_buy_uia2')
+        module.run = Mock(side_effect=nw.fast_buy.Stop('结果未知，请查交易记录。'))
+        with patch.dict(sys.modules, {'fast_buy_uia2': module}):
+            code, data = self.call('buy', '--code', 'TEST01', '--amount', '100',
+                                   '--confirm-real-payment')
+        self.assertEqual(code, 1)
+        self.assertIn('结果未知', data['error'])
+        module.run.assert_called_once()
+
+    def test_direct_buy_rejects_conflicting_modes(self):
+        code, _ = self.call('buy', '--code', 'TEST01', '--amount', '100',
+                            '--confirm-real-payment', '--dry-run')
+        self.assertEqual(code, 1)
+
+    def test_real_direct_buy_blocks_live_watch_and_all_active_phases(self):
+        module = types.ModuleType('fast_buy_uia2')
+        module.run = Mock()
+        for phase in ('armed', 'preparing', 'waiting', 'firing', 'done'):
+            self.task(phase=phase, pid=123)
+            with self.subTest(phase=phase), patch.dict(sys.modules, {'fast_buy_uia2': module}), \
+                 patch.object(nw, 'alive', return_value=phase == 'done'):
+                code, _ = self.call('buy', '--code', 'TEST01', '--amount', '100',
+                                    '--confirm-real-payment')
+                self.assertEqual(code, 1)
+        module.run.assert_not_called()
 
     def test_buy_blocks_active_task(self):
         self.task(phase='preparing')
@@ -204,6 +285,16 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
 class SystemParsingTest(unittest.TestCase):
+    def test_caffeinate_child_details_match_only_the_task_pid(self):
+        for owner, expected in [(321, True), (3210, False), (99, False)]:
+            assertions = ('pid 999(caffeinate): PreventUserIdleSystemSleep\n'
+                          f' Details: caffeinate asserting forever (pid {owner})\n')
+            with self.subTest(owner=owner), \
+                 patch.object(admin, 'command', return_value=assertions), \
+                 patch.object(nw, 'load_task', return_value={'pid': 321}), \
+                 patch.object(admin.socket, 'create_connection', side_effect=OSError):
+                self.assertEqual(admin.system()['watch_caffeinate'], expected)
+
     def test_system_samples_and_tls(self):
         samples = {
             ('/usr/bin/pmset', '-g', 'batt'): "Now drawing from 'AC Power'",
