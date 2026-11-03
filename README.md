@@ -138,7 +138,7 @@ var/                 SDK、虚拟设备、日志、运行状态（Git 忽略，�
 
 SDK 和虚拟设备体积较大，迁移到新机器后建议重新创建虚拟设备。
 
-## 管理 App（第一版）
+## 管理 App
 
 原生 macOS 前台管理 App「招行理财值守」，采用纯深灰背景、侧边栏导航和无描边卡片布局。窗口保留 macOS 原生圆角、阴影与红绿灯，最低 macOS 13，需要完整 Xcode：
 
@@ -149,9 +149,17 @@ open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
 
 也可以打开 `app/CMBFinanceBot/CMBFinanceBot.xcodeproj`，选择 CMBFinanceBot scheme 运行。自用本机签名，不启用 App Sandbox，无第三方 Swift 依赖。
 
-启动或双击 App 会打开常驻管理窗口，不显示菜单栏或 Dock 图标。点关闭、按 Cmd-W 或 Cmd-Q 都会二次确认；选择“继续打开”保留窗口，选择“关闭并退出”才退出 App。项目目录、Python 路径（默认 `/usr/bin/python3`）和凭据统一放在侧边栏“设置”中；首次使用自动进入设置。侧边栏提供状态、系统、布防、设置四页。窗口顶部空白处可拖动，左上角可关闭、最小化或缩放。演练默认开启；真实布防必须再次输入金额。退出 App 不会取消独立运行的值守。
+启动或双击 App 会打开常驻管理窗口，显示 Dock 图标，不显示菜单栏状态图标。点红色关闭按钮或按 Cmd-W 只关闭窗口，App 继续运行；点击 Dock 图标可重新打开。Dock 菜单“退出”或 Cmd-Q 才真正结束 App，不再二次确认。窗口顶部空白处可拖动，左上角可关闭、最小化或缩放；窗口大小和当前页会记住。退出 App 不会取消独立运行的值守。
 
-当前已通过 55 项相关 Python 隔离测试、Swift 桥接测试、Release 构建、签名与界面检查；真实设备演练、凭据同步、退出后值守继续运行、通知和故障恢复尚待账户持有人验收。账户持有人亲自操作布防和凭据页；Agent 只开发和检查。验收清单见 [实现进度](docs/admin-page-plan.md)。修改凭据只同步脚本保存的值，不修改银行设置。
+侧边栏五页：
+
+- **任务**：首发、捡漏、赎回抢购三张竖向卡片，按可用高度均分铺满。首发可用，打开布防表单；另外两种显示“正在做”和规划文案。
+- **状态**：合并原状态与系统，三行两列 Dashboard 按可用高度均分铺满：值守、Mac、模拟器、画面、凭据与通知、最近日志；启停模拟器、恢复常亮、截图、休眠设置等操作都在卡片里。原来的“当前任务”卡片不再显示。
+- **演练**：演练布防、单笔购买演练、设备操作、撤单（查看可撤单 / 撤单演练 / 真实撤单），以及常用命令和命令输出。撤单是真实操作，需要二次确认。
+- **历史**：全部历史记录、完成情况统计、任务详情和全局值守日志。
+- **设置**：项目目录、Python 路径（默认 `/usr/bin/python3`）和凭据，保持原样；首次使用自动进入设置。
+
+布防表单默认真实布防，演练需手动打开；真实布防必须再次输入金额。当前已通过 64 项相关 Python 隔离测试、Swift 桥接测试、Release 构建、签名与界面检查；真实设备演练、凭据同步、退出后值守继续运行、通知和故障恢复尚待账户持有人验收。账户持有人亲自操作布防、撤单和凭据页；Agent 只开发和检查。验收清单见 [实现进度](docs/admin-page-plan.md)。修改凭据只同步脚本保存的值，不修改银行设置。
 
 新增 JSON 接口（每次一行，成功退出码 0，失败为 1）：
 
@@ -159,8 +167,13 @@ open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
 python3 -B src/admin_cli.py status
 python3 -B src/admin_cli.py device
 python3 -B src/admin_cli.py system
-python3 -B src/admin_cli.py history
+python3 -B src/admin_cli.py history --limit 0
+python3 -B src/admin_cli.py log --lines 800
+python3 -B src/admin_cli.py cancel --list
+python3 -B src/admin_cli.py buy --code <代码> --amount 0.01 --dry-run
 ```
+
+App 内的“单笔购买演练”只走演练；真实撤单必须勾选确认并输入交易密码，由账户持有人操作。`cancel` 的真实模式还必须带 `--yes`，避免误触发。
 
 监听指令与恢复边界见 `skills/cmb-watch/SKILL.md` 和 `AGENT_WORKFLOW.md` §9。旧任务能查看和取消，但不能恢复；版本 2 任务一旦进入提交也不能恢复。
 

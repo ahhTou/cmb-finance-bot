@@ -3,6 +3,14 @@ import Foundation
 struct Backend {
     let root: String
     let python: String
+    private func timeout(for args: [String]) -> TimeInterval {
+        switch args.first {
+        case "emulator": return args.contains("start") ? 60 : 30
+        case "cancel": return 300
+        case "buy": return 120
+        default: return 30
+        }
+    }
     func run(_ args: [String], input: [String: String]? = nil) async throws -> [String: Any] {
         let payload = try input.map { try JSONSerialization.data(withJSONObject: $0) }
         return try await withCheckedThrowingContinuation { continuation in
@@ -31,7 +39,7 @@ struct Backend {
                     }
                     if let payload { try stdin.fileHandleForWriting.write(contentsOf: payload) }
                     try stdin.fileHandleForWriting.close()
-                    let deadline = Date().addingTimeInterval(args == ["emulator", "start"] ? 60 : 30)
+                    let deadline = Date().addingTimeInterval(timeout(for: args))
                     while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
                     if process.isRunning {
                         process.terminate()

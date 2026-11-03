@@ -3,8 +3,10 @@ from datetime import datetime, timedelta
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -120,6 +122,86 @@ class AdminTest(unittest.TestCase):
         code, data = self.call('history')
         self.assertEqual(code, 0)
         self.assertEqual(data['records'], [{'phase': 'done'}])
+        self.assertEqual(data['total'], 1)
+
+    def test_history_limit_and_order(self):
+        rows = [{'phase': 'done', 'n': i} for i in range(25)]
+        (nw.STATE / 'history.jsonl').write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        code, data = self.call('history', '--limit', '5')
+        self.assertEqual(code, 0)
+        self.assertEqual([r['n'] for r in data['records']], [24, 23, 22, 21, 20])
+        self.assertEqual(data['total'], 25)
+        self.assertEqual(data['shown'], 5)
+        code, data = self.call('history', '--limit', '0')
+        self.assertEqual([r['n'] for r in data['records']][:3], [24, 23, 22])
+        self.assertEqual(len(data['records']), 25)
+
+    def test_log_returns_tail_and_path(self):
+        nw.LOG.parent.mkdir(parents=True, exist_ok=True)
+        nw.LOG.write_text('\n'.join(f'line {i}' for i in range(10)))
+        code, data = self.call('log', '--lines', '3')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['lines'], ['line 7', 'line 8', 'line 9'])
+        self.assertEqual(data['total'], 10)
+        self.assertEqual(data['path'], str(nw.LOG))
+
+    def test_cancel_blocks_active_task(self):
+        self.task(phase='armed')
+        with patch.object(admin.subprocess, 'run') as run:
+            code, _ = self.call('cancel', '--list')
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+
+    def test_cancel_blocks_live_process_after_terminal_phase(self):
+        self.task(phase='done', pid=999)
+        with patch.object(admin.nw, 'alive', return_value=True), \
+             patch.object(admin.subprocess, 'run') as run:
+            code, _ = self.call('cancel', '--list')
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+
+    def test_cancel_rejects_real_without_confirmation(self):
+        with patch.object(admin.subprocess, 'run') as run:
+            code, _ = self.call('cancel', '--limit', '1')
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+
+    def test_cancel_list_returns_output(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='可撤单 1 笔：\n  - TEST01\n', stderr='')
+        with patch.object(admin.subprocess, 'run', return_value=completed) as run:
+            code, data = self.call('cancel', '--list')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['output'], ['可撤单 1 笔：', '  - TEST01'])
+        args = run.call_args.args[0]
+        self.assertIn('--list', args)
+        self.assertIn('--amount', args)
+
+    def test_cancel_real_requires_yes_and_passes_limit(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='完成：本次共撤 1 笔。\n', stderr='')
+        with patch.object(admin.subprocess, 'run', return_value=completed) as run:
+            code, data = self.call('cancel', '--limit', '1', '--yes')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['output'], ['完成：本次共撤 1 笔。'])
+        self.assertIn('--limit', run.call_args.args[0])
+        self.assertIn('1', run.call_args.args[0])
+
+    def test_buy_requires_dry_run_and_is_a_drill(self):
+        code, _ = self.call('buy', '--code', 'TEST01', '--amount', '0.01')
+        self.assertEqual(code, 1)
+        module = types.ModuleType('fast_buy_uia2')
+        calls = []
+        module.run = lambda code, amount, dry_run: calls.append((code, amount, dry_run))
+        with patch.dict(sys.modules, {'fast_buy_uia2': module}):
+            code, data = self.call('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run')
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [('TEST01', '0.01', True)])
+        self.assertEqual(data['output'], [])
+
+    def test_buy_blocks_active_task(self):
+        self.task(phase='preparing')
+        with patch.dict(sys.modules, {'fast_buy_uia2': types.ModuleType('fast_buy_uia2')}):
+            code, _ = self.call('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run')
+        self.assertEqual(code, 1)
 
 class SystemParsingTest(unittest.TestCase):
     def test_system_samples_and_tls(self):

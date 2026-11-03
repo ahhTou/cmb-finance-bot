@@ -7,6 +7,7 @@ from datetime import datetime
 import io
 import json
 from pathlib import Path
+import re
 import socket
 import ssl
 import subprocess
@@ -44,7 +45,7 @@ def status():
     data = nw.status_info()
     data.update(agent=agent_info(data['task']), processes=manage.status_info(),
                 credentials=keychain_store.credential_info(),
-                mail_configured=notify.configured())
+                mail_configured=notify.configured(), log_path=str(nw.LOG))
     return data
 
 
@@ -114,9 +115,23 @@ def parser():
             raise nw.Abort('命令参数无效，请检查命令和必填参数。')
     p = Parser(description=__doc__)
     sub = p.add_subparsers(dest='cmd', required=True)
-    for name in ('status', 'device', 'system', 'history', 'disarm', 'keep-awake', 'screenshot',
+    for name in ('status', 'device', 'system', 'disarm', 'keep-awake', 'screenshot',
                  'set-login-pattern', 'set-payment-password', 'agent-release'):
         sub.add_parser(name)
+    history = sub.add_parser('history')
+    history.add_argument('--limit', type=int, default=0)
+    log = sub.add_parser('log')
+    log.add_argument('--lines', type=int, default=800)
+    cancel = sub.add_parser('cancel')
+    cancel.add_argument('--amount', default='0.01')
+    cancel.add_argument('--limit', type=int, default=0)
+    cancel.add_argument('--dry-run', action='store_true')
+    cancel.add_argument('--list', action='store_true')
+    cancel.add_argument('--yes', action='store_true')
+    buy = sub.add_parser('buy')
+    buy.add_argument('--code', required=True)
+    buy.add_argument('--amount', required=True)
+    buy.add_argument('--dry-run', action='store_true')
     emulator = sub.add_parser('emulator')
     emulator.add_argument('action', choices=['start', 'stop'])
     arm = sub.add_parser('arm')
@@ -143,12 +158,24 @@ def dispatch(a):
     if a.cmd == 'device': return device()
     if a.cmd == 'system': return system()
     if a.cmd == 'history':
+        if not 0 <= a.limit <= 1000:
+            raise nw.Abort('历史记录条数须为 0–1000（0 表示全部）。')
         path = nw.STATE / 'history.jsonl'
         rows = []
-        for line in path.read_text().splitlines() if path.exists() else []:
+        for line in path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []:
             try: rows.append(json.loads(line))
             except ValueError: continue
-        return {'records': rows[-20:][::-1]}
+        bounded = rows[-1000:]
+        records = (bounded if a.limit == 0 else bounded[-a.limit:])[::-1]
+        return {'records': records, 'total': len(rows), 'shown': len(records),
+                'log_path': str(nw.LOG)}
+    if a.cmd == 'log':
+        if not 1 <= a.lines <= 5000:
+            raise nw.Abort('日志行数须为 1–5000。')
+        text = nw.LOG.read_text(encoding='utf-8', errors='replace') if nw.LOG.exists() else ''
+        lines = text.splitlines()
+        return {'path': str(nw.LOG), 'lines': lines[-a.lines:], 'total': len(lines),
+                'exists': nw.LOG.exists()}
     if a.cmd == 'arm':
         if a.now and not a.dry_run:
             raise nw.Abort('立即排练必须勾选演练。')
@@ -163,6 +190,48 @@ def dispatch(a):
     if a.cmd == 'screenshot':
         subprocess.run([str(nw.ROOT / 'scripts/capture')], capture_output=True, timeout=15, check=True)
         return {'path': str(nw.ROOT / 'var/screenshots/current.png')}
+    if a.cmd == 'cancel':
+        if not 0 <= a.limit <= 100:
+            raise nw.Abort('撤单数量须为 0–100。')
+        if not (a.list or a.dry_run) and not a.yes:
+            raise nw.Abort('真实撤单需要明确确认。')
+        amount = nw.fast_buy.parse_amount(a.amount)
+        with nw.task_lock(False):
+            task = nw.load_task()
+            if task and (task.get('phase') in ('armed', 'preparing', 'firing') or nw.alive(task.get('pid'))):
+                raise nw.Abort('值守任务活动期间不能撤单；先取消防守。')
+            args = [sys.executable, '-B', str(nw.ROOT / 'src/cancel_orders.py'), '--amount', amount]
+            if a.limit:
+                args += ['--limit', str(a.limit)]
+            if a.list:
+                args.append('--list')
+            elif a.dry_run:
+                args.append('--dry-run')
+            try:
+                proc = subprocess.run(args, capture_output=True, text=True, timeout=240, cwd=str(nw.ROOT))
+            except subprocess.TimeoutExpired:
+                raise nw.Abort('撤单命令超时；请先查交易记录，勿重复操作。')
+            output = proc.stdout.splitlines()
+            if proc.returncode != 0:
+                details = [line for line in (proc.stderr or '').splitlines() if line.strip()]
+                message = details[-1] if details else (output[-1] if output else '撤单命令失败。')
+                raise nw.Abort(message[:300])
+            return {'output': output}
+    if a.cmd == 'buy':
+        if not a.dry_run:
+            raise nw.Abort('App 内只允许演练购买。')
+        if not re.fullmatch(r'[A-Za-z0-9]{4,20}', a.code):
+            raise nw.Abort('产品代码格式不正确。')
+        amount = nw.fast_buy.parse_amount(a.amount)
+        with nw.task_lock(False):
+            task = nw.load_task()
+            if task and (task.get('phase') in ('armed', 'preparing', 'firing') or nw.alive(task.get('pid'))):
+                raise nw.Abort('值守任务活动期间不能演练购买。')
+            import fast_buy_uia2
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                fast_buy_uia2.run(a.code, amount, dry_run=True)
+        return {'output': buffer.getvalue().splitlines()}
     if a.cmd.startswith('set-'):
         with nw.task_lock(False):
             task = nw.load_task()
