@@ -12,7 +12,7 @@ DEFAULTS = {
 }
 LIMITS = {
     'reopen_deadline': (1, 300), 'drill_form_deadline': (1, 300),
-    'cold_start_minutes': (1, 60),
+    'cold_start_minutes': (2, 60),
     'first_offset_ms': (0, 10000), 'first_max_retries': (0, 100),
     'irregular_advance_ms': (0, 10000), 'irregular_window_minutes': (1, 60),
     'irregular_retry_min_ms': (1, 60000), 'irregular_retry_max_ms': (1, 60000),

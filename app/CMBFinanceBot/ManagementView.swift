@@ -12,33 +12,44 @@ struct ManagementView: View {
     ]
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                ZStack {
-                    TasksView(tab: $tab)
-                        .opacity(tab == 0 ? 1 : 0).allowsHitTesting(tab == 0).accessibilityHidden(tab != 0)
-                    DashboardView(tab: $tab)
-                        .opacity(tab == 1 ? 1 : 0).allowsHitTesting(tab == 1).accessibilityHidden(tab != 1)
-                    DrillView()
-                        .opacity(tab == 2 ? 1 : 0).allowsHitTesting(tab == 2).accessibilityHidden(tab != 2)
-                    HistoryView()
-                        .opacity(tab == 3 ? 1 : 0).allowsHitTesting(tab == 3).accessibilityHidden(tab != 3)
-                    if tab == 4 && m.windowVisible { SettingsView() }
+        ZStack {
+            HStack(spacing: 0) {
+                sidebar
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    ZStack {
+                        TasksView(tab: $tab)
+                            .opacity(tab == 0 ? 1 : 0).allowsHitTesting(tab == 0).accessibilityHidden(tab != 0)
+                        DashboardView(tab: $tab)
+                            .opacity(tab == 1 ? 1 : 0).allowsHitTesting(tab == 1).accessibilityHidden(tab != 1)
+                        DrillView()
+                            .opacity(tab == 2 ? 1 : 0).allowsHitTesting(tab == 2).accessibilityHidden(tab != 2)
+                        HistoryView()
+                            .opacity(tab == 3 ? 1 : 0).allowsHitTesting(tab == 3).accessibilityHidden(tab != 3)
+                        if tab == 4 && m.windowVisible { SettingsView() }
+                    }
+                    .disabled(m.root.isEmpty && tab != 4)
+                    .padding(.bottom, 26)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .disabled(m.root.isEmpty && tab != 4)
-                .padding(.bottom, 26)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppPalette.background)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
             .background(AppPalette.background)
+            .foregroundStyle(Color(white: 0.94)).tint(AppPalette.accent)
+            .buttonStyle(CardButtonStyle()).toggleStyle(.switch).preferredColorScheme(.dark)
+            .errorToast(topInset: 82)
+
+            if m.active {
+                LiveView()
+                    .transition(.opacity)
+                    .zIndex(20)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
         .background(AppPalette.background)
-        .foregroundStyle(Color(white: 0.94)).tint(AppPalette.accent)
-        .buttonStyle(CardButtonStyle()).toggleStyle(.switch).preferredColorScheme(.dark)
-        .errorToast(topInset: 82)
+        .animation(.easeInOut(duration: 0.2), value: m.active)
         .task {
             if m.root.isEmpty { tab = 4 }
             await m.refreshCurrent(tab)
