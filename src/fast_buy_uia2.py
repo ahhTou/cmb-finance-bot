@@ -222,24 +222,74 @@ def raw_digit_buttons(root):
     return keys
 
 
+KEYPAD_STABLE_SECONDS = 0.20
+KEYPAD_STABLE_SAMPLES = 3
+PASSWORD_DIGIT_GAP = 0.05
+
+
+def keypad_ready(root):
+    """Require a focused password control and ten unique actionable digit keys.
+
+    Keep the full bounds in the signature: equal rounded centers alone do not
+    prove that the keyboard has stopped animating. Never inspect field text.
+    """
+    field = find_node(root, "点击谈出密码键盘")
+    if field is None or field.get("focused") != "true":
+        return None
+    buttons = [n for n in root.iter("node") if n.get("class") == "android.widget.Button"
+               and re.fullmatch(r"[0-9]", (n.get("text") or "").strip())]
+    if len(buttons) != 10:
+        return None
+    keys, signature = {}, []
+    for button in buttons:
+        label = button.get("text").strip()
+        if (label in keys or button.get("enabled") != "true"
+                or button.get("clickable") != "true" or button.get("visible-to-user") == "false"):
+            return None
+        try:
+            keys[label] = center_of(button)
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        signature.append((label, button.get("bounds")))
+    return tuple(sorted(signature)), keys
+
+
 def wait_keypad_stable(timeout=1.2):
-    """Wait until all ten keys exist and their bounds stop changing."""
-    prev = None
+    """Require focus + actionable keys + unchanged full bounds for 200ms.
+
+    Three coherent samples are also required; never type on timeout.
+    """
+    prev, stable_since, samples = None, None, 0
     end = time.monotonic() + timeout
-    root = None
-    keys = {}
     while time.monotonic() < end:
         root = dump()
-        keys = raw_digit_buttons(root)
-        if len(keys) == 10:
-            sig = tuple(sorted(keys.items()))
-            if sig == prev:
+        ready = keypad_ready(root)
+        now = time.monotonic()
+        if ready is not None:
+            signature, keys = ready
+            if signature == prev:
+                samples += 1
+            else:
+                prev, stable_since, samples = signature, now, 1
+            if (now < end and samples >= KEYPAD_STABLE_SAMPLES
+                    and now - stable_since >= KEYPAD_STABLE_SECONDS):
+                print(f"数字键盘就绪：焦点与10键可用，布局连续稳定 {(now - stable_since) * 1000:.0f}ms。", flush=True)
                 return root, keys
-            prev = sig
         else:
-            prev = None
+            prev, stable_since, samples = None, None, 0
         time.sleep(0.04)
-    raise fast_buy.Stop("数字键盘在规定时间内未稳定，已停止，未继续输入或提交。")
+    raise fast_buy.Stop("数字键盘焦点或布局未稳定，已停止，未继续输入或提交。")
+
+
+def password_taps(password, keys, confirm_wait):
+    """Pace native key taps in one ADB shell session; never log this list."""
+    commands = []
+    for index, digit in enumerate(password):
+        commands.append(f"input tap {keys[digit][0]} {keys[digit][1]}")
+        if index < len(password) - 1:
+            commands.append(f"sleep {PASSWORD_DIGIT_GAP}")
+    commands.append(f"sleep {confirm_wait}")
+    return commands
 
 
 def confirm_unobscured(root):
@@ -304,8 +354,7 @@ def enter_password(password, confirm_wait=0.15):
     field_xy = center_of(field) if field is not None else None
     for attempt in range(2):
         print(f"交易密码输入：第 {attempt + 1}/2 轮", flush=True)
-        commands = [f"input tap {keys[d][0]} {keys[d][1]}" for d in password]
-        commands.append(f"sleep {confirm_wait}")
+        commands = password_taps(password, keys, confirm_wait)
         send_commands(commands)
         root = wait_password_confirm(dump())
         used_done = False
@@ -505,9 +554,9 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
               "未输入密码、未提交。", flush=True)
         return
 
-    # Six digits back-to-back, then only a short gap before 完成. Bounds come
-    # from the verified native hierarchy; enter_password() also verifies that
-    # all six digits landed before tapping 确定.
+    # Six paced digits (PASSWORD_DIGIT_GAP apart), then a short gap before
+    # 确定. Bounds come from the verified native hierarchy; enter_password()
+    # also verifies that all six digits landed before tapping 确定.
     enter_password(password, confirm_wait=confirm_wait)
     submitted = time.monotonic()
     note("submit", submitted)

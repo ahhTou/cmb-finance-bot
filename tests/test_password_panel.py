@@ -12,13 +12,13 @@ import fast_buy as fb
 
 
 def panel(enabled=False,keyboard=True,covered=False,done=True):
-    nodes=['<node text="点击谈出密码键盘" bounds="[30,100][290,130]"/>',
+    nodes=['<node text="点击谈出密码键盘" focused="true" bounds="[30,100][290,130]"/>',
            f'<node text="确定" enabled="{str(enabled).lower()}" bounds="[100,{450 if covered else 200}][220,{490 if covered else 240}]"/>']
     if keyboard:
         for digit in range(10):
             x,y=10+(digit%3)*90,400+(digit//3)*40
-            nodes.append(f'<node text="{digit}" class="android.widget.Button" bounds="[{x},{y}][{x+60},{y+30}]"/>')
-        if done:nodes.append('<node text="完成" class="android.widget.Button" bounds="[220,360][300,390]"/>')
+            nodes.append(f'<node text="{digit}" class="android.widget.Button" enabled="true" clickable="true" bounds="[{x},{y}][{x+60},{y+30}]"/>')
+        if done:nodes.append('<node text="完成" class="android.widget.Button" enabled="true" clickable="true" bounds="[220,360][300,390]"/>')
     return ET.fromstring('<hierarchy>'+''.join(nodes)+'</hierarchy>')
 
 
@@ -116,3 +116,48 @@ class PasswordPanelTest(unittest.TestCase):
         self.assertGreaterEqual(clock.now,.6)
         self.assertLess(clock.now,.65)
         self.assertGreater(read.call_count,1)
+
+
+    def test_keypad_requires_focus_and_every_digit_actionable(self):
+        root=panel()
+        self.assertIsNotNone(fu.keypad_ready(root))
+        root.find('node').set('focused','false')
+        self.assertIsNone(fu.keypad_ready(root))
+        for attribute in ('enabled','clickable'):
+            root=panel()
+            next(n for n in root.iter('node') if n.get('text')=='0').set(attribute,'false')
+            self.assertIsNone(fu.keypad_ready(root))
+
+    def test_duplicate_digit_controls_are_not_ready(self):
+        root=panel();root.append(ET.fromstring('<node text="0" class="android.widget.Button" enabled="true" clickable="true" bounds="[1,1][10,10]"/>'))
+        self.assertIsNone(fu.keypad_ready(root))
+
+    def test_keypad_needs_stability_duration_not_just_two_samples(self):
+        clock=Clock()
+        with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
+             patch.object(fu.time,'sleep',side_effect=clock.sleep),patch.object(fu,'dump',return_value=panel())as read:
+            fu.wait_keypad_stable()
+        self.assertGreaterEqual(clock.now,fu.KEYPAD_STABLE_SECONDS)
+        self.assertGreaterEqual(read.call_count,fu.KEYPAD_STABLE_SAMPLES)
+
+    def test_keypad_motion_with_same_rounded_center_resets_stability(self):
+        clock=Clock();index=[0]
+        def moving():
+            index[0]+=1;root=panel()
+            digit=next(n for n in root.iter('node')if n.get('text')=='0')
+            # Both rectangles have the same center, but the layout is moving.
+            digit.set('bounds','[10,400][70,430]'if index[0]%2 else'[11,400][69,430]')
+            return root
+        with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
+             patch.object(fu.time,'sleep',side_effect=clock.sleep),patch.object(fu,'dump',side_effect=moving):
+            with self.assertRaises(fb.Stop):fu.wait_keypad_stable(timeout=.4)
+
+    def test_repeated_digit_taps_have_explicit_spacing(self):
+        keys=fu.raw_digit_buttons(panel())
+        commands=fu.password_taps('111111',keys,.15)
+        self.assertEqual(len([c for c in commands if c.startswith('input tap')]),6)
+        self.assertEqual(commands.count('sleep 0.05'),5)
+        self.assertEqual(commands[-1],'sleep 0.15')
+        for i in range(0,10,2):
+            self.assertTrue(commands[i].startswith('input tap'))
+            self.assertEqual(commands[i+1],'sleep 0.05')
