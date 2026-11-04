@@ -239,8 +239,7 @@ def wait_keypad_stable(timeout=1.2):
         else:
             prev = None
         time.sleep(0.04)
-    root = root if root is not None else dump()
-    return root, digit_keys(root)
+    raise fast_buy.Stop("数字键盘在规定时间内未稳定，已停止，未继续输入或提交。")
 
 
 def confirm_unobscured(root):
@@ -272,6 +271,28 @@ def confirm_unobscured(root):
     return True
 
 
+def wait_password_confirm(root, timeout=0.6):
+    """An enabled button may lag behind the six input events. Never retype
+    from a single disabled snapshot; return immediately when enabled.
+    """
+    end = time.monotonic() + timeout
+    waited = False
+    while not confirm_enabled(root) and time.monotonic() < end:
+        waited = True
+        time.sleep(0.04)
+        try:
+            root = dump()
+        except Exception:
+            try:
+                close_password_panel()
+            except Exception:
+                pass
+            raise fast_buy.Stop("无法读取密码确认状态，已停止，不重输或提交。")
+    if waited and confirm_enabled(root):
+        print("确定按钮状态已更新，继续使用本轮输入，不清空重输。", flush=True)
+    return root
+
+
 def enter_password(password, confirm_wait=0.15):
     """Type once on a stable keypad; prefer 确定 without closing the keypad.
 
@@ -286,7 +307,7 @@ def enter_password(password, confirm_wait=0.15):
         commands = [f"input tap {keys[d][0]} {keys[d][1]}" for d in password]
         commands.append(f"sleep {confirm_wait}")
         send_commands(commands)
-        root = dump()
+        root = wait_password_confirm(dump())
         used_done = False
         if not confirm_unobscured(root):
             done = find_node(root, "完成", exact=True)
@@ -295,7 +316,7 @@ def enter_password(password, confirm_wait=0.15):
                 send_commands([f"input tap {x} {y}"])
                 used_done = True
                 time.sleep(0.15)
-                root = dump()
+                root = wait_password_confirm(dump())
         if confirm_unobscured(root):
             print("密码确认：已使用完成兜底" if used_done else "密码确认：直接点确定，未点完成", flush=True)
             x, y = center_of(find_node(root, "确定", exact=True))
@@ -305,14 +326,14 @@ def enter_password(password, confirm_wait=0.15):
             close_password_panel()
             raise fast_buy.Stop("确定按钮仍被键盘遮挡，已关闭密码框，未提交。")
         if attempt == 0 and field_xy is not None:
-            print("确定按钮仍不可用：清空输入后重输一次，尚未提交。", flush=True)
+            print("等待状态刷新后确定仍不可用：清空输入后重输一次，尚未提交。", flush=True)
             send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
             time.sleep(0.10)
             root, keys = wait_keypad_stable()
             continue
         break
     close_password_panel()
-    raise fast_buy.Stop("密码未满 6 位，已关闭密码框，未提交。")
+    raise fast_buy.Stop("确定按钮仍不可用，已关闭密码框，未提交。")
 
 
 def protected_login_page():
