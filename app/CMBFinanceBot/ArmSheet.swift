@@ -48,6 +48,7 @@ struct ArmSheet: View {
     @State private var confirmAmount = ""
     @State private var step: String?
     @State private var working = false
+    @State private var prepChoice = 7
 
     init(drill: Bool = false, mode: ArmMode = .firstLaunch) {
         self.drillOnly = drill
@@ -89,6 +90,8 @@ struct ArmSheet: View {
                 settings = dictValue(result["settings"]).reduce(into: [:]) { values, entry in
                     if let number = entry.value as? NSNumber { values[entry.key] = number.intValue }
                 }
+                let stored = settings["cold_start_minutes"] ?? 7
+                prepChoice = [2, 5, 7].contains(stored) ? stored : 7
                 if mode == .redemption {
                     date = quotaTimes.map { nextQuotaDate($0, after: Date().addingTimeInterval(Double(prep + 2) * 60)) }.min() ?? date
                     let formatter = DateFormatter(); formatter.dateFormat = "HH:mm"
@@ -135,6 +138,20 @@ struct ArmSheet: View {
             } else {
                 DatePicker("开售时间", selection: $date, displayedComponents: [.date, .hourAndMinute])
                     .disabled(now)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("冷启动提前量").font(.caption).foregroundStyle(AppPalette.muted)
+                    Spacer()
+                    Text("\(prepChoice) 分钟").font(.system(size: 11, weight: .semibold))
+                }
+                Picker("冷启动提前量", selection: $prepChoice) {
+                    ForEach([2, 5, 7], id: \.self) { Text("\($0) 分钟").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("测试可用 2 分钟；正式布防建议 7 分钟。")
+                    .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text("当前配置").font(.caption).foregroundStyle(AppPalette.muted)
@@ -200,7 +217,7 @@ struct ArmSheet: View {
         }
     }
 
-    private var prep: Int { settings["cold_start_minutes"] ?? 7 }
+    private var prep: Int { prepChoice }
     private var window: Int { settings["irregular_window_minutes"] ?? 5 }
     private var configuration: String {
         let common = "提前 \(prep) 分钟冷启动，登录后进入购买页等待。"
@@ -257,7 +274,8 @@ struct ArmSheet: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         var args = ["arm", "--code", code.trimmingCharacters(in: .whitespaces),
-                    "--amount", amount, "--settings-revision", settingsRevision]
+                    "--amount", amount, "--settings-revision", settingsRevision,
+                    "--prep-minutes", String(prepChoice)]
         args += now ? ["--now"] : ["--at", formatter.string(from: date)]
         if mode == .redemption {
             args += ["--mode", "redemption"]

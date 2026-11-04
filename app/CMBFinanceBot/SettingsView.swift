@@ -116,7 +116,6 @@ private struct PurchaseRetrySettingsCard: View {
     @State private var loaded = false
     @State private var saved = false
 
-    private let coldStart = ("cold_start_minutes", "冷启动提前量（分钟）", 7)
     private let first = [("first_offset_ms", "首次查询延后（毫秒）", 200),
                          ("first_max_retries", "首次之外最多重试（次）", 5)]
     private let irregular = [("irregular_advance_ms", "首次查询提前（毫秒）", 200),
@@ -125,8 +124,7 @@ private struct PurchaseRetrySettingsCard: View {
                              ("irregular_retry_max_ms", "随机重试间隔上限（毫秒）", 250)]
     private let direct = [("reopen_deadline", "直接购买总时限（秒）", 60),
                           ("drill_form_deadline", "单笔购买演练总时限（秒）", 10)]
-    private let coldStartChoices = [2, 5, 7]
-    private var all: [(String, String, Int)] { [coldStart] + first + irregular + direct }
+    private var all: [(String, String, Int)] { first + irregular + direct }
     private var valid: Bool {
         let ranges: [String: ClosedRange<Int>] = [
             "first_offset_ms": 0...10000,
@@ -134,9 +132,7 @@ private struct PurchaseRetrySettingsCard: View {
             "irregular_window_minutes": 1...60, "irregular_retry_min_ms": 1...60000,
             "irregular_retry_max_ms": 1...60000, "reopen_deadline": 1...300,
             "drill_form_deadline": 1...300]
-        guard let prep = Int(values["cold_start_minutes"] ?? ""),
-              coldStartChoices.contains(prep) else { return false }
-        for (key, _, _) in all where key != "cold_start_minutes" {
+        for (key, _, _) in all {
             guard let value = Int(values[key] ?? ""), ranges[key]?.contains(value) == true else { return false }
         }
         return Int(values["irregular_retry_min_ms"] ?? "")! <= Int(values["irregular_retry_max_ms"] ?? "")!
@@ -144,7 +140,6 @@ private struct PurchaseRetrySettingsCard: View {
 
     var body: some View {
         Card("值守配置", subtitle: "新布防使用当前配置；已布防任务保持原值") {
-            coldStartPicker
             fields("首发模式", first)
             Text("重试次数不含首次查询；无额度时立即串行重试。")
                 .font(.caption).foregroundStyle(AppPalette.muted)
@@ -179,28 +174,6 @@ private struct PurchaseRetrySettingsCard: View {
                 }
                 loaded = true
             } catch { m.message = error.localizedDescription }
-        }
-    }
-
-    private var coldStartPicker: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text("冷启动提前量").font(.caption).foregroundStyle(AppPalette.muted)
-                Spacer()
-                Text("\(values["cold_start_minutes"] ?? "7") 分钟")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            Picker("冷启动提前量", selection: Binding(
-                get: { values["cold_start_minutes"] ?? "7" },
-                set: { values["cold_start_minutes"] = $0 })) {
-                ForEach(coldStartChoices, id: \.self) { minutes in
-                    Text("\(minutes) 分钟").tag(String(minutes))
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            Text("测试用 2 分钟；正式布防建议 5–7 分钟。")
-                .font(.caption).foregroundStyle(AppPalette.muted)
         }
     }
 
