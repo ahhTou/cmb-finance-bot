@@ -9,7 +9,6 @@ struct DrillView: View {
     @State private var allOrders = false
     @State private var showArm = false
     @State private var confirmCancel = false
-    @State private var error: String?
     @State private var showOutput = false
     @State private var realBuy = false
     @State private var confirmBuy = false
@@ -61,9 +60,6 @@ struct DrillView: View {
                     Button(realBuy ? "直接购买…" : "单笔购买演练") { runBuy() }
                         .disabled(m.busy || m.active || !validCode(code.trimmingCharacters(in: .whitespaces)) || !validAmount(amount))
                     Button("命令输出") { showOutput = true }
-                }
-                if let error {
-                    Text(error).font(.system(size: 11)).foregroundStyle(AppPalette.accent)
                 }
             }
         }
@@ -247,10 +243,10 @@ struct DrillView: View {
     private func runBuy() {
         let trimmed = code.trimmingCharacters(in: .whitespaces)
         guard validCode(trimmed), validAmount(amount) else {
-            error = "产品代码或金额格式不正确。"
+            m.message = "产品代码或金额格式不正确。"
             return
         }
-        error = nil
+        m.message = nil
         if realBuy {
             buyCode = trimmed
             buyAmount = amount
@@ -267,7 +263,6 @@ struct DrillView: View {
                                      real ? "--confirm-real-payment" : "--dry-run"],
                                     label: real ? "真实单笔购买" : "单笔购买演练")
             if ok { showOutput = true }
-            else { error = m.message }
         }
     }
 

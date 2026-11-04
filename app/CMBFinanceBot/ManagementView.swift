@@ -16,17 +16,6 @@ struct ManagementView: View {
             sidebar
             VStack(alignment: .leading, spacing: 18) {
                 header
-                if let message = m.message {
-                    HStack(alignment: .top) {
-                        Image(systemName: "exclamationmark.circle").foregroundStyle(AppPalette.accent)
-                        Text(message).font(.system(size: 12)).textSelection(.enabled)
-                        Spacer()
-                        Button("关闭") { m.message = nil }
-                    }
-                    .padding(14)
-                    .background(AppPalette.card, in: RoundedRectangle(cornerRadius: 10))
-                    .padding(.horizontal, 26)
-                }
                 ZStack {
                     TasksView(tab: $tab)
                         .opacity(tab == 0 ? 1 : 0).allowsHitTesting(tab == 0).accessibilityHidden(tab != 0)
@@ -49,6 +38,7 @@ struct ManagementView: View {
         .background(AppPalette.background)
         .foregroundStyle(Color(white: 0.94)).tint(AppPalette.accent)
         .buttonStyle(CardButtonStyle()).toggleStyle(.switch).preferredColorScheme(.dark)
+        .errorToast(topInset: 82)
         .task {
             if m.root.isEmpty { tab = 4 }
             await m.refreshCurrent(tab)

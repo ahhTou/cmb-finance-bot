@@ -38,6 +38,53 @@ struct Card<Content: View>: View {
     }
 }
 
+private struct ErrorToast: ViewModifier {
+    @EnvironmentObject var m: Model
+    let topInset: CGFloat
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .topTrailing) {
+            if let message = m.message {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(AppPalette.accent)
+                        Text("操作提示").font(.system(size: 12, weight: .semibold))
+                        Spacer(minLength: 8)
+                        Button { copyText(message) } label: { Image(systemName: "doc.on.doc") }
+                            .help("复制完整提示").accessibilityLabel("复制完整提示")
+                        Button { m.message = nil } label: { Image(systemName: "xmark") }
+                            .help("关闭提示").accessibilityLabel("关闭提示")
+                    }
+                    .buttonStyle(.plain)
+                    ViewThatFits(in: .vertical) {
+                        messageText(message)
+                        ScrollView { messageText(message) }.frame(height: 140)
+                    }
+                    .frame(maxHeight: 140, alignment: .topLeading)
+                }
+                .padding(16)
+                .frame(maxWidth: 400, alignment: .leading)
+                .background(AppPalette.button, in: RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.3), radius: 12, y: 5)
+                .padding(.horizontal, 20).padding(.top, topInset)
+            }
+        }
+    }
+
+    private func messageText(_ message: String) -> some View {
+        Text(message).font(.system(size: 12)).foregroundStyle(Color(white: 0.94))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension View {
+    func errorToast(topInset: CGFloat = 20) -> some View {
+        modifier(ErrorToast(topInset: topInset))
+    }
+}
+
 struct DashboardCard<Content: View, Footer: View>: View {
     let title: String
     let icon: String
@@ -51,20 +98,22 @@ struct DashboardCard<Content: View, Footer: View>: View {
         self.footer = footer()
     }
     var body: some View {
-        GeometryReader { _ in
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 8) {
-                    Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(AppPalette.muted)
-                    Text(title).font(.system(size: 13, weight: .semibold))
-                    Spacer(minLength: 0)
-                }
-                content
-                Spacer(minLength: 6)
-                footer
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(AppPalette.muted)
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    content
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            footer.fixedSize(horizontal: false, vertical: true)
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AppPalette.card, in: RoundedRectangle(cornerRadius: 14))
     }
 }

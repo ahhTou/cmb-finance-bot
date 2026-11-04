@@ -75,15 +75,13 @@ struct ArmSheet: View {
                 Button("关闭") { dismiss() }.disabled(m.busy || working)
             }
             if confirm { confirmation } else { form }
-            if let message = m.message {
-                Text(message).font(.system(size: 11)).foregroundStyle(AppPalette.accent)
-            }
         }
         .padding(28)
         .frame(width: 520)
         .background(AppPalette.background)
         .buttonStyle(CardButtonStyle())
         .preferredColorScheme(.dark)
+        .errorToast(topInset: 64)
         .task(id: m.root) {
             settingsLoaded = false
             do {

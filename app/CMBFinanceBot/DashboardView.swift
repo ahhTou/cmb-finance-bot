@@ -12,23 +12,25 @@ struct DashboardView: View {
     var body: some View {
         GeometryReader { geo in
             let spacing: CGFloat = 16
-            let row = max(120, (geo.size.height - spacing * 2) / 3)
-            VStack(spacing: spacing) {
-                HStack(spacing: 16) {
-                    watchCard.frame(height: row)
-                    macCard.frame(height: row)
+            let row = max(180, (geo.size.height - spacing * 2) / 3)
+            ScrollView {
+                VStack(spacing: spacing) {
+                    HStack(spacing: 16) {
+                        watchCard.frame(height: row)
+                        macCard.frame(height: row)
+                    }
+                    HStack(spacing: 16) {
+                        emulatorCard.frame(height: row)
+                        screenshotCard.frame(height: row)
+                    }
+                    HStack(spacing: 16) {
+                        configCard.frame(height: row)
+                        logCard.frame(height: row)
+                    }
                 }
-                HStack(spacing: 16) {
-                    emulatorCard.frame(height: row)
-                    screenshotCard.frame(height: row)
-                }
-                HStack(spacing: 16) {
-                    configCard.frame(height: row)
-                    logCard.frame(height: row)
-                }
+                .padding(.horizontal, 26)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(.horizontal, 26)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .sheet(isPresented: $showSleep) { sleepSheet }
         .sheet(isPresented: $showLog) { logSheet }

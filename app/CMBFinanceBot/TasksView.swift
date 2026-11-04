@@ -14,19 +14,21 @@ struct TasksView: View {
     var body: some View {
         GeometryReader { geo in
             let spacing: CGFloat = 14
-            let height = max(150, (geo.size.height - spacing * 2) / 3)
-            VStack(spacing: spacing) {
-                firstLaunch.frame(height: height)
-                placeholder(icon: "arrow.triangle.2.circlepath",
-                            title: "捡漏模式",
-                            text: "白天轮询多只理财，有人撤单、额度重新放出时自动买入。",
-                            features: ["反复查看多只理财", "按可购额度比例买入", "白天运行，可设终止时间"],
-                            tint: Color(red: 0.35, green: 0.62, blue: 0.95))
-                    .frame(height: height)
-                redemption.frame(height: height)
+            let height = max(180, (geo.size.height - spacing * 2) / 3)
+            ScrollView {
+                VStack(spacing: spacing) {
+                    firstLaunch.frame(height: height)
+                    placeholder(icon: "arrow.triangle.2.circlepath",
+                                title: "捡漏模式",
+                                text: "白天轮询多只理财，有人撤单、额度重新放出时自动买入。",
+                                features: ["反复查看多只理财", "按可购额度比例买入", "白天运行，可设终止时间"],
+                                tint: Color(red: 0.35, green: 0.62, blue: 0.95))
+                        .frame(height: height)
+                    redemption.frame(height: height)
+                }
+                .padding(.horizontal, 26)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(.horizontal, 26)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .sheet(isPresented: $showArm) { ArmSheet(mode: armMode).environmentObject(m) }
         .alert("取消当前布防？", isPresented: $confirmDisarm) {
