@@ -225,7 +225,8 @@ def raw_digit_buttons(root):
 
 KEYPAD_STABLE_SECONDS = 0.20
 KEYPAD_STABLE_SAMPLES = 3
-PASSWORD_DIGIT_GAP = 0.05
+PASSWORD_SAME_DIGIT_GAP = 0.05      # repeated coordinate: merged below this
+PASSWORD_DIFFERENT_DIGIT_GAP = 0.01  # distinct coordinates need no long gap
 
 
 def keypad_ready(root):
@@ -287,15 +288,17 @@ def password_taps(password, keys, confirm_wait):
 
     Repeated taps on the same coordinate are merged by the app: six
     back-to-back taps on one digit landed five digits in 11/20 trials, while
-    the same taps with PASSWORD_DIGIT_GAP apart landed six every time. Six
-    different digits did not drop either way. Keeping the gap also protects
-    any repeated digits in the real password.
+    the same taps with PASSWORD_SAME_DIGIT_GAP apart landed six every time.
+    Different digits land reliably without the longer gap, so only a repeated
+    digit gets the safe spacing.
     """
     commands = []
     for index, digit in enumerate(password):
         commands.append(f"input tap {keys[digit][0]} {keys[digit][1]}")
         if index < len(password) - 1:
-            commands.append(f"sleep {PASSWORD_DIGIT_GAP}")
+            gap = (PASSWORD_SAME_DIGIT_GAP if password[index + 1] == digit
+                   else PASSWORD_DIFFERENT_DIGIT_GAP)
+            commands.append(f"sleep {gap}")
     commands.append(f"sleep {confirm_wait}")
     return commands
 
@@ -584,9 +587,10 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
               "未输入密码、未提交。", flush=True)
         return
 
-    # Six paced digits (PASSWORD_DIGIT_GAP apart), then a short gap before
-    # 确定. Bounds come from the verified native hierarchy; enter_password()
-    # also verifies that all six digits landed before tapping 确定.
+    # Six paced digits (longer gap only between repeated digits), then a short
+    # gap before 确定. Bounds come from the verified native hierarchy;
+    # enter_password() also verifies that all six digits landed before tapping
+    # 确定.
     enter_password(password, confirm_wait=confirm_wait)
     submitted = time.monotonic()
     note("submit", submitted)

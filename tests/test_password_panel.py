@@ -161,3 +161,17 @@ class PasswordPanelTest(unittest.TestCase):
         for i in range(0,10,2):
             self.assertTrue(commands[i].startswith('input tap'))
             self.assertEqual(commands[i+1],'sleep 0.05')
+
+    def test_distinct_digits_use_the_short_gap(self):
+        keys=fu.raw_digit_buttons(panel())
+        commands=fu.password_taps('123456',keys,.15)
+        self.assertEqual(commands.count('sleep 0.05'),0)
+        self.assertEqual(commands.count('sleep 0.01'),5)
+        self.assertEqual(commands[-1],'sleep 0.15')
+
+    def test_only_repeated_digit_pairs_get_the_long_gap(self):
+        keys=fu.raw_digit_buttons(panel())
+        commands=fu.password_taps('112233',keys,.15)
+        # 1-1, 2-2 and 3-3 repeat; 1-2 and 2-3 change.
+        self.assertEqual(commands.count('sleep 0.05'),3)
+        self.assertEqual(commands.count('sleep 0.01'),2)
