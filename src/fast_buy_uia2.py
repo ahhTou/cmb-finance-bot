@@ -243,45 +243,74 @@ def wait_keypad_stable(timeout=1.2):
     return root, digit_keys(root)
 
 
+def confirm_unobscured(root):
+    """Confirm must be enabled, visible, and outside the native keypad area."""
+    node = find_node(root, "确定", exact=True)
+    if node is None or node.get("enabled") != "true" or node.get("visible-to-user") == "false":
+        return False
+    try:
+        x, y = center_of(node)
+    except (TypeError, ValueError):
+        return False
+    keypad = []
+    for item in root.iter("node"):
+        if item.get("class") != "android.widget.Button":
+            continue
+        text = (item.get("text") or "").strip()
+        if not (re.fullmatch(r"[0-9]", text) or text == "完成"):
+            continue
+        match = re.fullmatch(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", item.get("bounds") or "")
+        if match:
+            keypad.append(tuple(map(int, match.groups())))
+    if keypad:
+        left = min(r[0] for r in keypad)
+        top = min(r[1] for r in keypad)
+        right = max(r[2] for r in keypad)
+        bottom = max(r[3] for r in keypad)
+        if left <= x <= right and top <= y <= bottom:
+            return False
+    return True
+
+
 def enter_password(password, confirm_wait=0.15):
-    """Type the six digits, verify, and tap 确定 exactly once.
+    """Type once on a stable keypad; prefer 确定 without closing the keypad.
 
-    The panel is detected while its slide-in animation may still be running;
-    taps that arrive before the touch layer is ready are dropped (observed:
-    5 of 6 digits registered). Rapid typing itself is fine once the panel is
-    settled, so wait for stable keypad bounds before each typing attempt.
-
-    After typing, 确定 must be enabled (it only is with six digits). If not,
-    tapping the password field clears the partial input and reopens the
-    keypad; wait for stability again, retype once. Never tap 确定 disabled.
+    完成 is only a fallback when 确定 is disabled or covered by the keypad.
+    Incomplete input may be cleared and retyped once; submission is never retried.
     """
     root, keys = wait_keypad_stable()
-    done_xy = center_of(find_node(root, "完成", exact=True))
-    field_xy = center_of(find_node(root, "点击谈出密码键盘"))
-
-    def type_digits(keys, done_xy):
+    field = find_node(root, "点击谈出密码键盘")
+    field_xy = center_of(field) if field is not None else None
+    for attempt in range(2):
         commands = [f"input tap {keys[d][0]} {keys[d][1]}" for d in password]
-        commands.extend([f"sleep {confirm_wait}",
-                         f"input tap {done_xy[0]} {done_xy[1]}"])
+        commands.append(f"sleep {confirm_wait}")
         send_commands(commands)
-        time.sleep(0.15)
-
-    type_digits(keys, done_xy)
-    root = dump()
-    if not confirm_enabled(root):
-        # Reopen (and clear) the field, then retype on a settled panel.
-        send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
-        time.sleep(0.10)
-        root, keys = wait_keypad_stable()
-        done_xy = center_of(find_node(root, "完成", exact=True))
-        type_digits(keys, done_xy)
         root = dump()
-        if not confirm_enabled(root):
+        used_done = False
+        if not confirm_unobscured(root):
+            done = find_node(root, "完成", exact=True)
+            if done is not None:
+                x, y = center_of(done)
+                send_commands([f"input tap {x} {y}"])
+                used_done = True
+                time.sleep(0.15)
+                root = dump()
+        if confirm_unobscured(root):
+            print("密码确认：已使用完成兜底" if used_done else "密码确认：直接点确定，未点完成", flush=True)
+            x, y = center_of(find_node(root, "确定", exact=True))
+            send_commands([f"input tap {x} {y}"])
+            return
+        if confirm_enabled(root):
             close_password_panel()
-            raise fast_buy.Stop("密码未满 6 位，已关闭密码框，未提交。")
-
-    submit_xy = center_of(find_node(root, "确定", exact=True))
-    send_commands([f"input tap {submit_xy[0]} {submit_xy[1]}"])
+            raise fast_buy.Stop("确定按钮仍被键盘遮挡，已关闭密码框，未提交。")
+        if attempt == 0 and field_xy is not None:
+            send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
+            time.sleep(0.10)
+            root, keys = wait_keypad_stable()
+            continue
+        break
+    close_password_panel()
+    raise fast_buy.Stop("密码未满 6 位，已关闭密码框，未提交。")
 
 
 def protected_login_page():
