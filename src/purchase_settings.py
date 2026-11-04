@@ -28,7 +28,7 @@ def validate(values):
         if type(value) is not int or not lower <= value <= upper:
             raise RuntimeError(f'{key} 必须为 {lower}–{upper} 的整数。')
     if result['irregular_retry_min_ms'] > result['irregular_retry_max_ms']:
-        raise RuntimeError('随机重试间隔 R1 不得大于 R2。')
+        raise RuntimeError('随机重试间隔下限不得大于上限。')
     return result
 
 

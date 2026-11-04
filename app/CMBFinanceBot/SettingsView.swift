@@ -116,13 +116,13 @@ private struct PurchaseRetrySettingsCard: View {
     @State private var loaded = false
     @State private var saved = false
 
-    private let common = [("cold_start_minutes", "冷启动提前 E（分钟）", 7)]
-    private let first = [("first_offset_ms", "首次查询延后 N（ms）", 200),
-                         ("first_max_retries", "首次之外最多重试 M（次）", 5)]
-    private let irregular = [("irregular_advance_ms", "首次查询提前 N（ms）", 200),
-                             ("irregular_window_minutes", "最长查询窗口 M（分钟）", 5),
-                             ("irregular_retry_min_ms", "随机重试间隔 R1（ms）", 50),
-                             ("irregular_retry_max_ms", "随机重试间隔 R2（ms）", 250)]
+    private let common = [("cold_start_minutes", "冷启动提前量（分钟）", 7)]
+    private let first = [("first_offset_ms", "首次查询延后（毫秒）", 200),
+                         ("first_max_retries", "首次之外最多重试（次）", 5)]
+    private let irregular = [("irregular_advance_ms", "首次查询提前（毫秒）", 200),
+                             ("irregular_window_minutes", "最长查询窗口（分钟）", 5),
+                             ("irregular_retry_min_ms", "随机重试间隔下限（毫秒）", 50),
+                             ("irregular_retry_max_ms", "随机重试间隔上限（毫秒）", 250)]
     private let direct = [("reopen_deadline", "直接购买总时限（秒）", 60),
                           ("drill_form_deadline", "单笔购买演练总时限（秒）", 10)]
     private var all: [(String, String, Int)] { common + first + irregular + direct }
@@ -143,10 +143,10 @@ private struct PurchaseRetrySettingsCard: View {
         Card("值守配置", subtitle: "新布防使用当前配置；已布防任务保持原值") {
             fields("通用", common)
             fields("首发模式", first)
-            Text("M 为首次之外的重试次数，默认最多查询 6 次；无额度时立即串行重试。")
+            Text("重试次数不含首次查询；无额度时立即串行重试。")
                 .font(.caption).foregroundStyle(AppPalette.muted)
             fields("不定时抢购模式", irregular)
-            Text("首次查询在设定时间之前发出；无额度后随机等待 R1–R2 ms，窗口从首次计划查询时间计算。")
+            Text("首次查询在设定时间之前发出；无额度后按配置的间隔上下限随机等待，窗口从首次计划查询时间计算。")
                 .font(.caption).foregroundStyle(AppPalette.muted)
             fields("单笔购买", direct)
             HStack {
