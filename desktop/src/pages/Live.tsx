@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { AnimatePresence, motion } from 'motion/react'
+import { useNavigate } from '@tanstack/react-router'
+import { AnimatePresence, motion, useMotionValue, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
@@ -8,40 +9,29 @@ import { Confirm } from '../components/ui/dialog'
 import { clockTime, cn, parseLocal, phaseName, phaseTone, shortTime, toneBg } from '../lib/utils'
 import { useUI } from '../store'
 
-/**
- * Focus view shown in the content area while a watch task is active. The live log
- * drifts behind a floating panel; the newest line glows; the countdown ticks with
- * each digit sliding in.
- */
-export function LivePage() {
+/** Countdown to the sale (or to the end of the redemption window), ticking four times a second. */
+export function useCountdown() {
   const w = useWatch()
-  const busy = useUI((s) => s.busy)
-  const lastRefresh = useUI((s) => s.lastRefresh)
-  const action = useAction()
-  const [confirmDisarm, setConfirmDisarm] = useState(false)
-  const [now, setNow] = useState(() => new Date())
-  const { data: log } = useQuery({ ...q.log(160), refetchInterval: 1500 })
-
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 250)
+    const timer = setInterval(() => setNow(Date.now()), 250)
     return () => clearInterval(timer)
   }, [])
-
   const task = w.task ?? {}
   const redemption = task.mode === 'redemption'
   const target =
     redemption && (w.phase === 'waiting' || w.phase === 'firing')
       ? parseLocal(task.end_at)
       : (parseLocal(task.fire_at) ?? parseLocal(task.at))
-  const countdown = (() => {
-    if (w.phase === 'firing') return '00:00'
-    if (!target) return '--:--'
-    const total = Math.max(0, Math.floor((+target - +now) / 1000))
+  let text = '--:--'
+  if (w.phase === 'firing') text = '00:00'
+  else if (target) {
+    const total = Math.max(0, Math.floor((+target - now) / 1000))
     const h = Math.floor(total / 3600)
     const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0')
     const s = String(total % 60).padStart(2, '0')
-    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`
-  })()
+    text = h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`
+  }
   const hint =
     w.phase === 'firing'
       ? '正在提交，请勿操作'
@@ -50,50 +40,77 @@ export function LivePage() {
           ? '距窗口结束'
           : '距开始查询'
         : '距开售'
+  return { w, task, redemption, text, hint }
+}
+
+/** Near-opaque panel, so the animated background never makes the text hard to read. */
+const glass = (boxShadow: string) => ({ boxShadow, background: 'rgb(25 25 25 / 0.92)' })
+
+function PhaseDot({ phase, size = 7 }: { phase: string; size?: number }) {
+  return (
+    <span className="relative flex shrink-0" style={{ width: size, height: size }}>
+      <span
+        className={cn('absolute inset-0 animate-ping rounded-full opacity-60', toneBg[phaseTone(phase)])}
+      />
+      <span className={cn('relative size-full rounded-full', toneBg[phaseTone(phase)])} />
+    </span>
+  )
+}
+
+/**
+ * Focus view on the Tasks page while a watch task is active: the task card floats
+ * in the middle over the live log, scrolling project code and glowing waves.
+ */
+export function LivePage() {
+  const { w, task, redemption, text, hint } = useCountdown()
+  const busy = useUI((s) => s.busy)
+  const lastRefresh = useUI((s) => s.lastRefresh)
+  const action = useAction()
+  const [confirmDisarm, setConfirmDisarm] = useState(false)
+  const { data: log } = useQuery({ ...q.log(60), refetchInterval: 1500 })
 
   return (
     <motion.div
       data-testid="live"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
+      transition={{ duration: 0.3 }}
       className="relative flex h-full flex-col overflow-hidden bg-bg"
     >
+      <CodeRain />
+      <Waves phase={w.phase} />
       <LogStream lines={log?.lines ?? []} first={(log?.total ?? 0) - (log?.lines.length ?? 0)} />
-      <div className="relative z-10 flex flex-1 flex-col px-[30px] py-6">
-        <div className="flex items-center gap-3">
-          <span className="relative flex size-[7px]">
-            <span
-              className={cn(
-                'absolute inset-0 animate-ping rounded-full opacity-60',
-                toneBg[phaseTone(w.phase)],
-              )}
-            />
-            <span className={cn('relative size-[7px] rounded-full', toneBg[phaseTone(w.phase)])} />
+      {/* The whole top band drags the window; the bar under it only shows text. */}
+      <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-[72px]" />
+      <div className="pointer-events-none relative z-10 flex items-center gap-3 px-[30px] pt-6">
+        <PhaseDot phase={w.phase} />
+        <span className="font-semibold text-[13px]">{phaseName(w.phase)}</span>
+        <span className="rounded-full bg-[#383838]/80 px-2 py-[3px] font-medium text-[10px] text-muted">
+          {redemption ? '不定时抢购' : '首发模式'}
+        </span>
+        {task.dry_run && (
+          <span className="rounded-full bg-[#383838]/80 px-2 py-[3px] font-medium text-[10px] text-muted">
+            演练
           </span>
-          <span className="font-semibold text-[13px]">{phaseName(w.phase)}</span>
-          <span className="rounded-full bg-[#383838] px-2 py-[3px] font-medium text-[10px] text-muted">
-            {redemption ? '不定时抢购' : '首发模式'}
-          </span>
-          <span className="flex-1" />
-          <span className="font-mono text-[10px] text-muted">
-            上次刷新 {lastRefresh ? clockTime(lastRefresh) : '尚未刷新'}
-          </span>
-        </div>
-        <div className="flex-1" />
+        )}
+        <span className="flex-1" />
+        <span className="font-mono text-[10px] text-muted">
+          上次刷新 {lastRefresh ? clockTime(lastRefresh) : '尚未刷新'}
+        </span>
+      </div>
+      <div className="relative z-10 flex flex-1 items-center justify-center px-[30px] pb-6">
         <motion.section
-          initial={{ opacity: 0, y: 40, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ type: 'spring', stiffness: 220, damping: 24, delay: 0.05 }}
-          className="mb-1.5 flex w-full max-w-[680px] flex-col gap-[18px] rounded-[20px] bg-[#1d1d1d]/90 p-[26px] ring-[0.6px] ring-[#575757]/65 backdrop-blur-md"
-          style={{ boxShadow: '0 16px 60px rgb(0 0 0 / 0.55), 0 0 92px rgb(224 66 82 / 0.12)' }}
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: [0.2, 0.8, 0.2, 1] }}
+          className="flex w-full max-w-[680px] flex-col gap-[18px] rounded-[20px] p-[26px] ring-[0.6px] ring-white/15"
+          style={glass('0 16px 60px rgb(0 0 0 / 0.55), 0 0 92px rgb(224 66 82 / 0.14)')}
         >
           <div className="flex items-baseline gap-3.5">
-            <Countdown text={countdown} />
+            <Countdown text={text} />
             <span className="text-muted text-xs">{hint}</span>
           </div>
-          <div className="h-[0.6px] bg-[#474747]" />
+          <div className="h-[0.6px] bg-white/15" />
           <div className="flex items-end gap-[34px]">
             <Stat title="产品" value={task.code ?? '—'} />
             <Stat title="金额" value={`${task.amount ?? '—'} 元`} />
@@ -124,6 +141,106 @@ export function LivePage() {
         onConfirm={() => action('终止布防', () => api('POST', '/api/disarm'))}
       />
     </motion.div>
+  )
+}
+
+const BUBBLE_KEY = 'watch-bubble-offset'
+
+function savedOffset() {
+  try {
+    const value = JSON.parse(localStorage.getItem(BUBBLE_KEY) ?? 'null')
+    if (typeof value?.x === 'number' && typeof value?.y === 'number') return value as { x: number; y: number }
+  } catch {}
+  return { x: 0, y: 0 }
+}
+
+/**
+ * Draggable bubble with the running task, shown on other pages; a click goes back to
+ * the focus view. Dragging is plain pointer capture writing motion values directly,
+ * which behaves the same in WebKit and Chromium and never fights the countdown renders.
+ */
+export function WatchBubble() {
+  const navigate = useNavigate()
+  const { w, task, text, hint } = useCountdown()
+  const bounds = useRef<HTMLDivElement>(null)
+  const [saved] = useState(savedOffset)
+  const x = useMotionValue(saved.x)
+  const y = useMotionValue(saved.y)
+  const drag = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  // Keep the bubble inside the content area (also after the window shrinks).
+  const clamp = (el: HTMLElement, nx: number, ny: number) => {
+    const area = bounds.current?.getBoundingClientRect()
+    const box = el.getBoundingClientRect()
+    if (!area) return [nx, ny]
+    const left = box.left - x.get()
+    const top = box.top - y.get()
+    return [
+      Math.min(Math.max(nx, area.left - left), area.right - left - box.width),
+      Math.min(Math.max(ny, area.top - top), area.bottom - top - box.height),
+    ]
+  }
+
+  return (
+    <div ref={bounds} className="pointer-events-none absolute inset-3 z-30">
+      <motion.button
+        type="button"
+        data-testid="watch-bubble"
+        aria-label={`${phaseName(w.phase)} ${task.code ?? ''}，${hint} ${text}，回到值守页`}
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: dragging ? 1.04 : 1 }}
+        exit={{ opacity: 0, scale: 0.94 }}
+        transition={{ duration: 0.18 }}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId)
+          drag.current = { px: e.clientX, py: e.clientY, x: x.get(), y: y.get(), moved: false }
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current
+          if (!d) return
+          const dx = e.clientX - d.px
+          const dy = e.clientY - d.py
+          if (!d.moved && Math.hypot(dx, dy) < 4) return
+          if (!d.moved) setDragging(true)
+          d.moved = true
+          const [nx, ny] = clamp(e.currentTarget, d.x + dx, d.y + dy)
+          x.set(nx)
+          y.set(ny)
+        }}
+        onPointerUp={() => {
+          if (drag.current?.moved) {
+            try {
+              localStorage.setItem(BUBBLE_KEY, JSON.stringify({ x: x.get(), y: y.get() }))
+            } catch {}
+          }
+          setDragging(false)
+        }}
+        onPointerCancel={() => {
+          drag.current = null
+          setDragging(false)
+        }}
+        onClick={() => {
+          const moved = drag.current?.moved
+          drag.current = null
+          if (!moved) navigate({ to: '/tasks' })
+        }}
+        className={cn(
+          'pointer-events-auto absolute right-3 bottom-3 flex touch-none items-center gap-3 rounded-2xl py-2.5 pr-4 pl-3.5 text-left ring-[0.6px] ring-white/15',
+          dragging ? 'cursor-grabbing' : 'cursor-grab',
+        )}
+        style={{ x, y, ...glass('0 10px 32px rgb(0 0 0 / 0.5), 0 0 40px rgb(224 66 82 / 0.18)') }}
+      >
+        <PhaseDot phase={w.phase} size={8} />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[10px] text-muted">
+            {phaseName(w.phase)} · {task.code ?? '—'}
+          </span>
+          <span className="font-rounded font-semibold text-lg tabular-nums leading-none">{text}</span>
+        </span>
+        <span className="self-end text-[10px] text-muted">{hint}</span>
+      </motion.button>
+    </div>
   )
 }
 
@@ -169,47 +286,204 @@ function Stat({ title, value }: { title: string; value: string }) {
   )
 }
 
-/** Background log: newest line glows, new lines rise in, the whole stream drifts slowly. */
+/**
+ * Real watch.log, newest at the bottom. Lines are stacked from the bottom up
+ * (no scrolling), the newest glows, and new lines rise in.
+ */
 function LogStream({ lines, first }: { lines: string[]; first: number }) {
-  const tail = useRef<HTMLDivElement>(null)
-  const shown = lines.slice(-160)
-  // Absolute line numbers as keys, so only genuinely new lines animate in.
+  const shown = lines.slice(-36)
   const offset = first + lines.length - shown.length
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll whenever a new line arrives
-  useEffect(() => {
-    tail.current?.scrollIntoView({ block: 'end' })
-  }, [shown.at(-1)])
   return (
-    <motion.div
+    <div
       aria-hidden
-      animate={{ y: [0, -5, 0] }}
-      transition={{ duration: 18, repeat: Number.POSITIVE_INFINITY, ease: 'easeInOut' }}
-      className="pointer-events-none absolute inset-0 overflow-hidden opacity-60 [mask-image:linear-gradient(to_bottom,transparent,black_18%,black_72%,transparent)]"
+      className="pointer-events-none absolute top-[64px] right-[34%] bottom-[30%] left-[30px] flex flex-col justify-end overflow-hidden [mask-image:linear-gradient(to_bottom,transparent,black_35%)]"
     >
-      <div className="flex h-full flex-col gap-[3px] overflow-y-hidden px-[30px] pt-[66px] pb-[250px]">
-        <AnimatePresence initial={false}>
-          {shown.map((line, index) => {
-            const newest = index === shown.length - 1
-            return (
-              <motion.div
-                // biome-ignore lint/suspicious/noArrayIndexKey: offset + index is the absolute line number
-                key={offset + index}
-                layout="position"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35 }}
-                className={cn(
-                  'truncate font-mono text-[11px] transition-colors duration-700',
-                  newest ? 'text-[#d6d6d6] [filter:drop-shadow(0_0_5px_rgb(255_255_255/0.35))]' : 'text-[#808080]',
-                )}
-              >
-                {line}
-              </motion.div>
-            )
-          })}
-        </AnimatePresence>
-        <div ref={tail} className="h-px shrink-0" />
-      </div>
-    </motion.div>
+      <AnimatePresence initial={false}>
+        {shown.map((line, index) => {
+          const newest = index === shown.length - 1
+          return (
+            <motion.div
+              // biome-ignore lint/suspicious/noArrayIndexKey: offset + index is the absolute line number
+              key={offset + index}
+              layout="position"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.35 }}
+              className={cn(
+                'shrink-0 truncate py-[1.5px] font-mono text-[11px] transition-colors duration-700',
+                newest
+                  ? 'text-[#e6e6e6] [filter:drop-shadow(0_0_6px_rgb(255_255_255/0.4))]'
+                  : 'text-[#7a7a7a]',
+              )}
+            >
+              {line}
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
+    </div>
   )
+}
+
+// What the watcher is actually doing, as a faint backdrop.
+const CODE = `async function gate(queryBuy) {
+  const original = window.queryBuy
+  window.queryBuy = (...args) => pending.push(args)
+  await until(fireAt - advanceMs)
+  for (let i = 0; i <= maxRetries; i++) {
+    const quota = await original(...pending.shift())
+    if (quota.available) return submitOnce(quota)
+    await sleep(jitter(retryMin, retryMax))
+  }
+}
+def run(task):
+    task.phase = "preparing"
+    cold_start(prep_minutes)
+    login(pattern_from_keychain())
+    open_purchase_page(task.code)
+    wait_until(task.fire_at)
+    task.phase = "firing"   # written before submit
+    return submit_once(task.amount)
+const keys = await padReady({ stable: 238 })
+for (const digit of pin) await tap(keys[digit], gap(digit))
+confirm.click()  // 只提交一次
+adb shell settings put global stay_on_while_plugged_in 15
+uia2.dump_hierarchy() -> 0.11s
+cdp.evaluate("location.href").includes(code)
+assert parse_amount("￥5,000.00") == 5000
+heartbeat(interval=30, session="agent:watch")`.split('\n')
+
+function CodeColumn({
+  lines,
+  duration,
+  className,
+}: {
+  lines: string[]
+  duration: number
+  className: string
+}) {
+  const reduce = useReducedMotion()
+  return (
+    <div className={cn('absolute top-0 bottom-0 overflow-hidden', className)}>
+      <div
+        className="flex flex-col gap-[5px] font-mono text-[10px] text-white/[0.075] leading-[1.5]"
+        style={reduce ? undefined : { animation: `code-scroll ${duration}s linear infinite` }}
+      >
+        {[...lines, ...lines].map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static duplicated text
+          <span key={index} className="whitespace-pre">
+            {line || ' '}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function CodeRain() {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 [mask-image:linear-gradient(to_bottom,transparent,black_20%,black_70%,transparent)]"
+    >
+      <CodeColumn lines={CODE} duration={70} className="right-[4%] w-[30%]" />
+      <CodeColumn
+        lines={[...CODE.slice(9), ...CODE.slice(0, 9)]}
+        duration={110}
+        className="right-[36%] w-[30%] opacity-60"
+      />
+    </div>
+  )
+}
+
+const WAVES = [
+  { amp: 26, freq: 0.0062, speed: 0.55, y: 0.72, color: '224,66,82', alpha: 0.55, width: 1.6, blur: 14 },
+  { amp: 34, freq: 0.0041, speed: 0.38, y: 0.76, color: '255,128,150', alpha: 0.28, width: 1.2, blur: 10 },
+  { amp: 20, freq: 0.0085, speed: 0.7, y: 0.8, color: '184,115,242', alpha: 0.26, width: 1.1, blur: 10 },
+  { amp: 42, freq: 0.0029, speed: 0.25, y: 0.84, color: '255,255,255', alpha: 0.1, width: 1, blur: 0 },
+]
+
+/** Layered glowing sine waves on a canvas; faster as the task gets closer to submitting. */
+function Waves({ phase }: { phase: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const reduce = useReducedMotion()
+  const speed = useRef(1)
+  speed.current = phase === 'firing' ? 2.6 : phase === 'waiting' ? 1.35 : 1
+
+  useEffect(() => {
+    const el = canvas.current
+    const ctx = el?.getContext('2d')
+    if (!el || !ctx) return
+    let width = 0
+    let height = 0
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1
+      width = el.clientWidth
+      height = el.clientHeight
+      el.width = width * dpr
+      el.height = height * dpr
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+    resize()
+    const observer = new ResizeObserver(resize)
+    observer.observe(el)
+
+    let t = 0
+    let last = performance.now()
+    let frame = 0
+    const draw = (now: number) => {
+      t += ((now - last) / 1000) * speed.current
+      last = now
+      ctx.clearRect(0, 0, width, height)
+      ctx.globalCompositeOperation = 'lighter'
+      WAVES.forEach((wave, i) => {
+        const swell = 0.65 + 0.35 * Math.sin(t * 0.4 + i * 1.7)
+        const base = height * wave.y
+        ctx.beginPath()
+        for (let x = 0; x <= width + 4; x += 4) {
+          const y =
+            base +
+            Math.sin(x * wave.freq + t * wave.speed * 2 + i) * wave.amp * swell +
+            Math.sin(x * wave.freq * 2.3 - t * wave.speed * 1.4) * wave.amp * 0.28
+          if (x === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        }
+        ctx.strokeStyle = `rgba(${wave.color},${wave.alpha})`
+        ctx.lineWidth = wave.width
+        ctx.shadowColor = `rgba(${wave.color},${wave.alpha})`
+        ctx.shadowBlur = wave.blur
+        ctx.stroke()
+        if (i === 0) {
+          // A faint glow under the leading wave.
+          ctx.lineTo(width, height)
+          ctx.lineTo(0, height)
+          ctx.closePath()
+          const fill = ctx.createLinearGradient(0, base - wave.amp, 0, height)
+          fill.addColorStop(0, `rgba(${wave.color},0.10)`)
+          fill.addColorStop(1, `rgba(${wave.color},0)`)
+          ctx.shadowBlur = 0
+          ctx.fillStyle = fill
+          ctx.fill()
+        }
+      })
+      if (!reduce) frame = requestAnimationFrame(draw)
+    }
+    frame = requestAnimationFrame(draw)
+    const onVisibility = () => {
+      cancelAnimationFrame(frame)
+      if (!document.hidden && !reduce) {
+        last = performance.now()
+        frame = requestAnimationFrame(draw)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [reduce])
+
+  return <canvas ref={canvas} aria-hidden className="pointer-events-none absolute inset-0 size-full" />
 }

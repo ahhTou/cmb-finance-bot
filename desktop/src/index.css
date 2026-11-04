@@ -19,12 +19,16 @@
   --font-rounded: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang SC", sans-serif;
 
   --animate-overlay-in: overlay-in 160ms ease-out;
-  --animate-dialog-in: dialog-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-dialog-in: dialog-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
   @keyframes overlay-in {
     from { opacity: 0; }
   }
+  @keyframes code-scroll {
+    to { transform: translateY(-50%); }
+  }
+  /* Only opacity and a small rise: the centering offset lives in `translate`, so don't touch it here. */
   @keyframes dialog-in {
-    from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+    from { opacity: 0; transform: translateY(8px); }
   }
 }
 

@@ -17,6 +17,11 @@ export function scenario(): Scenario {
 const inMinutes = (minutes: number) => localISO(new Date(Date.now() + minutes * 60_000))
 
 export const LOG_LINES = [
+  ...Array.from(
+    { length: 40 },
+    (_, i) =>
+      `11-04 18:${String(10 + Math.floor(i / 4)).padStart(2, '0')}:${String((i * 13) % 60).padStart(2, '0')} 心跳：模拟器在线，购买页等待中（第 ${i + 1} 次）`,
+  ),
   '11-04 18:30:01 冷启动模拟器，等待开机完成',
   '11-04 18:30:24 招行 App 已启动，进入登录页',
   '11-04 18:30:31 九宫格图案输入：第 1/3 次',

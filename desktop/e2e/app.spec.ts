@@ -133,3 +133,31 @@ test('pages fit the minimum window without horizontal overflow', async ({ page }
     expect(overflow, path).toBeLessThanOrEqual(0)
   }
 })
+
+test('while armed, other pages stay reachable and show the watch bubble', async ({ page }) => {
+  await open(page, '/tasks', 'armed')
+  await expect(page.getByTestId('live')).toBeVisible()
+  await page.getByRole('link', { name: '状态' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: '状态' })).toBeVisible()
+  const bubble = page.getByTestId('watch-bubble')
+  await expect(bubble).toContainText('JX040229')
+  await bubble.click()
+  await expect(page.getByTestId('live')).toBeVisible()
+  await expect(bubble).toBeHidden()
+})
+
+test('dragging the bubble moves it and does not navigate', async ({ page }) => {
+  await open(page, '/history', 'armed')
+  const bubble = page.getByTestId('watch-bubble')
+  await expect(bubble).toBeVisible()
+  await page.waitForTimeout(300) // let the entrance settle before measuring
+  const before = await bubble.boundingBox()
+  if (!before) throw new Error('bubble not laid out')
+  await page.mouse.move(before.x + 20, before.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(before.x - 200, before.y - 150, { steps: 10 })
+  await page.mouse.up()
+  // Motion writes the transform on the next frame, so poll instead of reading once.
+  await expect.poll(async () => before.x - ((await bubble.boundingBox())?.x ?? before.x)).toBeGreaterThan(150)
+  await expect(page.getByRole('heading', { level: 1, name: '历史' })).toBeVisible()
+})

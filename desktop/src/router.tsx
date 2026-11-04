@@ -20,7 +20,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { DrillPage } from './pages/Drill'
 import { FavoritesPage } from './pages/Favorites'
 import { HistoryPage } from './pages/History'
-import { LivePage } from './pages/Live'
+import { LivePage, WatchBubble } from './pages/Live'
 import { SettingsPage } from './pages/Settings'
 import { TasksPage } from './pages/Tasks'
 import { useUI } from './store'
@@ -51,6 +51,8 @@ function Layout() {
   const { active } = useWatch()
   const path = useRouterState({ select: (s) => s.location.pathname })
   const page = PAGES.find((p) => p.path === path) ?? PAGES[0]
+  // While a task is active the Tasks page becomes the focus view; other pages stay reachable.
+  const live = active && page.path === '/tasks'
 
   useEffect(() => {
     try {
@@ -65,43 +67,26 @@ function Layout() {
 
   return (
     <div className="flex h-full">
-      <Sidebar current={page.path} />
+      <Sidebar current={page.path} active={active} />
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg">
-        <AnimatePresence mode="wait" initial={false}>
-          {active ? (
-            <LivePage key="live" />
-          ) : (
-            <motion.div
-              key="pages"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex min-h-0 flex-1 flex-col gap-[18px]"
-            >
-              <Header title={page.title} subtitle={page.subtitle} path={page.path} />
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={page.path}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.16, ease: 'easeOut' }}
-                  className="flex min-h-0 flex-1 flex-col pb-[26px]"
-                >
-                  {/* Not <Outlet/>: the page fading out must keep showing itself, not the new route. */}
-                  <page.component />
-                </motion.div>
-              </AnimatePresence>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {live ? (
+          <LivePage />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col gap-[18px]">
+            <Header title={page.title} subtitle={page.subtitle} path={page.path} />
+            <div className="flex min-h-0 flex-1 flex-col pb-[26px]">
+              <page.component />
+            </div>
+          </div>
+        )}
+        <AnimatePresence>{active && !live && <WatchBubble key="bubble" />}</AnimatePresence>
       </main>
-      <Toast top={active ? 20 : 82} />
+      <Toast top={live ? 20 : 82} />
     </div>
   )
 }
 
-function Sidebar({ current }: { current: string }) {
+function Sidebar({ current, active }: { current: string; active: boolean }) {
   return (
     <nav className="flex w-[196px] shrink-0 flex-col bg-sidebar px-4 pt-3 pb-4">
       <div data-tauri-drag-region className="h-8 shrink-0" />
@@ -120,19 +105,19 @@ function Sidebar({ current }: { current: string }) {
               <Link
                 to={path}
                 className={cn(
-                  'relative flex items-center gap-[11px] rounded-[9px] px-3 py-3 text-[13px] transition-colors',
+                  'relative flex items-center gap-[11px] rounded-[9px] px-3 py-3 text-[13px]',
                   selected ? 'font-semibold text-white' : 'text-muted hover:text-fg',
                 )}
               >
-                {selected && (
-                  <motion.span
-                    layoutId="sidebar-selection"
-                    className="absolute inset-0 rounded-[9px] bg-button"
-                    transition={{ type: 'spring', stiffness: 520, damping: 40 }}
-                  />
-                )}
+                {selected && <span className="absolute inset-0 rounded-[9px] bg-button" />}
                 <Icon className="relative size-[15px]" />
                 <span className="relative">{title}</span>
+                {active && path === '/tasks' && (
+                  <span className="relative ml-auto flex size-[7px]" title="值守中">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-accent opacity-60" />
+                    <span className="relative size-[7px] rounded-full bg-accent" />
+                  </span>
+                )}
               </Link>
             </li>
           )
