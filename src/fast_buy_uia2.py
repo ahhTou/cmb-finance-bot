@@ -46,6 +46,7 @@ FORM_WAIT = 20.0   # goBuy() → 理财购买 form
 STEP_WAIT = 10.0   # risk popup, password page
 REOPEN_AFTER = 5.0      # direct open: reload the buy page if no form by then
 REOPEN_GAP = 1.0        # never reload faster than this
+FORM_LOAD_TIMEOUT = 12.0  # a fresh document keeps loading past the reopen deadline
 REOPEN_DEADLINE = purchase_settings.DEFAULTS['reopen_deadline']  # default; run() reads saved preferences
 FORM_ERRORS = ("购买失败", "TOPI", "系统繁忙", "网络异常", "请稍后再试")
 
@@ -398,20 +399,24 @@ def protected_login_page():
 
 
 def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REOPEN_GAP,
-              tick=None):
+              load_timeout=FORM_LOAD_TIMEOUT, tick=None):
     """Wait for a new document and business controls, never an old error page.
 
-    A completed error can reopen after `gap`; an unconfirmed/loading page gets
-    `wait` seconds. Neither condition can extend the overall deadline.
+    A document that appeared before `deadline` but is still loading keeps
+    `load_timeout` seconds even after the deadline, so a slow network is not
+    reported as a missing form. The deadline still bounds retries while no new
+    document shows up, and a document that only appears after it never counts.
     """
     start = time.monotonic()
     end = start + deadline
     opens = 0
     last_reason = "尚未确认新页面加载完成"
-    while time.monotonic() < end:
+    while True:
         pages = purchase_page.snapshot()
         if pages is None:
             last_reason = "无法读取页面加载状态（CDP）"
+            if time.monotonic() >= end:
+                break
             time.sleep(0.08)
             continue
         baseline = {purchase_page.identity(p) for p in pages}
@@ -424,7 +429,18 @@ def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REO
         print(f"第 {opens} 次打开购买页（{time.monotonic() - start:.1f}s）", flush=True)
         opened = time.monotonic()
         last_reason = "新页面或业务内容未就绪"
-        while time.monotonic() < min(opened + wait, end):
+        loading_since = None
+        while True:
+            now = time.monotonic()
+            limit = (loading_since + load_timeout if loading_since is not None
+                     else opened + wait)
+            if now >= limit:
+                if loading_since is not None:
+                    last_reason = f"页面在 {load_timeout:.0f} 秒内未就绪"
+                print(f"本轮等待结束：{last_reason}", flush=True)
+                break
+            if now >= end and loading_since is None:
+                break
             try:
                 root = dump()
             except Exception:
@@ -434,20 +450,27 @@ def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REO
                 if ("我的头像" in text and "更多选项" in text
                         and protected_login_page()):
                     raise fast_buy.Stop("App 停在登录页，需要重新登录；本轮已停止，未提交。")
-                state = purchase_page.outcome(purchase_page.snapshot(), baseline, code, amount)
-                if time.monotonic() >= end:
-                    break
+                pages = purchase_page.snapshot()
+                seen = time.monotonic()
+                if loading_since is None and purchase_page.fresh(pages, baseline):
+                    # Only a document that appeared before the deadline may
+                    # keep loading past it; a late one is not this purchase.
+                    if seen <= end:
+                        loading_since = seen
+                state = purchase_page.outcome(pages, baseline, code, amount)
                 if state == 'form' and "可用余额" in text and "同意协议下一步" in text:
+                    if seen >= end and loading_since is None:
+                        break
                     print("本次新购买页已加载，购买表单已就绪", flush=True)
                     return root
                 if state in purchase_page.ERRORS and state in text:
                     last_reason = f"新页面已加载：{state}"
-                    if time.monotonic() - opened >= gap:
+                    if seen - opened >= gap:
                         print(f"购买页报错，重开：{state}", flush=True)
                         break
             time.sleep(0.08)
-        else:
-            print(f"本轮等待结束：{last_reason}", flush=True)
+        if time.monotonic() >= end:
+            break
     raise fast_buy.Stop(f"打开 {opens} 次，购买表单都没有出现；{last_reason}。")
 
 

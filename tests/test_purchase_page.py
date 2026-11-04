@@ -42,6 +42,13 @@ class DocumentEvidenceTest(unittest.TestCase):
     def test_error_takes_priority_over_form(self):
         self.assertEqual(pp.outcome([page(error='购买失败')], set(), 'TEST01', '3000'), '购买失败')
 
+    def test_fresh_lists_only_new_frontmost_documents(self):
+        baseline = {('target', 1)}
+        self.assertEqual([p['id'] for p in pp.fresh([page()], baseline)], ['target'])
+        self.assertEqual(pp.fresh([page(origin=1)], baseline), [])
+        self.assertEqual(pp.fresh([page(front=False)], baseline), [])
+        self.assertEqual(pp.fresh(None, baseline), [])
+
     def run_open(self, snapshots, screens, deadline=20):
         clock = Clock()
         with patch.object(fu.time, 'monotonic', clock.monotonic), \

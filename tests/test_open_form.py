@@ -111,6 +111,38 @@ class OpenFormTest(unittest.TestCase):
         self.assertIs(root, FORM)
         self.assertLess(clock.now, 0.5)
 
+    def test_loading_document_keeps_its_budget_past_the_deadline(self):
+        # The new document appears before the 3 s deadline but finishes after it.
+        clock = Clock()
+        screens = iter([BLANK] * 70 + [FORM])
+        with patch.object(fu.time, "monotonic", clock.monotonic), \
+             patch.object(fu.time, "sleep", clock.sleep), \
+             patch.object(fb, "open_buy_link"), \
+             patch.object(fu.purchase_page, "snapshot", return_value=[]), \
+             patch.object(fu.purchase_page, "fresh", return_value=[{}]), \
+             patch.object(fu.purchase_page, "outcome", return_value="form"), \
+             patch.object(fu, "dump", side_effect=lambda: next(screens)), \
+             patch("builtins.print"):
+            root = fu.open_form("133045A", "0.01", deadline=3, load_timeout=8)
+        self.assertIs(root, FORM)
+        self.assertGreater(clock.now, 3.0)
+        self.assertLess(clock.now, 8.0)
+
+    def test_loading_budget_still_ends_with_a_stop(self):
+        clock = Clock()
+        with patch.object(fu.time, "monotonic", clock.monotonic), \
+             patch.object(fu.time, "sleep", clock.sleep), \
+             patch.object(fb, "open_buy_link"), \
+             patch.object(fu.purchase_page, "snapshot", return_value=[]), \
+             patch.object(fu.purchase_page, "fresh", return_value=[{}]), \
+             patch.object(fu.purchase_page, "outcome", return_value=""), \
+             patch.object(fu, "dump", side_effect=lambda: BLANK), \
+             patch("builtins.print"):
+            with self.assertRaises(fb.Stop):
+                fu.open_form("133045A", "0.01", deadline=3, load_timeout=5)
+        self.assertGreaterEqual(clock.now, 5.0)
+        self.assertLess(clock.now, 6.0)
+
     def test_login_page_stops_instead_of_polling_forever(self):
         login = tree("我的头像", "更多选项", "招商银行")
         with patch.object(fu, "screen_protected", return_value=True):

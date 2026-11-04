@@ -65,15 +65,26 @@ def identity(page):
     return page['id'], page['origin']
 
 
+def fresh(pages, baseline):
+    """Frontmost documents that appeared after `baseline`.
+
+    An empty list is proof that no new document has appeared yet; `None`
+    pages stay an unknown snapshot, not an empty one.
+    """
+    if pages is None:
+        return []
+    return [p for p in pages if p['front'] and identity(p) not in baseline
+            and (p['id'], None) not in baseline]
+
+
 def outcome(pages, baseline, code, amount):
     """Only one fresh, frontmost document with a completed business view counts."""
     if pages is None:
         return ''
-    fresh = [p for p in pages if p['front'] and identity(p) not in baseline
-             and (p['id'], None) not in baseline]
-    if len(fresh) != 1:
+    fresh_pages = fresh(pages, baseline)
+    if len(fresh_pages) != 1:
         return ''
-    page = fresh[0]
+    page = fresh_pages[0]
     url = urlparse(page['url'])
     if not page['ready'] or url.hostname != 'mobile.cmbchina.com':
         return ''
