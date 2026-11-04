@@ -15,6 +15,14 @@
     let badge;
     const names = {installing:'准备中', waiting:'等待开始', querying:'查询中',
         retrying:'等待重试', ready:'表单准备中', stopped:'已停止', complete:'已结束'};
+    function countdown(milliseconds) {
+        const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+        const part = number => String(number).padStart(2, '0');
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor(seconds / 60) % 60;
+        const rest = `${part(minutes)}:${part(seconds % 60)}`;
+        return hours ? `${part(hours)}:${rest}` : rest;
+    }
     function render() {
         if (!document.documentElement) return;
         if (!badge) {
@@ -31,7 +39,16 @@
             });
         }
         if (!badge.isConnected) document.documentElement.appendChild(badge);
-        badge.textContent = `${names[state.status] || state.status} · 已尝试 ${state.attempts} 次`;
+        const fields = [names[state.status] || state.status];
+        const active = ['installing','waiting','querying','retrying'].includes(state.status);
+        const current = now();
+        if (active && current < config.startAt) {
+            fields.push(`距开始 ${countdown(config.startAt - current)}`);
+        } else if (active && config.mode === 'redemption') {
+            fields.push(`剩余 ${countdown(config.endAt - current)}`);
+        }
+        fields.push(`已尝试 ${state.attempts} 次`);
+        badge.textContent = fields.join(' · ');
     }
     function stop(reason) {
         cancelled = true; state.status = 'stopped'; state.reason = reason; render();

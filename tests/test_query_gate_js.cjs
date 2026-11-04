@@ -5,11 +5,12 @@ const fs=require('node:fs');
 const source=fs.readFileSync('src/query_gate.js','utf8');
 function setup(overrides={},responses=[{code:200,data:{hasAccount:true}}],registration='single'){
  let clock=0,serial=0;const timers=new Map(),calls=[];
- const root={appendChild(e){e.isConnected=true;}};
+ const intervals=[];
+ const root={appendChild(e){e.isConnected=true;this.badge=e;}};
  const context={document:{documentElement:root,addEventListener(){},createElement(){return {style:{},isConnected:false};}},
   performance:{timeOrigin:1,now:()=>clock},Date:{now:()=>clock},
   setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,at:clock+Math.max(0,delay)});return id;},
-  clearTimeout(id){timers.delete(id)},setInterval(){return 0},clearInterval(){},
+  clearTimeout(id){timers.delete(id)},setInterval(fn){intervals.push(fn);return intervals.length},clearInterval(){},
   addEventListener(){},api:{async queryBuy(params){calls.push({at:clock,code:params.fndInn});
    const value=responses[Math.min(calls.length-1,responses.length-1)];
    return typeof value==='function'?value():value;}}};
@@ -30,7 +31,7 @@ function setup(overrides={},responses=[{code:200,data:{hasAccount:true}}],regist
   }
   clock=target;await flush();
  }
- return {context,calls,to,state:()=>context.__cmbQueryGate};
+ return {context,calls,to,state:()=>context.__cmbQueryGate,badge:()=>root.badge.textContent,refresh:()=>intervals.forEach(fn=>fn())};
 }
 const sold={code:200,data:{hasAccount:true,ppsTag:'E'}};
 const good={code:200,data:{hasAccount:true,posQty:'3000'}};
@@ -85,4 +86,23 @@ test('Vue defineProperties and Reflect registration are intercepted before initi
   assert.equal(h.state().installed,true);assert.equal(h.calls.length,0);
   await h.to(1000);assert.equal(h.calls.length,1);assert.equal(h.context.result,good);
  }
+});
+
+test('waiting badge counts down without releasing requests or changing deadline',async()=>{
+ const h=setup({startAt:60000,endAt:120000});
+ assert.match(h.badge(),/距开始 01:00/);assert.match(h.badge(),/已尝试 0 次/);
+ await h.to(10500);h.refresh();assert.match(h.badge(),/距开始 00:50/);
+ assert.equal(h.calls.length,0);
+ h.state().cancel('test');assert.doesNotMatch(h.badge(),/距开始|剩余/);
+});
+test('irregular badge counts down remaining window and removes it when stopped',async()=>{
+ const h=setup({mode:'redemption',endAt:2000},[sold]);
+ await h.to(1100);h.refresh();assert.match(h.badge(),/剩余 00:01/);
+ assert.doesNotMatch(h.badge(),/距开始/);
+ await h.to(2001);h.refresh();assert.doesNotMatch(h.badge(),/距开始|剩余/);
+ assert.equal(h.state().reason,'window_expired');
+});
+test('successful form stops countdown while retaining attempt count',async()=>{
+ const h=setup();await h.to(1000);h.refresh();
+ assert.match(h.badge(),/已尝试 1 次/);assert.doesNotMatch(h.badge(),/距开始|剩余/);
 });

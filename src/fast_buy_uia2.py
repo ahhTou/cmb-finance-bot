@@ -282,6 +282,7 @@ def enter_password(password, confirm_wait=0.15):
     field = find_node(root, "点击谈出密码键盘")
     field_xy = center_of(field) if field is not None else None
     for attempt in range(2):
+        print(f"交易密码输入：第 {attempt + 1}/2 轮", flush=True)
         commands = [f"input tap {keys[d][0]} {keys[d][1]}" for d in password]
         commands.append(f"sleep {confirm_wait}")
         send_commands(commands)
@@ -304,6 +305,7 @@ def enter_password(password, confirm_wait=0.15):
             close_password_panel()
             raise fast_buy.Stop("确定按钮仍被键盘遮挡，已关闭密码框，未提交。")
         if attempt == 0 and field_xy is not None:
+            print("确定按钮仍不可用：清空输入后重输一次，尚未提交。", flush=True)
             send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
             time.sleep(0.10)
             root, keys = wait_keypad_stable()
