@@ -8,7 +8,13 @@ DEFAULTS = {
     'cold_start_minutes': 7,
     'first_offset_ms': 200, 'first_max_retries': 5,
     'irregular_advance_ms': 200, 'irregular_window_minutes': 5,
-    'irregular_retry_min_ms': 50, 'irregular_retry_max_ms': 250,
+    # Redemption backoff, measured from the planned first query: a burst tier,
+    # a linear ramp, a slow tier, then an idle tier until the window ends.
+    'irregular_retry_min_ms': 250, 'irregular_retry_max_ms': 400,
+    'irregular_burst_seconds': 15, 'irregular_ramp_seconds': 20,
+    'irregular_slow_min_ms': 1000, 'irregular_slow_max_ms': 2000,
+    'irregular_idle_after_seconds': 60,
+    'irregular_idle_min_ms': 2500, 'irregular_idle_max_ms': 4000,
 }
 LIMITS = {
     'reopen_deadline': (1, 300), 'drill_form_deadline': (1, 300),
@@ -16,7 +22,14 @@ LIMITS = {
     'first_offset_ms': (0, 10000), 'first_max_retries': (0, 100),
     'irregular_advance_ms': (0, 10000), 'irregular_window_minutes': (1, 60),
     'irregular_retry_min_ms': (1, 60000), 'irregular_retry_max_ms': (1, 60000),
+    'irregular_burst_seconds': (0, 3600), 'irregular_ramp_seconds': (0, 3600),
+    'irregular_slow_min_ms': (1, 60000), 'irregular_slow_max_ms': (1, 60000),
+    'irregular_idle_after_seconds': (0, 3600),
+    'irregular_idle_min_ms': (1, 60000), 'irregular_idle_max_ms': (1, 60000),
 }
+PAIRS = (('irregular_retry_min_ms', 'irregular_retry_max_ms', '高频'),
+         ('irregular_slow_min_ms', 'irregular_slow_max_ms', '降频'),
+         ('irregular_idle_min_ms', 'irregular_idle_max_ms', '低频'))
 
 
 def validate(values):
@@ -27,8 +40,12 @@ def validate(values):
         lower, upper = LIMITS[key]
         if type(value) is not int or not lower <= value <= upper:
             raise RuntimeError(f'{key} 必须为 {lower}–{upper} 的整数。')
-    if result['irregular_retry_min_ms'] > result['irregular_retry_max_ms']:
-        raise RuntimeError('随机重试间隔下限不得大于上限。')
+    for lower, upper, name in PAIRS:
+        if result[lower] > result[upper]:
+            raise RuntimeError(f'{name}阶段随机间隔下限不得大于上限。')
+    if not (result['irregular_burst_seconds'] <= result['irregular_ramp_seconds']
+            <= result['irregular_idle_after_seconds']):
+        raise RuntimeError('分段时间须满足：高频结束 ≤ 过渡结束 ≤ 进入低频。')
     return result
 
 

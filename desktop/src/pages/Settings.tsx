@@ -102,8 +102,15 @@ const GROUPS: [string, [string, string, number, number, number][]][] = [
     [
       ['irregular_advance_ms', '首次查询提前（毫秒）', 200, 0, 10000],
       ['irregular_window_minutes', '最长查询窗口（分钟）', 5, 1, 60],
-      ['irregular_retry_min_ms', '随机重试间隔下限（毫秒）', 50, 1, 60000],
-      ['irregular_retry_max_ms', '随机重试间隔上限（毫秒）', 250, 1, 60000],
+      ['irregular_burst_seconds', '高频阶段时长（秒）', 15, 0, 3600],
+      ['irregular_retry_min_ms', '高频间隔下限（毫秒）', 250, 1, 60000],
+      ['irregular_retry_max_ms', '高频间隔上限（毫秒）', 400, 1, 60000],
+      ['irregular_ramp_seconds', '过渡结束（秒）', 20, 0, 3600],
+      ['irregular_slow_min_ms', '降频间隔下限（毫秒）', 1000, 1, 60000],
+      ['irregular_slow_max_ms', '降频间隔上限（毫秒）', 2000, 1, 60000],
+      ['irregular_idle_after_seconds', '进入低频（秒）', 60, 0, 3600],
+      ['irregular_idle_min_ms', '低频间隔下限（毫秒）', 2500, 1, 60000],
+      ['irregular_idle_max_ms', '低频间隔上限（毫秒）', 4000, 1, 60000],
     ],
   ],
   [
@@ -117,7 +124,7 @@ const GROUPS: [string, [string, string, number, number, number][]][] = [
 const NOTES: Record<string, string> = {
   首发模式: '重试次数不含首次查询；无额度时立即串行重试。',
   不定时抢购模式:
-    '首次查询在设定时间之前发出；无额度后按配置的间隔上下限随机等待，窗口从首次计划查询时间计算。',
+    '首次查询在设定时间之前发出。无额度后按已查询时长分段随机等待：高频阶段内用高频间隔，到过渡结束逐渐放慢到降频间隔，进入低频后用低频间隔，直到窗口结束。时长和窗口都从首次计划查询时间计算。',
 }
 const FIELDS = GROUPS.flatMap(([, rows]) => rows)
 
@@ -142,7 +149,12 @@ function RetryCard() {
     FIELDS.every(([key, , , min, max]) => {
       const value = values[key]
       return /^\d+$/.test(value ?? '') && Number(value) >= min && Number(value) <= max
-    }) && Number(values.irregular_retry_min_ms) <= Number(values.irregular_retry_max_ms)
+    }) &&
+    (['retry', 'slow', 'idle'] as const).every(
+      (tier) => Number(values[`irregular_${tier}_min_ms`]) <= Number(values[`irregular_${tier}_max_ms`]),
+    ) &&
+    Number(values.irregular_burst_seconds) <= Number(values.irregular_ramp_seconds) &&
+    Number(values.irregular_ramp_seconds) <= Number(values.irregular_idle_after_seconds)
 
   const save = form.handleSubmit(async (raw) => {
     const body = Object.fromEntries(FIELDS.map(([key]) => [key, Number(raw[key])]))

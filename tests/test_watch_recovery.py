@@ -49,6 +49,7 @@ class RecoveryTest(unittest.TestCase):
         self.stack.enter_context(patch.object(nw, 'emulator_running', return_value=True))
         self.stack.enter_context(patch.object(nw, 'booted', return_value=True))
         self.spawn = self.stack.enter_context(patch.object(nw, 'spawn_watch'))
+        self.adb = self.stack.enter_context(patch.object(nw, 'adb'))
 
     def tearDown(self):
         self.stack.close()
@@ -179,6 +180,24 @@ class RecoveryTest(unittest.TestCase):
         task = self.task()
         task["patterns_sent"] = 1
         with self.assertRaises(nw.Abort): nw.persist(task)
+
+    def test_disarm_closes_bank_app_only_when_page_may_be_open(self):
+        for phase, closes in (('armed', False), ('preparing', True), ('waiting', True)):
+            with self.subTest(phase=phase):
+                self.adb.reset_mock()
+                self.task(phase=phase)
+                nw.disarm_task()
+                self.assertEqual(nw.load_task()['phase'], 'disarmed')
+                if closes:
+                    self.adb.assert_called_once_with('shell', 'am', 'force-stop', nw.PACKAGE, timeout=10)
+                else:
+                    self.adb.assert_not_called()
+
+    def test_disarm_survives_adb_failure(self):
+        self.task(phase='waiting')
+        self.adb.side_effect = nw.subprocess.TimeoutExpired('adb', 10)
+        nw.disarm_task()
+        self.assertEqual(nw.load_task()['phase'], 'disarmed')
 
     def test_disarmed_worker_cannot_write(self):
         task = self.task()

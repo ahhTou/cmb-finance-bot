@@ -106,3 +106,22 @@ test('successful form stops countdown while retaining attempt count',async()=>{
  const h=setup();await h.to(1000);h.refresh();
  assert.match(h.badge(),/已尝试 1 次/);assert.doesNotMatch(h.badge(),/距开始|剩余/);
 });
+test('redemption backoff: burst tier, linear ramp, slow tier, then idle tier',async()=>{
+ const backoff={burstMs:15000,rampMs:20000,idleMs:60000,burst:[250,400],slow:[1000,2000],idle:[2500,4000]};
+ const h=setup({mode:'redemption',startAt:1000,endAt:1000+120000,leaseMs:1e9,backoff},[sold]);
+ await h.to(1000+120000);
+ assert.equal(h.state().reason,'window_expired');
+ let burst=0,ramp=0,slow=0,idle=0;
+ for(let i=1;i<h.calls.length;i++){
+  const sent=h.calls[i-1].at-1000, gap=h.calls[i].at-h.calls[i-1].at;
+  if(h.calls[i].at>=1000+120000)break;
+  if(sent<15000){burst++;assert.ok(gap>=250&&gap<=400,`burst gap ${gap}`);}
+  else if(sent<20000){ramp++;const f=(sent-15000)/5000;
+   assert.ok(gap>=Math.round(250+f*750)&&gap<=Math.round(400+f*1600),`ramp gap ${gap} at ${sent}`);}
+  else if(sent<60000){slow++;assert.ok(gap>=1000&&gap<=2000,`slow gap ${gap}`);}
+  else {idle++;assert.ok(gap>=2500&&gap<=4000,`idle gap ${gap}`);}
+ }
+ assert.ok(burst>=37&&burst<=61,`burst count ${burst}`);
+ assert.ok(ramp>0&&slow>0&&idle>0);
+ assert.ok(h.calls.length<120,`total ${h.calls.length}`);
+});

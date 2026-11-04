@@ -57,6 +57,18 @@
         if (cancelled) throw Error(state.reason || 'query gate cancelled');
         if (now() > lease) { stop('watcher_lost'); throw Error('watcher lease expired'); }
     }
+    // Redemption backoff: burst tier, linear ramp to the slow tier, then idle.
+    function retryRange(elapsed) {
+        const b = config.backoff;
+        if (!b) return [config.retryMinMs, config.retryMaxMs];
+        if (elapsed < b.burstMs) return b.burst;
+        if (elapsed < b.rampMs) {
+            const f = (elapsed - b.burstMs) / (b.rampMs - b.burstMs);
+            return [0, 1].map(i => Math.round(b.burst[i] + f * (b.slow[i] - b.burst[i])));
+        }
+        if (elapsed < b.idleMs) return b.slow;
+        return b.idle;
+    }
     function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
     async function waitUntil(target) {
         while (now() < target) {
@@ -132,7 +144,7 @@
                     if (noQuota) {
                         state.status='retrying'; render();
                         if (config.mode === 'redemption') {
-                            const min=config.retryMinMs, max=config.retryMaxMs;
+                            const [min, max] = retryRange(now() - config.startAt);
                             const delay=min + Math.floor(Math.random()*(max-min+1));
                             await waitUntil(Math.min(config.endAt, now()+delay));
                         }

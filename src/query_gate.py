@@ -34,6 +34,16 @@ def schedule(when, mode, settings):
     return start, end
 
 
+def backoff(settings):
+    """Redemption retry tiers for query_gate.js, offsets from the planned first query."""
+    return dict(burstMs=settings['irregular_burst_seconds'] * 1000,
+                rampMs=settings['irregular_ramp_seconds'] * 1000,
+                idleMs=settings['irregular_idle_after_seconds'] * 1000,
+                burst=[settings['irregular_retry_min_ms'], settings['irregular_retry_max_ms']],
+                slow=[settings['irregular_slow_min_ms'], settings['irregular_slow_max_ms']],
+                idle=[settings['irregular_idle_min_ms'], settings['irregular_idle_max_ms']])
+
+
 def pages():
     with urllib.request.urlopen('http://127.0.0.1:9222/json', timeout=1) as response:
         return json.load(response)
@@ -128,6 +138,7 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                       maxAttempts=settings['first_max_retries'] + 1,
                       retryMinMs=settings['irregular_retry_min_ms'],
                       retryMaxMs=settings['irregular_retry_max_ms'],
+                      backoff=backoff(settings),
                       requestTimeoutMs=REQUEST_TIMEOUT_MS, leaseMs=LEASE_MS)
         script = SCRIPT.read_text().replace('__CONFIG__', json.dumps(config))
         await client.call('Page.enable')

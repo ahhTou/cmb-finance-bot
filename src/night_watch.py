@@ -391,12 +391,34 @@ def _disarm():
         return
     if task.get("phase") == "firing":
         raise Abort("正在提交，不能取消；请等结果并查交易记录。")
+    page_open = task.get("phase") in PAGE_PHASES
     stop_watch(task)
     task["phase"] = "disarmed"
     save_task(task)
     record_history(task)
+    if page_open:
+        close_bank_app()
     print("已取消值守。")
     return task
+
+
+# Phases in which the worker may have the bank app, login or purchase page open.
+PAGE_PHASES = ("preparing", "waiting")
+
+
+def close_bank_app():
+    """Close the bank app so the purchase page stops its in-page queryBuy loop.
+
+    Killing the worker skips its CDP cleanup; without this the page would keep
+    querying until its watcher lease expires.
+    """
+    try:
+        if emulator_running():
+            adb("shell", "am", "force-stop", PACKAGE, timeout=10)
+            print("已关闭招行 App，购买页轮询已停止。")
+    except (subprocess.SubprocessError, OSError) as exc:
+        print(f"关闭招行 App 失败（{exc.__class__.__name__}）；购买页最多 "
+              f"{query_gate.LEASE_MS // 1000} 秒后因失去值守自行停止。")
 
 
 def status(_args):

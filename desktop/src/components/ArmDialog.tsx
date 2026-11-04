@@ -106,7 +106,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
   const configuration =
     `提前 ${prep} 分钟冷启动，登录后进入购买页等待。` +
     (mode === 'redemption'
-      ? `首次查询提前 ${settings.irregular_advance_ms ?? 200} ms；无额度后间隔 ${settings.irregular_retry_min_ms ?? 50}–${settings.irregular_retry_max_ms ?? 250} ms，最长 ${window} 分钟。`
+      ? `首次查询提前 ${settings.irregular_advance_ms ?? 200} ms；无额度后前 ${settings.irregular_burst_seconds ?? 15} 秒间隔 ${settings.irregular_retry_min_ms ?? 250}–${settings.irregular_retry_max_ms ?? 400} ms，${settings.irregular_ramp_seconds ?? 20} 秒起 ${settings.irregular_slow_min_ms ?? 1000}–${settings.irregular_slow_max_ms ?? 2000} ms，${settings.irregular_idle_after_seconds ?? 60} 秒起 ${settings.irregular_idle_min_ms ?? 2500}–${settings.irregular_idle_max_ms ?? 4000} ms，最长 ${window} 分钟。`
       : `首次查询延后 ${settings.first_offset_ms ?? 200} ms；无额度后最多再重试 ${settings.first_max_retries ?? 5} 次。`)
 
   function pickTime(value: string) {

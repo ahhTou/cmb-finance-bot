@@ -30,9 +30,20 @@ class GateTest(unittest.TestCase):
         for value in ({'cold_start_minutes': 0}, {'cold_start_minutes': True},
                       {'first_max_retries': -1}, {'irregular_window_minutes': 61},
                       {'irregular_retry_min_ms': 251, 'irregular_retry_max_ms': 250},
-                      {'irregular_advance_ms': -1}, {'unknown': 1}):
+                      {'irregular_advance_ms': -1}, {'unknown': 1},
+                      {'irregular_slow_min_ms': 2001},
+                      {'irregular_idle_min_ms': 5000, 'irregular_idle_max_ms': 4000},
+                      {'irregular_burst_seconds': 21},
+                      {'irregular_ramp_seconds': 61}):
             with self.subTest(value=value), self.assertRaises(RuntimeError):
                 settings.validate(value)
+
+    def test_backoff_defaults_and_config(self):
+        values = settings.validate({})
+        self.assertEqual((values['irregular_retry_min_ms'], values['irregular_retry_max_ms']), (250, 400))
+        self.assertEqual(gate.backoff(values), dict(
+            burstMs=15000, rampMs=20000, idleMs=60000,
+            burst=[250, 400], slow=[1000, 2000], idle=[2500, 4000]))
 
     def test_prepared_form_uses_raw_quota_and_never_reopens_or_marks_over_quota(self):
         import fast_buy_uia2 as fu
