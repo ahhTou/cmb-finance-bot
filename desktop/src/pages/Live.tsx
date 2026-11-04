@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { AnimatePresence, motion, useMotionValue, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
@@ -43,8 +43,8 @@ export function useCountdown() {
   return { w, task, redemption, text, hint }
 }
 
-/** Near-opaque panel, so the animated background never makes the text hard to read. */
-const glass = (boxShadow: string) => ({ boxShadow, background: 'rgb(25 25 25 / 0.92)' })
+/** Solid panel over the animated background. */
+const panel = (boxShadow: string) => ({ boxShadow, background: '#191919' })
 
 function PhaseDot({ phase, size = 7 }: { phase: string; size?: number }) {
   return (
@@ -104,7 +104,7 @@ export function LivePage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: [0.2, 0.8, 0.2, 1] }}
           className="flex w-full max-w-[680px] flex-col gap-[18px] rounded-[20px] p-[26px] ring-[0.6px] ring-white/15"
-          style={glass('0 16px 60px rgb(0 0 0 / 0.55), 0 0 92px rgb(224 66 82 / 0.14)')}
+          style={panel('0 30px 90px rgb(0 0 0 / 0.8), 0 10px 28px rgb(0 0 0 / 0.55), 0 0 120px rgb(224 66 82 / 0.2)')}
         >
           <div className="flex items-baseline gap-3.5">
             <Countdown text={text} />
@@ -144,103 +144,32 @@ export function LivePage() {
   )
 }
 
-const BUBBLE_KEY = 'watch-bubble-offset'
-
-function savedOffset() {
-  try {
-    const value = JSON.parse(localStorage.getItem(BUBBLE_KEY) ?? 'null')
-    if (typeof value?.x === 'number' && typeof value?.y === 'number') return value as { x: number; y: number }
-  } catch {}
-  return { x: 0, y: 0 }
-}
-
-/**
- * Draggable bubble with the running task, shown on other pages; a click goes back to
- * the focus view. Dragging is plain pointer capture writing motion values directly,
- * which behaves the same in WebKit and Chromium and never fights the countdown renders.
- */
+/** Running task at the bottom of the sidebar, shown on other pages; a click goes back to the focus view. */
 export function WatchBubble() {
   const navigate = useNavigate()
   const { w, task, text, hint } = useCountdown()
-  const bounds = useRef<HTMLDivElement>(null)
-  const [saved] = useState(savedOffset)
-  const x = useMotionValue(saved.x)
-  const y = useMotionValue(saved.y)
-  const drag = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null)
-  const [dragging, setDragging] = useState(false)
-
-  // Keep the bubble inside the content area (also after the window shrinks).
-  const clamp = (el: HTMLElement, nx: number, ny: number) => {
-    const area = bounds.current?.getBoundingClientRect()
-    const box = el.getBoundingClientRect()
-    if (!area) return [nx, ny]
-    const left = box.left - x.get()
-    const top = box.top - y.get()
-    return [
-      Math.min(Math.max(nx, area.left - left), area.right - left - box.width),
-      Math.min(Math.max(ny, area.top - top), area.bottom - top - box.height),
-    ]
-  }
-
   return (
-    <div ref={bounds} className="pointer-events-none absolute inset-3 z-30">
-      <motion.button
-        type="button"
-        data-testid="watch-bubble"
-        aria-label={`${phaseName(w.phase)} ${task.code ?? ''}，${hint} ${text}，回到值守页`}
-        initial={{ opacity: 0, scale: 0.94 }}
-        animate={{ opacity: 1, scale: dragging ? 1.04 : 1 }}
-        exit={{ opacity: 0, scale: 0.94 }}
-        transition={{ duration: 0.18 }}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId)
-          drag.current = { px: e.clientX, py: e.clientY, x: x.get(), y: y.get(), moved: false }
-        }}
-        onPointerMove={(e) => {
-          const d = drag.current
-          if (!d) return
-          const dx = e.clientX - d.px
-          const dy = e.clientY - d.py
-          if (!d.moved && Math.hypot(dx, dy) < 4) return
-          if (!d.moved) setDragging(true)
-          d.moved = true
-          const [nx, ny] = clamp(e.currentTarget, d.x + dx, d.y + dy)
-          x.set(nx)
-          y.set(ny)
-        }}
-        onPointerUp={() => {
-          if (drag.current?.moved) {
-            try {
-              localStorage.setItem(BUBBLE_KEY, JSON.stringify({ x: x.get(), y: y.get() }))
-            } catch {}
-          }
-          setDragging(false)
-        }}
-        onPointerCancel={() => {
-          drag.current = null
-          setDragging(false)
-        }}
-        onClick={() => {
-          const moved = drag.current?.moved
-          drag.current = null
-          if (!moved) navigate({ to: '/tasks' })
-        }}
-        className={cn(
-          'pointer-events-auto absolute right-3 bottom-3 flex touch-none items-center gap-3 rounded-2xl py-2.5 pr-4 pl-3.5 text-left ring-[0.6px] ring-white/15',
-          dragging ? 'cursor-grabbing' : 'cursor-grab',
-        )}
-        style={{ x, y, ...glass('0 10px 32px rgb(0 0 0 / 0.5), 0 0 40px rgb(224 66 82 / 0.18)') }}
-      >
-        <PhaseDot phase={w.phase} size={8} />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-muted">
-            {phaseName(w.phase)} · {task.code ?? '—'}
-          </span>
-          <span className="font-rounded font-semibold text-lg tabular-nums leading-none">{text}</span>
+    <motion.button
+      type="button"
+      data-testid="watch-bubble"
+      aria-label={`${phaseName(w.phase)} ${task.code ?? ''}，${hint} ${text}，回到值守页`}
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6 }}
+      transition={{ duration: 0.18 }}
+      onClick={() => navigate({ to: '/tasks' })}
+      className="flex w-full flex-col gap-1.5 rounded-xl p-3 text-left ring-[0.6px] ring-white/12 transition-colors hover:ring-accent/50"
+      style={panel('0 14px 36px rgb(0 0 0 / 0.65), 0 4px 12px rgb(0 0 0 / 0.45), 0 0 40px rgb(224 66 82 / 0.2)')}
+    >
+      <span className="flex items-center gap-2 text-[11px] text-muted">
+        <PhaseDot phase={w.phase} />
+        <span className="truncate">
+          {phaseName(w.phase)} · {task.code ?? '—'}
         </span>
-        <span className="self-end text-[10px] text-muted">{hint}</span>
-      </motion.button>
-    </div>
+      </span>
+      <span className="font-rounded font-semibold text-[22px] tabular-nums leading-none">{text}</span>
+      <span className="text-[10px] text-muted">{hint}</span>
+    </motion.button>
   )
 }
 

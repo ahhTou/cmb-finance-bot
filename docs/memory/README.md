@@ -7,7 +7,7 @@
 - [项目位置](project-location.md)：2026-11-03 从 `~/Dev/Playground/` 迁到 `~/Dev/cmb-finance-bot`，旧路径会出现在哪里
 - [命名约定](naming.md)：仓库、钥匙串、App、Skill 和模式的名称；不定时抢购保留内部值兼容
 - [方案交接方式](plan-handoff.md)：用户把方案交给别的会话实现时，方案写在哪、怎么写
-- [界面截图](app-ui-screenshots.md)：`docs/images/` 的截图怎么拍、怎么引用；拍布防中不要跑真实 `arm`
+- [界面截图](app-ui-screenshots.md)：`docs/images/` 的截图用 `pnpm screenshots` 在假后端上重拍，不跑真实 `arm`
 
 ## 规范
 

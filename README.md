@@ -74,7 +74,7 @@ python3 -B src/night_watch.py arm --mode redemption --code <产品代码> --amou
 | 批量撤单 | 从交易记录逐笔撤销可撤单的订单 | `src/cancel_orders.py` |
 | 自动登录 | 九宫格图案存在 macOS 钥匙串，最多试 3 次防锁定 | `src/secure_input.py`、`src/keychain_store.py` |
 | 邮件通知 | 可选，QQ 邮箱 SMTP，只发时间线和状态 | `src/notify.py` |
-| 管理 App | 前台窗口、状态、布防、凭据同步 | `app/CMBFinanceBot/`、`src/admin_cli.py` |
+| 管理 App | 前台窗口、状态、布防、凭据同步 | `desktop/`、`src/admin_server.py`、`src/admin_cli.py` |
 | Agent 监听 | 心跳、故障通知、提交前按原任务恢复 | `skills/cmb-watch/SKILL.md` |
 | 模拟器管理 | 启动 / 停止 / 状态、截图 | `scripts/project`、`scripts/capture` |
 
@@ -113,6 +113,7 @@ python3 -B src/night_watch.py arm --mode redemption --code <产品代码> --amou
 scripts/project      模拟器启动 / 停止 / 状态 / 创建虚拟设备
 scripts/capture      截取当前模拟器画面到 var/screenshots/current.png
 src/                 代码（见上方"能力"）
+desktop/             管理 App：Tauri 壳 + React 前端
 tests/               单元测试
 config/example.json  交易配置示例（不含密码）
 AGENT_WORKFLOW.md    操作手册：每个流程的步骤、日志含义、失败处理和技术结论
@@ -150,41 +151,34 @@ SDK 和虚拟设备体积较大，迁移到新机器后建议重新创建虚拟�
 
 ## 管理 App
 
-原生 macOS 前台管理 App「招行理财值守」，采用纯深灰背景、侧边栏导航和无描边卡片布局。窗口保留 macOS 原生圆角、阴影与红绿灯，最低 macOS 13，需要完整 Xcode：
+前台管理 App「招行理财值守」：Tauri 2 壳 + Vite / React / TypeScript（`desktop/`），纯深灰背景、侧边栏导航和无描边卡片布局。后端是 `src/admin_server.py`，一个只监听 127.0.0.1、需要 token 的本地 HTTP 服务；每个请求在子进程里跑 `src/admin_cli.py`，锁、检查和报错文案都在那里。界面在浏览器里就能调试，Agent 也能用 Playwright 自己验证。
 
 ```sh
-./scripts/build-app
-open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
-```
-
-也可以打开 `app/CMBFinanceBot/CMBFinanceBot.xcodeproj`，选择 CMBFinanceBot scheme 运行。自用本机签名，不启用 App Sandbox，无第三方 Swift 依赖。
-
-启动或双击 App 会打开常驻管理窗口，显示 Dock 图标，不显示菜单栏状态图标。点红色关闭按钮或按 Cmd-W 只关闭窗口，App 继续运行；点击 Dock 图标可重新打开。Dock 菜单“退出”或 Cmd-Q 才真正结束 App，不再二次确认。窗口顶部空白处可拖动，左上角可关闭、最小化或缩放；窗口大小和当前页会记住。退出 App 不会取消独立运行的值守。
-
-### Web 前端版（`web-frontend` 分支，迁移中）
-
-同一个管理 App 的 Web 前端版：Tauri 2 壳 + Vite / React / TypeScript，界面和行为对齐上面的原生版。后端是 `src/admin_server.py`，一个只监听 127.0.0.1、需要 token 的本地 HTTP 服务；每个请求仍然在子进程里跑 `src/admin_cli.py`，所以锁、检查和报错文案都和原生版一致。值守进程独立运行，关掉 App 或后端都不影响它。
-
-```sh
-# 一次性：后端依赖装在项目 .venv（已被 Git 忽略）
+# 一次性：后端依赖装在项目 .venv（已被 Git 忽略），前端依赖用 pnpm
 /usr/bin/python3 -m venv .venv && .venv/bin/pip install -r requirements-server.txt
 cd desktop && pnpm install
 
-pnpm dev:mock   # 只开前端 + 假后端（MSW），浏览器打开 http://localhost:5173 调界面，不碰真实环境
-                # 场景：?scenario=idle|armed|redemption|firing|empty|error，例如 /?scenario=armed#/tasks
-pnpm server     # 另一个终端：真实后端（开发用，固定 8765 端口，token 写到 var/admin-server.json）
-pnpm dev        # 前端连真实后端，Vite 代理自动带 token
-pnpm tauri dev  # 桌面窗口，自己在随机端口拉起后端
 pnpm tauri build  # 产出 desktop/src-tauri/target/release/bundle/macos/招行理财值守.app
+```
+
+开发：
+
+```sh
+pnpm dev:mock     # 只开前端 + 假后端（MSW），浏览器打开 http://localhost:5173 调界面，不碰真实环境
+                  # 场景：?scenario=idle|armed|redemption|firing|empty|error，例如 /?scenario=armed#/tasks
+pnpm server       # 另一个终端：真实后端（固定 8765 端口，token 写到 var/admin-server.json）
+pnpm dev          # 前端连真实后端，Vite 代理自动带 token
+pnpm tauri dev    # 桌面窗口，自己在随机端口拉起后端
+pnpm screenshots  # 用假后端重拍 docs/images/ 下的 README 截图
 ```
 
 检查：`pnpm check`（Biome）、`pnpm test`（Vitest）、`pnpm e2e`（Playwright，在 WebKit 和 Chromium 上跑假后端）、`.venv/bin/python -m unittest tests.test_admin_server`。后端接口改了以后运行 `pnpm api:types`，从 OpenAPI 重新生成前端请求类型。
 
-桌面版的项目目录和 Python 路径在「设置 → 项目设置」里改，保存后重启后端；配置存在 `~/Library/Application Support/local.cmb-finance-bot.desktop/backend.json`。后端日志在 `var/admin-server.log`。
+启动 App 会打开常驻管理窗口并显示 Dock 图标。点红色关闭按钮或按 Cmd-W 只隐藏窗口，点击 Dock 图标可重新打开；Cmd-Q 才真正退出，同时停掉后端。窗口顶部空白处可拖动；窗口大小和当前页会记住。值守进程独立运行，退出 App 或后端都不会取消值守。项目目录和 Python 路径在「设置 → 项目设置」里改，保存后重启后端；配置存在 `~/Library/Application Support/local.cmb-finance-bot.desktop/backend.json`，后端日志在 `var/admin-server.log`。
 
 ### 界面
 
-截图来自本机 Release 构建，窗口 1093×763；「布防中」那张用演练布防（`dry_run`）演示态，产品代码为测试专用代码。
+截图由 `pnpm screenshots` 用假后端在 WebKit 里拍摄，窗口 1093×763，数据为演示数据。
 
 | 任务 | 布防中（首发模式） |
 | --- | --- |
@@ -194,7 +188,7 @@ pnpm tauri build  # 产出 desktop/src-tauri/target/release/bundle/macos/招行�
 
 ![设置](docs/images/app-settings.png)
 
-布防生效后界面切到专注视图：顶部是「盯盘中 / 首发模式」、距开售倒计时，底部是计划摘要（产品、金额、计划开售时间、冷启动提前量）和「终止布防」。侧边栏不再常驻显示值守阶段。
+布防生效后「任务」页变成专注视图：任务卡片居中，显示距开售倒计时、计划摘要（产品、金额、计划开售时间、冷启动提前量）和「终止布防」；背景是实时值守日志、缓慢滚动的项目代码和发光波浪，越接近提交波浪越快。值守中其他页面照常可用，侧栏「任务」旁闪红点，侧栏底部显示当前任务和倒计时，点击回到专注视图。
 
 ### 页面
 
@@ -207,9 +201,9 @@ pnpm tauri build  # 产出 desktop/src-tauri/target/release/bundle/macos/招行�
 - **设置**：项目目录、Python 路径（默认 `/usr/bin/python3`）和凭据，保持原样；首次使用自动进入设置。
 - **值守配置**：冷启动提前量、首发延后与重试次数、不定时提前量与窗口及随机间隔统一配置；布防显示只读摘要。直接单笔购买和单笔演练的旧重开时限仍分别为 60 / 10 秒，可独立设置。全部保存在 `var/night/purchase-settings.json`，旧设置文件缺失的新字段自动使用默认值；已有任务保持布防时快照。
 
-错误提示统一显示为浮动气泡，不占用卡片或页面布局；长消息可滚动查看、复制和关闭。任务页与状态页在窗口高度不足时滚动显示，保留卡片内容和按钮空间。
+错误提示统一显示为浮动气泡，不占用卡片或页面布局；长消息可滚动查看、复制和关闭；弹窗打开时提示显示在弹窗内。后台读取失败时，已关掉的同一条提示不会反复弹出。任务页与状态页在窗口高度不足时滚动显示，保留卡片内容和按钮空间。
 
-布防表单默认真实布防，演练需手动打开；真实布防必须再次输入金额。当前已通过 64 项相关 Python 隔离测试、Swift 桥接测试、Release 构建、签名与界面检查；真实设备演练、凭据同步、退出后值守继续运行、通知和故障恢复尚待账户持有人验收。布防、撤单和凭据修改须经用户明确确认，确认后 Agent 可按项目流程执行。验收清单见 [实现进度](docs/admin-page-plan.md)。修改凭据只同步脚本保存的值，不修改银行设置。
+布防表单默认真实布防，演练需手动打开；真实布防必须再次输入金额。当前已通过相关 Python 隔离测试、后端 HTTP 测试、前端单元与端到端测试和 Release 构建；真实设备演练、凭据同步、退出后值守继续运行、通知和故障恢复尚待账户持有人验收。布防、撤单和凭据修改须经用户明确确认，确认后 Agent 可按项目流程执行。验收清单见 [实现进度](docs/admin-page-plan.md)。修改凭据只同步脚本保存的值，不修改银行设置。
 
 新增 JSON 接口（每次一行，成功退出码 0，失败为 1）：
 

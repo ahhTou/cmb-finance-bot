@@ -39,7 +39,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 - **演练布防可选实际付款**：管理 App 的演练布防窗口默认关闭「实际付款」，仍只到密码页；打开后进入真实布防确认页，需再次输入相同金额。可立即开始（约三分钟后购买）或指定时间，沿用单次提交和超额度停止规则。立即真实布防的 JSON 接口要求 `--confirm-real-payment`；未明确确认仍拒绝。实际付款和布防须经用户明确确认，确认后 Agent 可按既有流程执行。单笔购买区域也新增同名开关：确认金额后立即执行真实单笔购买，不创建值守任务；默认仍为 dry-run。
 
-- **管理 App 第二版（五页）已实现（2026-11-03）**：`app/CMBFinanceBot/`，`./scripts/build-app` 构建。侧边栏为任务、状态、演练、历史、设置，五个菜单项排在一起；项目路径与凭据集中在设置。任务页是三张竖向模式卡（首发、不定时抢购可用，捡漏标“正在做”）；状态页合并原状态与系统为三行两列、按可用高度铺满的 Dashboard；演练页包含演练布防、单笔购买演练、设备操作和撤单；历史页展示全部记录、完成统计与全局日志。纯深灰卡片布局，使用 macOS 原生圆角、阴影与红绿灯，显示 Dock 图标，不显示菜单栏状态图标；关闭窗口不退出，Dock“退出”或 Cmd-Q 才结束 App。
+- **管理 App 改为 Tauri + React（2026-11-04）**：原生 SwiftUI 工程已删除，现行实现在 `desktop/`（Tauri 2 壳 + Vite / React / TypeScript），后端为 `src/admin_server.py`（127.0.0.1 + token 的本地 HTTP 服务，每个请求在子进程里跑 `admin_cli.py`）。页面和行为沿用下面的第二版；新增：值守中可切换到其他页面，侧栏底部显示当前任务；专注视图背景为实时日志、项目代码和波浪动画。用 `pnpm dev:mock` 在浏览器里调界面（假后端，不碰真实环境），`pnpm e2e` 在 WebKit 和 Chromium 上跑端到端测试，`pnpm tauri build` 打包。说明见 README「管理 App」。
+- **管理 App 第二版（五页）已实现（2026-11-03，原生版已于 2026-11-04 移除）**：原为 `app/CMBFinanceBot/`。侧边栏为任务、状态、演练、历史、设置，五个菜单项排在一起；项目路径与凭据集中在设置。任务页是三张竖向模式卡（首发、不定时抢购可用，捡漏标“正在做”）；状态页合并原状态与系统为三行两列、按可用高度铺满的 Dashboard；演练页包含演练布防、单笔购买演练、设备操作和撤单；历史页展示全部记录、完成统计与全局日志。纯深灰卡片布局，使用 macOS 原生圆角、阴影与红绿灯，显示 Dock 图标，不显示菜单栏状态图标；关闭窗口不退出，Dock“退出”或 Cmd-Q 才结束 App。
 - **后端与监听接口已落地**：`src/admin_cli.py` 单行 JSON；新增 `history --limit`、`log --lines`、`cancel`（查看/演练/真实）和 `buy --dry-run`；版本 2 任务增加锁、心跳、提交标记、运行代次和恢复预算；监听 Skill 仅在项目 `skills/cmb-watch/SKILL.md`，App 复制绝对路径。恢复边界见 §9。真实撤单需 `--yes`，并由账户持有人确认；App 内单笔购买默认演练；真实模式要求 `buy --confirm-real-payment`，由用户确认金额后执行。
 - **验证范围**：相关 Python 隔离测试 64 项、Swift 桥接隔离测试、Release 构建、签名检查及五页界面布局、窗口生命周期已通过。尚未通过新 App 执行真实设备演练、凭据同步、退出后值守继续运行、系统通知与恢复故障注入验收；这些须按 §0 确认后执行。当前清单见 `docs/admin-page-plan.md`。
 
@@ -450,7 +451,8 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 |---|---|
 | `src/night_watch.py` | 夜间值守：`arm`（首发 / 不定时抢购）/ `status` / `disarm` / `resume` / `run` |
 | `src/admin_cli.py` | 管理 App / Agent 共用的单行 JSON 接口 |
-| `app/CMBFinanceBot/`、`scripts/build-app` | SwiftUI 工程与本机签名构建 |
+| `src/admin_server.py` | 管理 App 用的本地 HTTP 后端，逐请求调用 `admin_cli.py` |
+| `desktop/` | 管理 App：Tauri 壳 + React 前端、假后端与端到端测试 |
 | `skills/cmb-watch/SKILL.md` | Agent 监听规则，唯一实现版本 |
 | `src/notify.py` | 可选的 QQ 邮箱 SMTP 通知（`setup` / `test`） |
 | `src/fast_buy_uia2.py` | 单笔购买（推荐），值守也调用它 |

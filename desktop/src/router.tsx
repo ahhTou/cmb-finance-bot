@@ -67,7 +67,7 @@ function Layout() {
 
   return (
     <div className="flex h-full">
-      <Sidebar current={page.path} active={active} />
+      <Sidebar current={page.path} active={active} showBubble={active && !live} />
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg">
         {live ? (
           <LivePage />
@@ -79,14 +79,13 @@ function Layout() {
             </div>
           </div>
         )}
-        <AnimatePresence>{active && !live && <WatchBubble key="bubble" />}</AnimatePresence>
       </main>
       <Toast top={live ? 20 : 82} />
     </div>
   )
 }
 
-function Sidebar({ current, active }: { current: string; active: boolean }) {
+function Sidebar({ current, active, showBubble }: { current: string; active: boolean; showBubble: boolean }) {
   return (
     <nav className="flex w-[196px] shrink-0 flex-col bg-sidebar px-4 pt-3 pb-4">
       <div data-tauri-drag-region className="h-8 shrink-0" />
@@ -123,6 +122,9 @@ function Sidebar({ current, active }: { current: string; active: boolean }) {
           )
         })}
       </ul>
+      <div className="mt-auto pt-4">
+        <AnimatePresence>{showBubble && <WatchBubble key="bubble" />}</AnimatePresence>
+      </div>
     </nav>
   )
 }
