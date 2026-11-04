@@ -108,7 +108,7 @@ struct HistoryView: View {
                     Detail(stringValue(record["mode"]) == "redemption" ? "额度放出" : "开售时间",
                            shortTime(record["at"]))
                     Detail("模式", stringValue(record["mode"]) == "redemption"
-                           ? "赎回抢购 · \(stringValue(record["window_minutes"]) ?? "3") 分钟" : "首发")
+                           ? "不定时抢购 · \(stringValue(record["window_minutes"]) ?? "3") 分钟" : "首发")
                     Detail("布防时间", shortTime(record["armed_at"]))
                     Detail("结束时间", shortTime(record["ended_at"]))
                     Detail("提交时间", shortTime(record["fired_at"]))

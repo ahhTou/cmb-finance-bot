@@ -28,6 +28,7 @@ import uiautomator2 as u2
 import fast_buy
 import keychain_store
 import purchase_settings
+import purchase_page
 from secure_input import center, has, screen_protected, send_commands
 
 DEVICE = None
@@ -296,54 +297,61 @@ def protected_login_page():
 
 def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REOPEN_GAP,
               tick=None):
-    """Open the purchase form straight from the app's deep link and reopen it
-    quickly when it does not show up or shows an error page. No detail page
-    is needed. Nothing here confirms anything.
+    """Wait for a new document and business controls, never an old error page.
 
-    `deadline` bounds the whole loop. `wait` is how long one opened page gets
-    to show the form; `gap` is the minimum time before a visible error page is
-    believed — it must outlast the previous page, otherwise a stale error page
-    would keep interrupting a slow load (the redemption window reopens for
-    minutes and must not starve itself). `tick(opens)` runs every tenth open
-    so a long window can keep its heartbeat and probe counter current.
+    A completed error can reopen after `gap`; an unconfirmed/loading page gets
+    `wait` seconds. Neither condition can extend the overall deadline.
     """
     start = time.monotonic()
+    end = start + deadline
     opens = 0
-    while True:
+    last_reason = "尚未确认新页面加载完成"
+    while time.monotonic() < end:
+        pages = purchase_page.snapshot()
+        if pages is None:
+            last_reason = "无法读取页面加载状态（CDP）"
+            time.sleep(0.08)
+            continue
+        baseline = {purchase_page.identity(p) for p in pages}
+        if time.monotonic() >= end:
+            break
         fast_buy.open_buy_link(code, amount)
         opens += 1
-        if tick is not None and opens % 10 == 0:
+        if tick is not None:
             tick(opens)
-        if opens > 1 and (opens <= 5 or opens % 10 == 0):
-            print(f"第 {opens} 次打开购买页（{time.monotonic() - start:.1f}s）", flush=True)
+        print(f"第 {opens} 次打开购买页（{time.monotonic() - start:.1f}s）", flush=True)
         opened = time.monotonic()
-        while time.monotonic() - opened < wait:
+        last_reason = "新页面或业务内容未就绪"
+        while time.monotonic() < min(opened + wait, end):
             try:
                 root = dump()
             except Exception:
                 root = None
             if root is not None:
                 text = " ".join(fast_buy.label(n) for n in root.iter("node"))
-                if ("可用余额" in text and "同意协议下一步" in text
-                        and fast_buy.buy_page_shown(code)):
-                    return root
                 if ("我的头像" in text and "更多选项" in text
                         and protected_login_page()):
-                    # The buy link bounced to the login page: polling would
-                    # never show a form, and silence would hide the reason.
                     raise fast_buy.Stop("App 停在登录页，需要重新登录；本轮已停止，未提交。")
-                if any(e in text for e in FORM_ERRORS) and time.monotonic() - opened >= gap:
-                    if opens <= 5 or opens % 10 == 0:
-                        print(f"购买页报错，重开："
-                              f"{next(e for e in FORM_ERRORS if e in text)}", flush=True)
+                state = purchase_page.outcome(purchase_page.snapshot(), baseline, code, amount)
+                if time.monotonic() >= end:
                     break
+                if state == 'form' and "可用余额" in text and "同意协议下一步" in text:
+                    print("本次新购买页已加载，购买表单已就绪", flush=True)
+                    return root
+                if state in purchase_page.ERRORS and state in text:
+                    last_reason = f"新页面已加载：{state}"
+                    if time.monotonic() - opened >= gap:
+                        print(f"购买页报错，重开：{state}", flush=True)
+                        break
             time.sleep(0.08)
-        if time.monotonic() - start > deadline:
-            raise fast_buy.Stop(f"打开 {opens} 次，购买表单都没有出现。")
+        else:
+            print(f"本轮等待结束：{last_reason}", flush=True)
+    raise fast_buy.Stop(f"打开 {opens} 次，购买表单都没有出现；{last_reason}。")
 
 
 def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True,
-        form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None):
+        form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None,
+        prepared_form=None, product_quota=None, verify_form=None):
     """One purchase. `mark(name, monotonic_time)` is an optional read-only
     timing hook; it never changes the flow.
 
@@ -379,7 +387,9 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     note("forward", time.monotonic())
     # Pre-submit waits are generous: nothing is confirmed yet, and at 00:30
     # (flaky Wi-Fi, detail page idle 14 min) the form took over 4 s.
-    if direct:
+    if prepared_form is not None:
+        root = verify_form() if verify_form is not None else prepared_form
+    elif direct:
         root = open_form(code, amount,
                          deadline=form_deadline if form_deadline is not None else purchase_settings.load()['reopen_deadline'],
                          wait=form_wait if form_wait is not None else REOPEN_AFTER,
@@ -407,6 +417,13 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         time.sleep(0.30)
     note("verified", time.monotonic())
     shown_quota = quota_amount(root)
+    if product_quota is not None:
+        try:
+            shown_quota = Decimal(str(product_quota))
+            if not shown_quota.is_finite() or shown_quota < 0:
+                raise ValueError('Invalid product quota')
+        except Exception:
+            raise fast_buy.Stop("购买页原始额度无效，已停止，未提交。")
     if shown_quota is not None:
         print(f"购买页显示单笔可购买额度 {shown_quota} 元（本次 {amount} 元）", flush=True)
         if Decimal(amount) > shown_quota:

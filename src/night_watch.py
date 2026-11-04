@@ -35,6 +35,7 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,8 +47,8 @@ TASK = STATE / "task.json"
 LOG = STATE / "watch.log"
 PACKAGE = "cmb.pb"
 
-PREP_MINUTES = 15                    # cold start + login + detail page
-MIN_PREP_MINUTES = 5                 # shorter only for quick rehearsals
+PREP_MINUTES = 7                     # new watch default: cold start + login + gated page
+MIN_PREP_MINUTES = 1                 # CLI override; settings default is seven minutes
 FINAL_LEAD = timedelta(seconds=60)   # last page check, then hand off to run()
 OPEN_DELAY = timedelta(milliseconds=200)
 ARM_SLACK = timedelta(minutes=2)     # arm at least prep + 2 min before the sale
@@ -58,16 +59,17 @@ LOGIN_TRIES = 3                      # patterns actually sent; stays clear of lo
 LOGIN_CYCLES = 5                     # cold starts, including ones with no login page
 
 MODES = ("first_launch", "redemption")
-DEFAULT_WINDOW_MINUTES = 3           # redemption: keep reopening this long
+DEFAULT_WINDOW_MINUTES = 5           # redemption: keep reopening this long
 MAX_WINDOW_MINUTES = 60
-REDEEM_WAIT = 1.5    # one opened purchase page gets this long to show the form
-REDEEM_GAP = 0.95    # a sold-out page must be at least this old to be believed
+REDEEM_WAIT = 15.0   # allow slow navigation/business data; fresh errors retry sooner
+REDEEM_GAP = 0.95    # minimum interval after a confirmed fresh error
 
 import fast_buy
 import keychain_store
 import manage
 import notify
 import purchase_settings
+import query_gate
 import secure_input
 
 
@@ -132,7 +134,8 @@ def persist(task):
 def record_history(task):
     record = {k: task.get(k) for k in ("task_id", "armed_at", "code", "amount", "at",
               "mode", "window_minutes", "probes", "dry_run", "phase", "result",
-              "fired_at", "resumes")}
+              "fired_at", "resumes", "purchase_flow", "fire_at", "end_at",
+              "prep_minutes", "watch_settings")}
     record["ended_at"] = datetime.now().isoformat()
     with (STATE / "history.jsonl").open("a", encoding="utf-8") as out:
         out.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -246,12 +249,12 @@ def parse_target(value, now=None, prep_minutes=PREP_MINUTES, label="开售时间
         raise Abort("时间格式应为 YYYY-MM-DDTHH:MM:SS。")
     if when.tzinfo is not None:
         raise Abort("请使用本机本地时间，不要带时区。")
-    if not MIN_PREP_MINUTES <= prep_minutes <= PREP_MINUTES:
-        raise Abort(f"准备提前量只能是 {MIN_PREP_MINUTES}–{PREP_MINUTES} 分钟。")
+    if not 1 <= prep_minutes <= 60:
+        raise Abort("冷启动提前量必须为 1–60 分钟。")
     lead = when - (now or datetime.now())
     min_lead = timedelta(minutes=prep_minutes) + ARM_SLACK
     if lead < min_lead:
-        raise Abort(f"{label}至少要在 {min_lead.seconds // 60} 分钟之后，留给登录和打开详情页。")
+        raise Abort(f"{label}至少要在 {min_lead.seconds // 60} 分钟之后，留给登录和打开购买页。")
     if lead > MAX_LEAD:
         raise Abort(f"{label}不能超过 24 小时之后。")
     return when
@@ -287,11 +290,12 @@ def arm(args):
         return _arm(args)
 
 
-def arm_task(code, amount, at=None, dry_run=False, prep_minutes=15, now=False,
-             mode="first_launch", window_minutes=None, until=None):
+def arm_task(code, amount, at=None, dry_run=False, prep_minutes=None, now=False,
+             mode="first_launch", window_minutes=None, until=None, settings_revision=None):
     return arm(argparse.Namespace(code=code, amount=amount, at=at, dry_run=dry_run,
                                   prep_minutes=prep_minutes, now=now, mode=mode,
-                                  window_minutes=window_minutes, until=until))
+                                  window_minutes=window_minutes, until=until,
+                                  settings_revision=settings_revision))
 
 
 def _arm(args):
@@ -303,10 +307,15 @@ def _arm(args):
     mode = getattr(args, "mode", "first_launch") or "first_launch"
     if mode not in MODES:
         raise Abort("模式只能是 first_launch 或 redemption。")
-    retry_settings = purchase_settings.load()
+    retry_settings = purchase_settings.validate(purchase_settings.load())
+    expected_revision = getattr(args, 'settings_revision', None)
+    if expected_revision and expected_revision != purchase_settings.revision(retry_settings):
+        raise Abort('值守配置已变化，请重新打开布防表单核对当前配置。')
+    if args.prep_minutes is None:
+        args.prep_minutes = retry_settings['cold_start_minutes']
     amount = fast_buy.parse_amount(args.amount)
-    if not MIN_PREP_MINUTES <= args.prep_minutes <= PREP_MINUTES:
-        raise Abort("准备时间必须为 5–15 分钟。")
+    if not 1 <= args.prep_minutes <= 60:
+        raise Abort("冷启动提前量必须为 1–60 分钟。")
     if args.now:
         # Rehearsal: preparation starts at once (the sale is already inside
         # the prep window) and leaves ~2 min before the last-minute check.
@@ -314,12 +323,16 @@ def _arm(args):
     else:
         when = parse_target(args.at, prep_minutes=args.prep_minutes,
                             label="额度放出时间" if mode == "redemption" else "开售时间")
+    start, query_end = query_gate.schedule(when, mode, retry_settings)
     end = window = None
     if mode == "redemption":
-        end, window = parse_window(when, getattr(args, "until", None),
-                                   getattr(args, "window_minutes", None))
+        end, window = parse_window(start, getattr(args, "until", None),
+                                   (getattr(args, "window_minutes", None) if getattr(args, "window_minutes", None) is not None else retry_settings["irregular_window_minutes"]))
     elif getattr(args, "until", None) or getattr(args, "window_minutes", None):
-        raise Abort("只有赎回抢购模式可以设置结束时间或窗口。")
+        raise Abort("只有不定时抢购模式可以设置结束时间或窗口。")
+    retry_settings['cold_start_minutes'] = args.prep_minutes
+    if mode == 'redemption':
+        retry_settings['irregular_window_minutes'] = window
     keychain_store.load()   # validates credentials exist; values are not kept
     if not notify.configured():
         print("邮件未配置：通知只写日志，用 status 查看。")
@@ -332,7 +345,8 @@ def _arm(args):
 
     STATE.mkdir(parents=True, exist_ok=True)
     task = {"code": args.code, "amount": amount, "at": when.isoformat(),
-            "fire_at": (when + OPEN_DELAY).isoformat(), "dry_run": args.dry_run,
+            "fire_at": start.isoformat(), "dry_run": args.dry_run,
+            "purchase_flow": query_gate.FLOW, "watch_settings": retry_settings,
             "prep_minutes": args.prep_minutes, "version": 2, "mode": mode,
             "task_id": uuid.uuid4().hex, "generation": uuid.uuid4().hex,
             "armed_at": datetime.now().isoformat(timespec="microseconds"),
@@ -342,15 +356,17 @@ def _arm(args):
         task.update(end_at=end.isoformat(), window_minutes=window)
     else:
         task['form_deadline'] = retry_settings['reopen_deadline']
+        task['end_at'] = query_end.isoformat()
     save_task(task)
     spawn_watch(task)
     action = "演练（只到密码页，不提交）" if args.dry_run else "真实提交一次"
     if mode == "redemption":
-        print(f"已布防赎回抢购：{args.code} {amount} 元，{when:%m-%d %H:%M:%S} 起 "
+        print(f"已布防不定时抢购：{args.code} {amount} 元，{when:%m-%d %H:%M:%S} 起 "
               f"{window} 分钟窗口内反复打开购买页，有额度就{action}。招行 App 已关闭。")
     else:
         print(f"已布防：{args.code} {amount} 元，开售 {when:%m-%d %H:%M:%S}，"
-              f"{OPEN_DELAY.microseconds // 1000}ms 后进入购买页，{action}。招行 App 已关闭。")
+              f"{retry_settings['first_offset_ms']}ms 后开始查询，最多再重试 "
+              f"{retry_settings['first_max_retries']} 次，{action}。招行 App 已关闭。")
     print(f"日志：{LOG}")
     return task
 
@@ -387,7 +403,7 @@ def status(_args):
     running = alive(task.get("pid"))
     if task.get("mode") == "redemption":
         end = task.get("end_at", "")
-        print(f"任务：赎回抢购 {task['code']} {task['amount']} 元，"
+        print(f"任务：不定时抢购 {task['code']} {task['amount']} 元，"
               f"{task['at']} 起 {task.get('window_minutes', DEFAULT_WINDOW_MINUTES)} 分钟窗口"
               f"（结束 {end[11:19]}）{'（演练）' if task.get('dry_run') else ''}")
     else:
@@ -688,6 +704,8 @@ def prepare(task, strikes, done):
         else:
             login_fresh(task)
         done["login"] = True
+    if task.get("purchase_flow") == query_gate.FLOW:
+        return  # the gated purchase page is opened immediately after login
     # The purchase form now opens straight from the app link at sale time, so
     # the detail page is only a warm-up (session, network); never fail on it.
     try:
@@ -741,8 +759,8 @@ def redemption_fire(task, start):
     task["phase"] = "waiting"
     persist(task)
     window = max(1.0, (end - datetime.now()).total_seconds())
-    log(f"赎回抢购窗口开始：最多 {window:.0f} 秒内反复打开购买页")
-    alert("赎回抢购窗口开始",
+    log(f"不定时抢购窗口开始：最多 {window:.0f} 秒内反复打开购买页")
+    alert("不定时抢购窗口开始",
           f"{task['code']} {task['amount']} 元，最多 {window:.0f} 秒；有额度才提交。")
 
     def tick(opens):
@@ -770,7 +788,7 @@ def redemption_fire(task, start):
         else:
             task["result"] = f"窗口内没有买到：{exc}"
             persist(task)
-            alert("赎回抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。")
+            alert("不定时抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。")
         return
     task["phase"] = "done"
     if task.get("dry_run"):
@@ -785,6 +803,55 @@ def redemption_fire(task, start):
         alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。")
     else:
         alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。")
+
+
+def gated_fire(task):
+    """Open once before release; persist the firing marker only after checks."""
+    import fast_buy_uia2
+
+    def heartbeat(attempts):
+        previous = task.get('probes', 0)
+        task['last_tick'] = datetime.now().isoformat()
+        task['probes'] = attempts
+        persist(task)
+        if previous != attempts:
+            log(f"queryBuy 累计查询 {attempts} 次")
+
+    def prepared():
+        task['phase'] = 'waiting'
+        persist(task)
+        # SMTP can block for 20 seconds; never let it expire the page lease.
+        threading.Thread(target=alert, args=(
+            '购买页已就绪，queryBuy 已挂起',
+            f"首个查询计划时间：{task['fire_at']}；等待期间不发查询。"), daemon=True).start()
+
+    def before_submit():
+        task['phase'] = 'firing'
+        task['fired_at'] = datetime.now().isoformat()
+        persist(task)
+        log('本次购买表单已校验，进入单次购买流程')
+
+    try:
+        root, quota = query_gate.run(task, heartbeat, prepared)
+        result = fast_buy_uia2.run(task['code'], task['amount'],
+                                  dry_run=task.get('dry_run', False),
+                                  prepared_form=root, product_quota=quota,
+                                  verify_form=lambda: query_gate.verify_prepared(task),
+                                  before_submit=None if task.get('dry_run') else before_submit)
+        task['phase'] = 'done'
+        task['result'] = '演练完成' if task.get('dry_run') else (result or '结果未知')
+        persist(task)
+        if task.get('dry_run'):
+            fast_buy_uia2.close_password_panel()
+        alert(task['result'], '以银行交易记录为准；不要重复提交。' if task.get('fired_at')
+              else '未输入密码、未提交。')
+    except Exception as exc:
+        task['phase'] = 'done'
+        task['result'] = (f'结果未知：{exc}' if task.get('fired_at') else f'未提交：{exc}')
+        persist(task)
+        alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'])
+    finally:
+        query_gate.finish(task)
 
 
 def sleep_until(when, step, task=None):
@@ -809,11 +876,11 @@ def run(_args):
         return
     sale = datetime.fromisoformat(task["at"])
     fire_at = datetime.fromisoformat(task["fire_at"])
-    prep_lead = timedelta(minutes=task.get("prep_minutes", PREP_MINUTES))
+    prep_lead = timedelta(minutes=task.get("prep_minutes", PREP_MINUTES if task.get("purchase_flow") else 15))
     strikes = [0]
     action = "演练" if task.get("dry_run") else "真实提交一次"
     if task.get("mode") == "redemption":
-        alert(f"赎回抢购已开始：{task['code']} {task['amount']} 元，"
+        alert(f"不定时抢购已开始：{task['code']} {task['amount']} 元，"
               f"{sale:%m-%d %H:%M:%S} 起 {task.get('window_minutes', DEFAULT_WINDOW_MINUTES)} "
               f"分钟窗口（{action}）")
     else:
@@ -838,7 +905,8 @@ def run(_args):
         persist(task)
         last = None
         done = {}
-        while datetime.now() < sale - FINAL_LEAD:
+        prepare_until = fire_at - timedelta(seconds=2) if task.get('purchase_flow') == query_gate.FLOW else sale - FINAL_LEAD
+        while datetime.now() < prepare_until:
             task["last_tick"] = datetime.now().isoformat()
             persist(task)
             try:
@@ -852,6 +920,9 @@ def run(_args):
                 time.sleep(20)
         else:
             raise Abort(f"准备阶段一直没有成功：{last}")
+        if task.get('purchase_flow') == query_gate.FLOW:
+            gated_fire(task)
+            return
         if task.get("mode") == "redemption":
             alert("准备完成：已登录", f"{task['code']}，{sale:%H:%M:%S} 开始反复打开购买页。")
         else:
@@ -883,18 +954,19 @@ def main():
     p.add_argument("--code", required=True)
     p.add_argument("--amount", required=True)
     when = p.add_mutually_exclusive_group(required=True)
-    when.add_argument("--at", help="开售时间（首发）或额度放出时间（赎回抢购）"
+    when.add_argument("--at", help="开售时间（首发）或额度放出时间（不定时抢购）"
                                   "YYYY-MM-DDTHH:MM:SS（本机时间）")
     when.add_argument("--now", action="store_true",
                       help=f"排练：立即冷启动登录，{NOW_LEAD.seconds // 60} 分钟后开售/开始窗口")
     p.add_argument("--dry-run", action="store_true", help="演练：只到密码页，不输密码、不提交")
-    p.add_argument("--prep-minutes", type=int, default=PREP_MINUTES,
-                   help=f"开始前几分钟冷启动登录（{MIN_PREP_MINUTES}–{PREP_MINUTES}，默认 {PREP_MINUTES}）")
+    p.add_argument("--settings-revision", help=argparse.SUPPRESS)
+    p.add_argument("--prep-minutes", type=int,
+                   help="开始前几分钟冷启动登录（1–60，默认使用设置，初始 7 分钟）")
     p.add_argument("--mode", choices=MODES, default="first_launch",
-                   help="first_launch 首发（默认）或 redemption 赎回抢购")
+                   help="first_launch 首发（默认）或 redemption 不定时抢购")
     p.add_argument("--window-minutes", type=int,
-                   help=f"赎回抢购窗口分钟数（默认 {DEFAULT_WINDOW_MINUTES}，最长 {MAX_WINDOW_MINUTES}）")
-    p.add_argument("--until", help="赎回抢购结束时间 YYYY-MM-DDTHH:MM:SS，优先于 --window-minutes")
+                   help=f"不定时抢购窗口分钟数（默认 {DEFAULT_WINDOW_MINUTES}，最长 {MAX_WINDOW_MINUTES}）")
+    p.add_argument("--until", help="不定时抢购结束时间 YYYY-MM-DDTHH:MM:SS，优先于 --window-minutes")
     sub.add_parser("status")
     sub.add_parser("disarm")
     worker = sub.add_parser("run", help="由 arm 在后台启动，不要手动运行")

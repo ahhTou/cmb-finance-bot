@@ -135,8 +135,8 @@ def parser():
     cancel.add_argument('--list', action='store_true')
     cancel.add_argument('--yes', action='store_true')
     settings = sub.add_parser('settings')
-    settings.add_argument('--reopen-deadline', type=int)
-    settings.add_argument('--drill-form-deadline', type=int)
+    for key in purchase_settings.DEFAULTS:
+        settings.add_argument('--' + key.replace('_', '-'), type=int)
     buy = sub.add_parser('buy')
     buy.add_argument('--code', required=True)
     buy.add_argument('--amount', required=True)
@@ -153,7 +153,8 @@ def parser():
     when.add_argument('--now', action='store_true')
     arm.add_argument('--dry-run', action='store_true')
     arm.add_argument('--confirm-real-payment', action='store_true')
-    arm.add_argument('--prep-minutes', type=int, default=15)
+    arm.add_argument('--prep-minutes', type=int)
+    arm.add_argument('--settings-revision')
     arm.add_argument('--mode', choices=nw.MODES, default='first_launch')
     arm.add_argument('--window-minutes', type=int)
     arm.add_argument('--until')
@@ -176,7 +177,7 @@ def dispatch(a):
             values = purchase_settings.load()
             if updates:
                 values = purchase_settings.save(dict(values, **updates))
-        return {'settings': values}
+        return {'settings': values, 'settings_revision': purchase_settings.revision(values)}
     if a.cmd == 'status': return status()
     if a.cmd == 'device': return device()
     if a.cmd == 'system': return system()
@@ -203,7 +204,8 @@ def dispatch(a):
         if a.now and not a.dry_run and not a.confirm_real_payment:
             raise nw.Abort('立即真实布防必须明确确认实际付款。')
         return {'task': nw.arm_task(a.code, a.amount, a.at, a.dry_run, a.prep_minutes, a.now,
-                                    mode=a.mode, window_minutes=a.window_minutes, until=a.until)}
+                                    mode=a.mode, window_minutes=a.window_minutes, until=a.until,
+                                    settings_revision=a.settings_revision)}
     if a.cmd == 'disarm': return {'task': nw.disarm_task()}
     if a.cmd == 'resume':
         return {'task': nw.resume_task(a.reason, 'agent:' + a.session if a.session else 'user',

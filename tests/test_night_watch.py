@@ -38,7 +38,7 @@ class NightWatchTest(unittest.TestCase):
         with self.assertRaises(nw.Abort):
             nw.parse_target("09:00:00", now)
         with self.assertRaises(nw.Abort):
-            nw.parse_target("2026-11-02T23:15:00", now)   # inside the 17 min lead
+            nw.parse_target("2026-11-02T23:08:00", now)   # inside the default 9 min lead
         with self.assertRaises(nw.Abort):
             nw.parse_target("2026-11-04T09:00:00", now)
         self.assertEqual(nw.parse_target("2026-11-03T09:00:00", now),
@@ -52,7 +52,7 @@ class NightWatchTest(unittest.TestCase):
         with self.assertRaises(nw.Abort):
             nw.parse_target("2026-11-02T23:06:59", now, prep_minutes=5)
         with self.assertRaises(nw.Abort):
-            nw.parse_target("2026-11-02T23:30:00", now, prep_minutes=4)
+            nw.parse_target("2026-11-02T23:30:00", now, prep_minutes=0)
 
     def test_fire_marks_firing_before_submitting(self):
         seen = []

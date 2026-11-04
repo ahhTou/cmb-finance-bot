@@ -35,12 +35,23 @@ class OpenFormTest(unittest.TestCase):
     def run_open(self, screens, shown=lambda code: True, **opts):
         clock = Clock()
         screens = iter(screens)
+        current = [BLANK]
+        def read_screen():
+            current[0] = next(screens)
+            return current[0]
+        def state(*args):
+            if not shown('133045A'):
+                return ''
+            text = ' '.join(fb.label(n) for n in current[0].iter('node'))
+            return next((e for e in fu.purchase_page.ERRORS if e in text),
+                        'form' if '可用余额' in text else '')
         with patch.object(fu.time, "monotonic", clock.monotonic), \
              patch.object(fu.time, "sleep", clock.sleep), \
              patch.object(fb, "open_buy_link") as opener, \
-             patch.object(fb, "buy_page_shown", side_effect=shown), \
+             patch.object(fu.purchase_page, "snapshot", return_value=[]), \
+             patch.object(fu.purchase_page, "outcome", side_effect=state), \
              patch.object(fb, "js_prefill_and_buy") as gobuy, \
-             patch.object(fu, "dump", side_effect=lambda: next(screens)), \
+             patch.object(fu, "dump", side_effect=read_screen), \
              patch("builtins.print"):
             try:
                 return fu.open_form("133045A", "0.01", **opts), opener, gobuy, clock
@@ -68,7 +79,7 @@ class OpenFormTest(unittest.TestCase):
     def test_gives_up_after_deadline(self):
         exc, opener, _, clock = self.run_open([BLANK] * 100000)
         self.assertIsInstance(exc, fb.Stop)
-        self.assertGreater(clock.now, fu.REOPEN_DEADLINE)
+        self.assertGreaterEqual(clock.now, fu.REOPEN_DEADLINE)
         self.assertLessEqual(opener.call_count, fu.REOPEN_DEADLINE / fu.REOPEN_AFTER + 2)
 
     def test_other_products_form_is_not_accepted(self):
@@ -83,7 +94,7 @@ class OpenFormTest(unittest.TestCase):
         exc, opener, _, clock = self.run_open([BLANK] * 100000, deadline=5.0,
                                               wait=1.5, gap=0.95)
         self.assertIsInstance(exc, fb.Stop)
-        self.assertGreater(clock.now, 5.0)
+        self.assertGreaterEqual(clock.now, 5.0)
         self.assertLess(clock.now, 7.0)
         self.assertLessEqual(opener.call_count, 5)
 

@@ -4,19 +4,29 @@ enum ArmMode: String {
     case firstLaunch = "first_launch"
     case redemption = "redemption"
 
-    var title: String { self == .redemption ? "赎回抢购" : "首发" }
+    var title: String { self == .redemption ? "不定时抢购" : "首发" }
     var blurb: String {
         self == .redemption
-            ? "赎回抢购模式 · 有额度才提交，一笔只提交一次"
+            ? "不定时抢购模式 · 有额度才提交，一笔只提交一次"
             : "首发模式 · 一笔只提交一次"
     }
 }
 
+private let quotaTimes = ["00:15", "09:00", "09:15", "10:15", "11:15"]
+
+private func nextQuotaDate(_ time: String, after earliest: Date = Date().addingTimeInterval(9 * 60)) -> Date {
+    let parts = time.split(separator: ":").compactMap { Int($0) }
+    return Calendar.current.nextDate(after: earliest,
+        matching: DateComponents(hour: parts[0], minute: parts[1], second: 0),
+        matchingPolicy: .nextTime) ?? earliest
+}
+
 private func armDefaultDate(_ mode: ArmMode) -> Date {
+    if mode == .redemption {
+        return quotaTimes.map { nextQuotaDate($0) }.min() ?? Date()
+    }
     let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-    let hour = mode == .redemption ? 0 : 9
-    let minute = mode == .redemption ? 15 : 0
-    return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
+    return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
 }
 
 struct ArmSheet: View {
@@ -28,20 +38,25 @@ struct ArmSheet: View {
     @State private var code = ""
     @State private var amount = ""
     @State private var date: Date
-    @State private var prep = 15
-    @State private var window = 3
+    @State private var timeChoice: String
+    @State private var settings: [String: Int] = [:]
+    @State private var settingsLoaded = false
+    @State private var settingsRevision = ""
     @State private var dry = false
     @State private var now = false
     @State private var confirm = false
     @State private var confirmAmount = ""
-    @State private var error: String?
     @State private var step: String?
     @State private var working = false
 
     init(drill: Bool = false, mode: ArmMode = .firstLaunch) {
         self.drillOnly = drill
         self.mode = mode
-        _date = State(initialValue: armDefaultDate(mode))
+        let initialDate = armDefaultDate(mode)
+        _date = State(initialValue: initialDate)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        _timeChoice = State(initialValue: formatter.string(from: initialDate))
         _dry = State(initialValue: drill)
         _now = State(initialValue: drill)
     }
@@ -51,7 +66,7 @@ struct ArmSheet: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(confirm ? "确认布防"
-                         : (drillOnly ? "演练布防" : "新建\(mode == .redemption ? "赎回抢购" : "")布防"))
+                         : (drillOnly ? "演练布防" : "新建\(mode == .redemption ? "不定时抢购" : "")布防"))
                         .font(.system(size: 20, weight: .semibold))
                     Text(confirm ? "最后核对一次" : mode.blurb)
                         .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
@@ -60,12 +75,31 @@ struct ArmSheet: View {
                 Button("关闭") { dismiss() }.disabled(m.busy || working)
             }
             if confirm { confirmation } else { form }
+            if let message = m.message {
+                Text(message).font(.system(size: 11)).foregroundStyle(AppPalette.accent)
+            }
         }
         .padding(28)
         .frame(width: 520)
         .background(AppPalette.background)
         .buttonStyle(CardButtonStyle())
         .preferredColorScheme(.dark)
+        .task(id: m.root) {
+            settingsLoaded = false
+            do {
+                let result = try await m.backend.run(["settings"])
+                settings = dictValue(result["settings"]).reduce(into: [:]) { values, entry in
+                    if let number = entry.value as? NSNumber { values[entry.key] = number.intValue }
+                }
+                if mode == .redemption {
+                    date = quotaTimes.map { nextQuotaDate($0, after: Date().addingTimeInterval(Double(prep + 2) * 60)) }.min() ?? date
+                    let formatter = DateFormatter(); formatter.dateFormat = "HH:mm"
+                    timeChoice = formatter.string(from: date)
+                }
+                settingsRevision = result["settings_revision"] as? String ?? ""
+                settingsLoaded = !settingsRevision.isEmpty
+            } catch { m.message = error.localizedDescription }
+        }
         .onChange(of: dry) { value in
             if !value && !drillOnly { now = false }
         }
@@ -77,23 +111,38 @@ struct ArmSheet: View {
                 field("产品代码", $code, "如 JX040229")
                 field("购买金额", $amount, "上限 50000 元")
             }
-            DatePicker(mode == .redemption ? "额度放出时间" : "开售时间",
-                       selection: $date, displayedComponents: [.date, .hourAndMinute])
-                .disabled(now)
-            HStack {
-                Stepper("提前 \(prep) 分钟准备", value: $prep, in: 5...15)
-                Spacer()
-                if mode == .redemption {
-                    Stepper("窗口 \(window) 分钟", value: $window, in: 1...60)
-                } else {
-                    Text("200ms 由脚本自动加").font(.system(size: 11)).foregroundStyle(AppPalette.muted)
-                }
-            }
             if mode == .redemption {
-                HStack(spacing: 7) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("窗口内反复打开购买页；出现购买表单才提交，没有额度不提交")
-                }.font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+                HStack {
+                    Picker("开始盯盘时间", selection: $timeChoice) {
+                        ForEach(quotaTimes, id: \.self) { Text($0).tag($0) }
+                        Text("自定义").tag("custom")
+                    }
+                    .onChange(of: timeChoice) { value in
+                        if value != "custom" {
+                            date = nextQuotaDate(value, after: Date().addingTimeInterval(Double(prep + 2) * 60))
+                        }
+                    }
+                    if timeChoice == "custom" {
+                        DatePicker("自定义时间", selection: $date,
+                                   displayedComponents: [.date, .hourAndMinute])
+                            .labelsHidden()
+                    } else {
+                        Text(date.formatted(date: .abbreviated, time: .omitted))
+                            .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+                    }
+                }
+                .disabled(now)
+                Text("每天这些时间左右可能放出额度，不保证准时；其他日期和时间请选择自定义。")
+                    .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
+            } else {
+                DatePicker("开售时间", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    .disabled(now)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text("当前配置").font(.caption).foregroundStyle(AppPalette.muted)
+                Text(settingsLoaded ? configuration : "正在读取设置…")
+                    .font(.system(size: 12)).foregroundStyle(AppPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if drillOnly {
                 Toggle("实际付款：输入交易密码并提交", isOn: Binding(
@@ -107,9 +156,6 @@ struct ArmSheet: View {
             Toggle(drillOnly ? "立即开始（约三分钟后购买）" : "立即排练", isOn: $now)
                 .disabled(!dry && !drillOnly)
             if m.busy || working { busyLine }
-            if let error {
-                Text(error).font(.system(size: 11)).foregroundStyle(AppPalette.accent)
-            }
             HStack(spacing: 10) {
                 Spacer()
                 Button("取消") { dismiss() }.disabled(m.busy || working)
@@ -119,10 +165,10 @@ struct ArmSheet: View {
                         confirm = true
                         return
                     }
-                    error = problem
+                    m.message = problem
                 }
                 .buttonStyle(CardButtonStyle(primary: true))
-                .disabled(m.busy)
+                .disabled(m.busy || !settingsLoaded)
             }
         }
     }
@@ -141,12 +187,9 @@ struct ArmSheet: View {
             Text("一笔只提交一次；结果以银行交易记录为准。提交后不再重试。")
                 .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
             if m.busy || working { busyLine }
-            if let error {
-                Text(error).font(.system(size: 11)).foregroundStyle(AppPalette.accent)
-            }
             HStack(spacing: 10) {
                 Spacer()
-                Button("返回") { confirm = false; error = nil }
+                Button("返回") { confirm = false; m.message = nil }
                 Button { submit() } label: {
                     HStack(spacing: 7) {
                         if m.busy || working { ProgressView().controlSize(.small) }
@@ -159,14 +202,26 @@ struct ArmSheet: View {
         }
     }
 
+    private var prep: Int { settings["cold_start_minutes"] ?? 7 }
+    private var window: Int { settings["irregular_window_minutes"] ?? 5 }
+    private var configuration: String {
+        let common = "提前 \(prep) 分钟冷启动，登录后进入购买页等待。"
+        if mode == .redemption {
+            return common + "首次查询提前 \(settings["irregular_advance_ms"] ?? 200) ms；"
+                + "无额度后间隔 \(settings["irregular_retry_min_ms"] ?? 50)–\(settings["irregular_retry_max_ms"] ?? 250) ms，最长 \(window) 分钟。"
+        }
+        return common + "首次查询延后 \(settings["first_offset_ms"] ?? 200) ms；"
+            + "无额度后最多再重试 \(settings["first_max_retries"] ?? 5) 次。"
+    }
+
     private var summary: String {
         let when = now ? "约三分钟后" : date.formatted(date: .abbreviated, time: .shortened)
         let action = dry ? "演练到密码页" : "提交一次"
         if mode == .redemption {
             return "产品 \(code.trimmingCharacters(in: .whitespaces))，\(when) 起 \(window) 分钟"
-                + "窗口内反复打开购买页，有额度就\(action) \(amount) 元。"
+                + "窗口内在同一购买页查询，有额度就\(action) \(amount) 元。\n\(configuration)"
         }
-        return "产品 \(code.trimmingCharacters(in: .whitespaces))，\(when) \(action) \(amount) 元。"
+        return "产品 \(code.trimmingCharacters(in: .whitespaces))，\(when) \(action) \(amount) 元。\n\(configuration)"
     }
 
     private var busyLine: some View {
@@ -188,7 +243,6 @@ struct ArmSheet: View {
     private var formProblem: String? {
         if !validCode(code.trimmingCharacters(in: .whitespaces)) { return "产品代码须为 4–20 位字母或数字。" }
         if !validAmount(amount) { return "金额须为 0–50000 元，最多两位小数。" }
-        if mode == .redemption && !(1...60).contains(window) { return "窗口须为 1–60 分钟。" }
         if now && !dry && !drillOnly { return "立即排练只能使用演练。" }
         if !now && date <= Date().addingTimeInterval(Double(prep + 2) * 60) {
             return "\(mode == .redemption ? "额度放出时间" : "开售时间")至少要在 \(prep + 2) 分钟之后。"
@@ -198,17 +252,17 @@ struct ArmSheet: View {
 
     private func submit() {
         if let problem = formProblem {
-            error = problem
+            m.message = problem
             confirm = false
             return
         }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         var args = ["arm", "--code", code.trimmingCharacters(in: .whitespaces),
-                    "--amount", amount, "--prep-minutes", String(prep)]
+                    "--amount", amount, "--settings-revision", settingsRevision]
         args += now ? ["--now"] : ["--at", formatter.string(from: date)]
         if mode == .redemption {
-            args += ["--mode", "redemption", "--window-minutes", String(window)]
+            args += ["--mode", "redemption"]
         }
         if dry { args.append("--dry-run") }
         if now && !dry { args.append("--confirm-real-payment") }
@@ -231,7 +285,7 @@ struct ArmSheet: View {
                 ok = await m.action(args, label: label)
             } else {
                 step = nil
-                error = m.message ?? "模拟器启动失败。"
+                m.message = m.message ?? "模拟器启动失败。"
                 return
             }
         }
@@ -239,7 +293,7 @@ struct ArmSheet: View {
         if ok {
             dismiss()
         } else {
-            error = m.message ?? "操作未完成，请稍后重试。"
+            m.message = m.message ?? "操作未完成，请稍后重试。"
         }
     }
 }

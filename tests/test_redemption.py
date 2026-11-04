@@ -63,17 +63,17 @@ class RedemptionTest(unittest.TestCase):
 
     # ---- arming
 
-    def test_redemption_defaults_to_three_minutes(self):
+    def test_redemption_defaults_to_five_minutes(self):
         task, start = self.arm()
         self.assertEqual(task["mode"], "redemption")
-        self.assertEqual(task["window_minutes"], 3)
-        self.assertEqual(datetime.fromisoformat(task["end_at"]), start + timedelta(minutes=3))
-        self.assertEqual(datetime.fromisoformat(task["fire_at"]), start + nw.OPEN_DELAY)
+        self.assertEqual(task["window_minutes"], 5)
+        self.assertEqual(datetime.fromisoformat(task["end_at"]), start - nw.OPEN_DELAY + timedelta(minutes=5))
+        self.assertEqual(datetime.fromisoformat(task["fire_at"]), start - nw.OPEN_DELAY)
 
     def test_redemption_window_and_until(self):
         task, start = self.arm(window_minutes=7)
         self.assertEqual(task["window_minutes"], 7)
-        self.assertEqual(datetime.fromisoformat(task["end_at"]), start + timedelta(minutes=7))
+        self.assertEqual(datetime.fromisoformat(task["end_at"]), start - nw.OPEN_DELAY + timedelta(minutes=7))
         # --until wins over --window-minutes
         task, _ = self.arm(window_minutes=7, until=iso(start + timedelta(minutes=2)))
         self.assertEqual(task["window_minutes"], 2)
@@ -100,7 +100,8 @@ class RedemptionTest(unittest.TestCase):
     def test_first_launch_task_keeps_no_window(self):
         with patch.object(nw.purchase_settings, 'load', return_value={'reopen_deadline': 125}):
             task, _ = self.arm(mode="first_launch")
-        self.assertNotIn("end_at", task)
+        self.assertIn("end_at", task)
+        self.assertEqual(task["purchase_flow"], nw.query_gate.FLOW)
         self.assertEqual(task["mode"], "first_launch")
         self.assertEqual(task['form_deadline'], 125)
 
@@ -111,6 +112,55 @@ class RedemptionTest(unittest.TestCase):
              patch.object(nw.purchase_settings, 'load', return_value={'reopen_deadline': 5}):
             nw.fire(task, self.now)
         self.assertEqual(run.call_args.kwargs['form_deadline'], 125)
+
+    def test_new_watch_snapshots_settings_and_default_prep(self):
+        values = nw.purchase_settings.validate({'cold_start_minutes': 9, 'first_max_retries': 2})
+        with patch.object(nw.purchase_settings, 'load', return_value=values):
+            task, _ = self.arm(mode='first_launch', prep_minutes=None)
+        self.assertEqual(task['prep_minutes'], 9)
+        self.assertEqual(task['watch_settings']['first_max_retries'], 2)
+        values['first_max_retries'] = 99
+        self.assertEqual(nw.load_task()['watch_settings']['first_max_retries'], 2)
+
+    def test_stale_ui_configuration_is_rejected_before_credentials_or_arming(self):
+        with patch.object(nw.keychain_store, 'load') as credentials:
+            with self.assertRaisesRegex(nw.Abort, '配置已变化'):
+                self.arm(settings_revision='stale')
+            credentials.assert_not_called()
+
+    def test_gated_flow_marks_only_after_native_checks(self):
+        task = self.task(purchase_flow=nw.query_gate.FLOW)
+        root = object()
+        def waiting(task, heartbeat, prepared):
+            prepared()
+            heartbeat(6)
+            self.assertEqual(nw.load_task()['phase'], 'waiting')
+            self.assertNotIn('fired_at', nw.load_task())
+            return root, '3000'
+        def purchase(*args, **kwargs):
+            self.assertIs(kwargs['prepared_form'], root)
+            self.assertEqual(kwargs['product_quota'], '3000')
+            self.assertEqual(nw.load_task()['phase'], 'waiting')
+            kwargs['before_submit']()
+            self.assertEqual(nw.load_task()['phase'], 'firing')
+            return '提交成功'
+        with patch.object(nw.query_gate, 'run', side_effect=waiting), \
+             patch.object(nw.query_gate, 'finish'), \
+             patch.dict(sys.modules, {'fast_buy_uia2': self.fake(purchase)}):
+            nw.gated_fire(task)
+        self.assertEqual(nw.load_task()['result'], '提交成功')
+        self.assertEqual(nw.load_task()['probes'], 6)
+
+    def test_gated_query_failure_never_enters_purchase(self):
+        task = self.task(purchase_flow=nw.query_gate.FLOW)
+        purchase = MagicMock()
+        with patch.object(nw.query_gate, 'run', side_effect=RuntimeError('no quota')), \
+             patch.object(nw.query_gate, 'finish'), \
+             patch.dict(sys.modules, {'fast_buy_uia2': self.fake(purchase)}):
+            nw.gated_fire(task)
+        purchase.assert_not_called()
+        self.assertNotIn('fired_at', nw.load_task())
+        self.assertIn('未提交', nw.load_task()['result'])
 
     # ---- firing
 

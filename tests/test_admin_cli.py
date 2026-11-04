@@ -57,10 +57,10 @@ class AdminTest(unittest.TestCase):
 
     def test_retry_settings_persist_and_reject_invalid_updates(self):
         code, data = self.call('settings')
-        self.assertEqual(data['settings'], {'reopen_deadline': 60, 'drill_form_deadline': 10})
+        self.assertEqual(data['settings'], admin.purchase_settings.DEFAULTS)
         code, data = self.call('settings', '--reopen-deadline', '120', '--drill-form-deadline', '30')
         self.assertEqual(code, 0)
-        self.assertEqual(data['settings'], {'reopen_deadline': 120, 'drill_form_deadline': 30})
+        self.assertEqual(data['settings'], dict(admin.purchase_settings.DEFAULTS, reopen_deadline=120, drill_form_deadline=30))
         for value in ('0', '-1', '301', '1.5'):
             code, _ = self.call('settings', '--reopen-deadline', value)
             self.assertEqual(code, 1)
@@ -128,7 +128,7 @@ class AdminTest(unittest.TestCase):
                                    '--confirm-real-payment')
         self.assertEqual(code, 0)
         self.assertFalse(data['task']['dry_run'])
-        self.assertEqual(arm.call_args.args, ('TEST01', '100', None, False, 15, True))
+        self.assertEqual(arm.call_args.args, ('TEST01', '100', None, False, None, True))
 
     def test_immediate_dry_run_needs_no_payment_confirmation(self):
         with patch.object(nw, 'arm_task', return_value={'dry_run': True}) as arm:

@@ -1,18 +1,34 @@
-"""Non-secret purchase-page retry preferences shared by CLI and App."""
+"""Non-secret purchase preferences; watch tasks snapshot these at arming."""
 import json
 from pathlib import Path
 
 SETTINGS = Path(__file__).resolve().parents[1] / 'var/night/purchase-settings.json'
-DEFAULTS = {'reopen_deadline': 60, 'drill_form_deadline': 10}
+DEFAULTS = {
+    'reopen_deadline': 60, 'drill_form_deadline': 10,
+    'cold_start_minutes': 7,
+    'first_offset_ms': 200, 'first_max_retries': 5,
+    'irregular_advance_ms': 200, 'irregular_window_minutes': 5,
+    'irregular_retry_min_ms': 50, 'irregular_retry_max_ms': 250,
+}
+LIMITS = {
+    'reopen_deadline': (1, 300), 'drill_form_deadline': (1, 300),
+    'cold_start_minutes': (1, 60),
+    'first_offset_ms': (0, 10000), 'first_max_retries': (0, 100),
+    'irregular_advance_ms': (0, 10000), 'irregular_window_minutes': (1, 60),
+    'irregular_retry_min_ms': (1, 60000), 'irregular_retry_max_ms': (1, 60000),
+}
 
 
 def validate(values):
     if not isinstance(values, dict) or set(values) - DEFAULTS.keys():
-        raise RuntimeError('购买页重试设置格式无效。')
+        raise RuntimeError('购买设置格式无效。')
     result = dict(DEFAULTS, **values)
-    for value in result.values():
-        if type(value) is not int or not 1 <= value <= 300:
-            raise RuntimeError('购买页重试总时限必须为 1–300 秒的整数。')
+    for key, value in result.items():
+        lower, upper = LIMITS[key]
+        if type(value) is not int or not lower <= value <= upper:
+            raise RuntimeError(f'{key} 必须为 {lower}–{upper} 的整数。')
+    if result['irregular_retry_min_ms'] > result['irregular_retry_max_ms']:
+        raise RuntimeError('随机重试间隔 R1 不得大于 R2。')
     return result
 
 
@@ -27,3 +43,9 @@ def save(values):
     temp.write_text(json.dumps(result) + '\n')
     temp.replace(SETTINGS)
     return result
+
+
+def revision(values):
+    import hashlib
+    canonical = json.dumps(validate(values), sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode()).hexdigest()

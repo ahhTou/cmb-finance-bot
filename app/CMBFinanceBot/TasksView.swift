@@ -50,11 +50,11 @@ struct TasksView: View {
                 activeSummary(redemption: false)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("开售前自动冷启动并登录，开售后 200ms 直达购买页，只提交一次。")
+                    Text("按配置冷启动并登录，提前进入购买页等待；到点查询，有额度才提交一次。")
                         .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    feature("clock", "开售前 15 分钟冷启动并登录")
-                    feature("bolt.fill", "开售 +200ms 打开购买页")
+                    feature("clock", "冷启动提前量在设置中配置")
+                    feature("bolt.fill", "默认开售 +200ms 首次查询，最多再重试 5 次")
                     feature("checkmark.shield", "只提交一次，失败不重试")
                     if !m.task.isEmpty && taskMode != "redemption" {
                         Text("上次任务已结束 · \(phaseName(m.phase))")
@@ -76,11 +76,11 @@ struct TasksView: View {
         }
     }
 
-    // MARK: 赎回抢购
+    // MARK: 不定时抢购
 
     private var redemption: some View {
         ModeCard(icon: "clock.arrow.circlepath", tint: Color(red: 0.72, green: 0.45, blue: 0.95),
-                 title: "赎回抢购模式", subtitle: "额度放出后，刷新到有额度就买",
+                 title: "不定时抢购模式", subtitle: "常用时间盯盘，有额度就买",
                  badge: Badge(text: redemptionActive ? phaseName(m.phase)
                                        : (m.active ? "其他值守中" : "可用"),
                               color: redemptionActive ? phaseColor(m.phase)
@@ -89,11 +89,11 @@ struct TasksView: View {
                 activeSummary(redemption: true)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("到点后反复打开购买页，页面出现购买表单说明有额度，立即买入；一直报错就不提交。")
+                    Text("登录后进入购买页等待，按配置时间开始查询；无额度时在同页重试，有额度才进入购买。")
                         .font(.system(size: 11)).foregroundStyle(AppPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    feature("clock", "默认 00:15 开始，提前 15 分钟登录")
-                    feature("arrow.triangle.2.circlepath", "窗口内反复打开购买页")
+                    feature("clock", "00:15 / 09:00 / 09:15 / 10:15 / 11:15，支持自定义")
+                    feature("arrow.triangle.2.circlepath", "同一购买页等待与查询")
                     feature("checkmark.shield", "有额度才提交，只提交一次")
                     if !m.task.isEmpty && taskMode == "redemption" {
                         Text("上次任务已结束 · \(phaseName(m.phase))")
@@ -131,7 +131,7 @@ struct TasksView: View {
                 Metric("图案输入", "\(stringValue(m.task["patterns_sent"]) ?? "0") 次")
             }
             if m.phase == "waiting" {
-                Text("窗口内反复打开购买页；还没有提交。")
+                Text("同一购买页等待与查询；还没有提交。")
                     .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
             }
             if m.phase == "firing" && !m.running {
