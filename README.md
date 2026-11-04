@@ -161,6 +161,27 @@ open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
 
 启动或双击 App 会打开常驻管理窗口，显示 Dock 图标，不显示菜单栏状态图标。点红色关闭按钮或按 Cmd-W 只关闭窗口，App 继续运行；点击 Dock 图标可重新打开。Dock 菜单“退出”或 Cmd-Q 才真正结束 App，不再二次确认。窗口顶部空白处可拖动，左上角可关闭、最小化或缩放；窗口大小和当前页会记住。退出 App 不会取消独立运行的值守。
 
+### Web 前端版（`web-frontend` 分支，迁移中）
+
+同一个管理 App 的 Web 前端版：Tauri 2 壳 + Vite / React / TypeScript，界面和行为对齐上面的原生版。后端是 `src/admin_server.py`，一个只监听 127.0.0.1、需要 token 的本地 HTTP 服务；每个请求仍然在子进程里跑 `src/admin_cli.py`，所以锁、检查和报错文案都和原生版一致。值守进程独立运行，关掉 App 或后端都不影响它。
+
+```sh
+# 一次性：后端依赖装在项目 .venv（已被 Git 忽略）
+/usr/bin/python3 -m venv .venv && .venv/bin/pip install -r requirements-server.txt
+cd desktop && pnpm install
+
+pnpm dev:mock   # 只开前端 + 假后端（MSW），浏览器打开 http://localhost:5173 调界面，不碰真实环境
+                # 场景：?scenario=idle|armed|redemption|firing|empty|error，例如 /?scenario=armed#/tasks
+pnpm server     # 另一个终端：真实后端（开发用，固定 8765 端口，token 写到 var/admin-server.json）
+pnpm dev        # 前端连真实后端，Vite 代理自动带 token
+pnpm tauri dev  # 桌面窗口，自己在随机端口拉起后端
+pnpm tauri build  # 产出 desktop/src-tauri/target/release/bundle/macos/招行理财值守.app
+```
+
+检查：`pnpm check`（Biome）、`pnpm test`（Vitest）、`pnpm e2e`（Playwright，在 WebKit 和 Chromium 上跑假后端）、`.venv/bin/python -m unittest tests.test_admin_server`。后端接口改了以后运行 `pnpm api:types`，从 OpenAPI 重新生成前端请求类型。
+
+桌面版的项目目录和 Python 路径在「设置 → 项目设置」里改，保存后重启后端；配置存在 `~/Library/Application Support/local.cmb-finance-bot.desktop/backend.json`。后端日志在 `var/admin-server.log`。
+
 ### 界面
 
 截图来自本机 Release 构建，窗口 1093×763；「布防中」那张用演练布防（`dry_run`）演示态，产品代码为测试专用代码。
