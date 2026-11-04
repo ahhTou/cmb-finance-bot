@@ -20,7 +20,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual((end-start).total_seconds(), 90)
         start, end = gate.schedule(when, 'redemption', {})
         self.assertEqual(start, when - timedelta(milliseconds=200))
-        self.assertEqual(end, start + timedelta(minutes=5))
+        self.assertEqual(end, start + timedelta(minutes=2))
 
     def test_settings_migration_and_invalid_bounds(self):
         migrated = settings.validate({'reopen_deadline': 90})

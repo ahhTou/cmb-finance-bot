@@ -102,7 +102,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
     if (settingsQuery.error) setMessage(settingsQuery.error.message)
   }, [settingsQuery.error, setMessage])
 
-  const window = settings.irregular_window_minutes ?? 5
+  const window = settings.irregular_window_minutes ?? 2
   const configuration =
     `提前 ${prep} 分钟冷启动，登录后进入购买页等待。` +
     (mode === 'redemption'

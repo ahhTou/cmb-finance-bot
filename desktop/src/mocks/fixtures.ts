@@ -159,7 +159,7 @@ export const SETTINGS = {
   first_offset_ms: 200,
   first_max_retries: 5,
   irregular_advance_ms: 200,
-  irregular_window_minutes: 5,
+  irregular_window_minutes: 2,
   irregular_retry_min_ms: 250,
   irregular_retry_max_ms: 400,
   irregular_burst_seconds: 15,

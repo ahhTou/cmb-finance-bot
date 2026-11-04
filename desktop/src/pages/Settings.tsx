@@ -101,7 +101,7 @@ const GROUPS: [string, [string, string, number, number, number][]][] = [
     '不定时抢购模式',
     [
       ['irregular_advance_ms', '首次查询提前（毫秒）', 200, 0, 10000],
-      ['irregular_window_minutes', '最长查询窗口（分钟）', 5, 1, 60],
+      ['irregular_window_minutes', '最长查询窗口（分钟）', 2, 1, 60],
       ['irregular_burst_seconds', '高频阶段时长（秒）', 15, 0, 3600],
       ['irregular_retry_min_ms', '高频间隔下限（毫秒）', 250, 1, 60000],
       ['irregular_retry_max_ms', '高频间隔上限（毫秒）', 400, 1, 60000],

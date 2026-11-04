@@ -60,7 +60,7 @@ LOGIN_TRIES = 3                      # patterns actually sent; stays clear of lo
 LOGIN_CYCLES = 5                     # cold starts, including ones with no login page
 
 MODES = ("first_launch", "redemption")
-DEFAULT_WINDOW_MINUTES = 5           # redemption: keep reopening this long
+DEFAULT_WINDOW_MINUTES = 2           # redemption: keep reopening this long
 MAX_WINDOW_MINUTES = 60
 REDEEM_WAIT = 15.0   # allow slow navigation/business data; fresh errors retry sooner
 REDEEM_GAP = 0.95    # minimum interval after a confirmed fresh error

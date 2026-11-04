@@ -7,7 +7,7 @@ DEFAULTS = {
     'reopen_deadline': 60, 'drill_form_deadline': 10,
     'cold_start_minutes': 7,
     'first_offset_ms': 200, 'first_max_retries': 5,
-    'irregular_advance_ms': 200, 'irregular_window_minutes': 5,
+    'irregular_advance_ms': 200, 'irregular_window_minutes': 2,
     # Redemption backoff, measured from the planned first query: a burst tier,
     # a linear ramp, a slow tier, then an idle tier until the window ends.
     'irregular_retry_min_ms': 250, 'irregular_retry_max_ms': 400,

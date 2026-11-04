@@ -63,11 +63,11 @@ class RedemptionTest(unittest.TestCase):
 
     # ---- arming
 
-    def test_redemption_defaults_to_five_minutes(self):
+    def test_redemption_defaults_to_two_minutes(self):
         task, start = self.arm()
         self.assertEqual(task["mode"], "redemption")
-        self.assertEqual(task["window_minutes"], 5)
-        self.assertEqual(datetime.fromisoformat(task["end_at"]), start - nw.OPEN_DELAY + timedelta(minutes=5))
+        self.assertEqual(task["window_minutes"], 2)
+        self.assertEqual(datetime.fromisoformat(task["end_at"]), start - nw.OPEN_DELAY + timedelta(minutes=2))
         self.assertEqual(datetime.fromisoformat(task["fire_at"]), start - nw.OPEN_DELAY)
 
     def test_redemption_window_and_until(self):
