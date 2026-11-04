@@ -172,7 +172,7 @@ class QuotaTest(unittest.TestCase):
                          patch.object(fb, 'ensure_forward'), \
                          patch.object(fu.purchase_settings, 'load', return_value={'reopen_deadline': 87}), \
                          patch.object(fu, 'open_form', return_value=root) as opener, \
-                         patch.object(fu, 'wait_risk_or_error', side_effect=fb.Stop('test boundary')), \
+                         patch.object(fu.risk_confirm, 'run', side_effect=fb.Stop('test boundary')), \
                          patch('builtins.print'):
                         with self.assertRaises(fb.Stop) as exc:
                             fu.run('TEST01', '3000', dry_run=dry_run, before_submit=marker)
@@ -184,7 +184,7 @@ class QuotaTest(unittest.TestCase):
                         d.assert_not_called()
                     else:
                         marker.assert_called_once()
-                        d.assert_called_once_with(text='同意协议下一步')
+                        d.assert_not_called()  # risk clicks are now handled by the original JS component
 
     def test_reads_single_order_quota(self):
         from decimal import Decimal

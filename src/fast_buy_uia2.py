@@ -29,6 +29,7 @@ import fast_buy
 import keychain_store
 import purchase_settings
 import purchase_page
+import risk_confirm
 from secure_input import center, has, screen_protected, send_commands
 
 DEVICE = None
@@ -364,10 +365,12 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         if mark is not None:
             mark(name, when)
 
-    credentials = keychain_store.load()
-    password = credentials.get("payment_password")
-    if not isinstance(password, str) or not re.fullmatch(r"[0-9]{6}", password):
-        raise fast_buy.Stop("钥匙串中没有有效的交易密码。")
+    password = None
+    if not dry_run:
+        credentials = keychain_store.load()
+        password = credentials.get("payment_password")
+        if not isinstance(password, str) or not re.fullmatch(r"[0-9]{6}", password):
+            raise fast_buy.Stop("钥匙串中没有有效的交易密码。")
 
     # Connect and warm the persistent server before the timed core.
     t = time.monotonic()
@@ -430,18 +433,11 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
             raise fast_buy.Stop("布防金额高于页面可购额度，已停止，未提交。")
     if before_submit is not None:
         before_submit()
-    d(text="同意协议下一步").click()
-    note("next", time.monotonic())
-    problem = wait_risk_or_error(STEP_WAIT)
-    if problem:
-        dismiss_dialog()
-        raise fast_buy.Stop(f"购买页拒绝：{problem}")
-    note("risk", time.monotonic())
-    d(text="一键输入").click()
-    note("fill", time.monotonic())
-    time.sleep(0.20)
-    d(text="确认").click()
-    note("confirm", time.monotonic())
+    try:
+        risk_confirm.run(code, amount, timeout=STEP_WAIT, mark=note)
+    except Exception:
+        close_password_panel()
+        raise
 
     root = wait_for(lambda r: has(r, "请输入取款密码") and has(r, "招商银行安全输入"),
                     timeout=STEP_WAIT, what="密码页")

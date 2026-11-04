@@ -147,7 +147,7 @@ struct DrillView: View {
                 commandRow("python3 -B src/cancel_orders.py --list")
                 commandRow("python3 -B src/fast_buy_uia2.py --code <代码> --amount <金额> --dry-run")
                 Spacer(minLength: 6)
-                Text("真实布防、撤单和凭据修改由账户持有人操作；App 只是入口。")
+                Text("真实布防、撤单和凭据修改须经用户明确确认后执行。")
                     .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
             }
         }
