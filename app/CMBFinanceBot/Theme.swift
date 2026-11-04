@@ -16,12 +16,12 @@ enum AppPalette {
 struct Card<Content: View>: View {
     let title: String
     let subtitle: String?
-    let fillHeight: Bool
     let content: Content
+    /// Kept for source compatibility. Stretching content to the full proposal is never right:
+    /// a flexible `Spacer` inside would take the extra height and push the last rows out.
     init(_ title: String, subtitle: String? = nil, fillHeight: Bool = false, @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
-        self.fillHeight = fillHeight
         self.content = content()
     }
     var body: some View {
@@ -32,7 +32,7 @@ struct Card<Content: View>: View {
             }
             content
         }
-        .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(18)
         .background(AppPalette.card, in: RoundedRectangle(cornerRadius: 14))
     }

@@ -18,7 +18,7 @@ struct SettingsView: View {
                     HStack { Detail("登录与交易凭据", m.credentialState); Detail("邮件通知", m.mailConfigured ? "已配置" : "未配置") }
                 }
                 EqualHeightColumns {
-                    Card("九宫格图案", subtitle: "先在银行 App 修改，再到这里同步", fillHeight: true) {
+                    Card("九宫格图案", subtitle: "先在银行 App 修改，再到这里同步") {
                         VStack(spacing: 18) {
                             Text(second ? "再次点选相同图案" : "点选 4–9 个不重复的点")
                                 .font(.system(size: 12)).foregroundStyle(AppPalette.muted)
@@ -62,7 +62,7 @@ struct SettingsView: View {
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    Card("交易密码", subtitle: "请输入当前密码以验证修改", fillHeight: true) {
+                    Card("交易密码", subtitle: "请输入当前密码以验证修改") {
                         SecureField("当前密码", text: $current).cardField()
                         SecureField("新密码", text: $password).cardField()
                         SecureField("再次输入新密码", text: $again).cardField()

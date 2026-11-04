@@ -81,11 +81,6 @@ struct ManagementView: View {
             VStack(spacing: 7) {
                 ForEach(0..<pages.count, id: \.self) { sidebarItem($0) }
             }
-            HStack(spacing: 7) {
-                Circle().fill(m.active ? AppPalette.accent : AppPalette.muted).frame(width: 5, height: 5)
-                Text(phaseName(m.phase)).font(.system(size: 11)).foregroundStyle(AppPalette.muted)
-            }
-            .padding(.horizontal, 12).padding(.top, 20)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 16)

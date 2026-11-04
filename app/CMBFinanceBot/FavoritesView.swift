@@ -119,7 +119,8 @@ struct FavoritePicker: View {
 
     var body: some View {
         if !m.favorites.isEmpty {
-            HStack(spacing: 7) {
+            // Wraps instead of overflowing: chips used to run past the card / over the neighbouring card.
+            FlowLayout(spacing: 7) {
                 Image(systemName: "star.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(AppPalette.warn.opacity(0.85))
@@ -138,8 +139,8 @@ struct FavoritePicker: View {
                     .font(.system(size: 11))
                     .fixedSize()
                 }
-                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -150,5 +151,43 @@ struct FavoritePicker: View {
 
     private func fill(_ row: [String: Any]) {
         if let value = stringValue(row["code"]) { code = value }
+    }
+}
+
+/// Lays subviews out in a row and wraps to the next line when the width runs out.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 7
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return CGSize(width: maxX.isFinite ? maxX : 0, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
     }
 }

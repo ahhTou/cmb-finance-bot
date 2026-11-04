@@ -69,30 +69,34 @@ struct DrillView: View {
     private var deviceCard: some View {
         Card("设备操作", subtitle: "只操作项目专用模拟器", fillHeight: true) {
             VStack(alignment: .leading, spacing: 12) {
+                // No flexible Spacer here: the card is stretched to the row height, and a Spacer
+                // would push the buttons out past the card's bottom edge.
                 MetricGrid {
                     Metric("模拟器", m.device.isEmpty ? "尚未刷新" : (emulatorRunning ? "运行中" : "未运行"))
                     Metric("开机", m.device.isEmpty ? "尚未刷新" : (emulatorRunning ? (boolValue(m.device["booted"]) == true ? "已完成" : "未完成") : "未运行"))
                     Metric("App 进程", emulatorRunning ? (stringValue(m.device["app_pid"]) ?? "—") : "—")
                     Metric("画面", emulatorRunning ? (boolValue(m.device["awake"]) == true ? "Awake" : "未知") : "—")
                 }
-                Spacer(minLength: 6)
-                HStack(spacing: 8) {
-                    Button("启动") { Task { await m.action(["emulator", "start"], label: "启动模拟器") } }
-                        .disabled(m.busy || m.active)
-                    Button("关闭") { Task { await m.action(["emulator", "stop"], label: "关闭模拟器") } }
-                        .disabled(m.busy || m.active)
-                    Button("恢复常亮") { Task { await m.action(["keep-awake"], label: "恢复常亮") } }
-                        .disabled(m.busy)
-                }
-                HStack(spacing: 8) {
-                    Button("截图") { Task { await m.action(["screenshot"], label: "截取画面") } }
-                        .disabled(m.busy)
-                    Button("刷新设备") { Task { await m.loadDevice() } }
-                        .disabled(m.busy)
-                }
-                if m.active {
-                    Text("值守活动期间不能启动或关闭模拟器。")
-                        .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
+                Spacer().frame(height: 6)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button("启动") { Task { await m.action(["emulator", "start"], label: "启动模拟器") } }
+                            .disabled(m.busy || m.active)
+                        Button("关闭") { Task { await m.action(["emulator", "stop"], label: "关闭模拟器") } }
+                            .disabled(m.busy || m.active)
+                        Button("恢复常亮") { Task { await m.action(["keep-awake"], label: "恢复常亮") } }
+                            .disabled(m.busy)
+                    }
+                    HStack(spacing: 8) {
+                        Button("截图") { Task { await m.action(["screenshot"], label: "截取画面") } }
+                            .disabled(m.busy)
+                        Button("刷新设备") { Task { await m.loadDevice() } }
+                            .disabled(m.busy)
+                    }
+                    if m.active {
+                        Text("值守活动期间不能启动或关闭模拟器。")
+                            .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
+                    }
                 }
             }
         }
@@ -143,7 +147,7 @@ struct DrillView: View {
                 commandRow("python3 -B src/night_watch.py disarm")
                 commandRow("python3 -B src/cancel_orders.py --list")
                 commandRow("python3 -B src/fast_buy_uia2.py --code <代码> --amount <金额> --dry-run")
-                Spacer(minLength: 6)
+                Spacer().frame(height: 6)
                 Text("真实布防、撤单和凭据修改须经用户明确确认后执行。")
                     .font(.system(size: 10)).foregroundStyle(AppPalette.muted)
             }
