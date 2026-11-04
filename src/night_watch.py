@@ -9,9 +9,10 @@ The account holder arms it in their own terminal before bed:
         --at 2026-11-03T09:00:00 [--dry-run]
 
 `--at` is the sale time; goBuy() fires OPEN_DELAY after it. `arm` closes the
-app and starts a detached `caffeinate -dimsu ... night_watch.py run`, so the
-Mac stays awake exactly as long as the watch runs. `status` and `disarm`
-inspect or cancel it. Alerts go out by email (see notify.py).
+app and starts a detached `caffeinate -ims ... night_watch.py run`, so the
+Mac stays awake exactly as long as the watch runs while the display may turn
+off on its own. `status` and `disarm` inspect or cancel it. Alerts go out by
+email (see notify.py).
 
 Timeline:
   night      emulator health every 2 min, app stays closed
@@ -153,8 +154,11 @@ def status_info(lines=30):
 
 
 def spawn_watch(task):
+    # -i/-m/-s keep the Mac and disk awake without forcing the display on.
+    # Display sleep is allowed; whether macOS then asks for a password is a
+    # system setting this script deliberately does not change.
     with LOG.open("ab") as out:
-        proc = subprocess.Popen(["/usr/bin/caffeinate", "-dimsu", sys.executable, "-B",
+        proc = subprocess.Popen(["/usr/bin/caffeinate", "-ims", sys.executable, "-B",
                                  str(Path(__file__).resolve()), "run",
                                  "--generation", task["generation"]],
                                 stdout=out, stderr=out, stdin=subprocess.DEVNULL,

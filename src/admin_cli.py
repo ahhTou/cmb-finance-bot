@@ -17,6 +17,7 @@ import time
 import night_watch as nw
 import keychain_store
 import purchase_settings
+import favorites
 
 import manage
 import notify
@@ -47,7 +48,8 @@ def status():
     data = nw.status_info()
     data.update(agent=agent_info(data['task']), processes=manage.status_info(),
                 credentials=keychain_store.credential_info(),
-                mail_configured=notify.configured(), log_path=str(nw.LOG))
+                mail_configured=notify.configured(), log_path=str(nw.LOG),
+                favorites=favorites.load())
     return data
 
 
@@ -166,6 +168,11 @@ def parser():
     heartbeat = sub.add_parser('agent-heartbeat')
     heartbeat.add_argument('--session', required=True)
     heartbeat.add_argument('--interval', type=int, required=True)
+    saved = sub.add_parser('favorites')
+    saved.add_argument('--list', action='store_true')
+    saved.add_argument('--add')
+    saved.add_argument('--title')
+    saved.add_argument('--remove')
     return p
 
 
@@ -179,6 +186,12 @@ def dispatch(a):
                 values = purchase_settings.save(dict(values, **updates))
         return {'settings': values, 'settings_revision': purchase_settings.revision(values)}
     if a.cmd == 'status': return status()
+    if a.cmd == 'favorites':
+        if a.add is not None:
+            return {'favorites': favorites.add(a.add, a.title or '')}
+        if a.remove is not None:
+            return {'favorites': favorites.remove(a.remove)}
+        return {'favorites': favorites.load()}
     if a.cmd == 'device': return device()
     if a.cmd == 'system': return system()
     if a.cmd == 'history':

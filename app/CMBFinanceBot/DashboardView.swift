@@ -157,7 +157,7 @@ struct DashboardView: View {
             }
         } footer: {
             HStack(spacing: 8) {
-                Button("打开设置") { tab = 4 }
+                Button("打开设置") { tab = 5 }
                 Spacer()
                 Text("不修改银行设置").font(.system(size: 9)).foregroundStyle(AppPalette.muted)
             }

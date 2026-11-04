@@ -51,6 +51,7 @@ struct DrillView: View {
                     field("产品代码", $code, "如 JX040229")
                     field("金额", $amount, "0.01")
                 }
+                FavoritePicker(code: $code)
                 Toggle("实际付款：输入交易密码并提交", isOn: $realBuy)
                     .disabled(m.busy || m.active)
                 Text(realBuy ? "立即购买一笔，不创建值守任务；下一步需确认金额。"

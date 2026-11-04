@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// Full-window focus view while a watch task is active.
+/// Focus view shown in the content area while a watch task is active.
 ///
-/// Shows only the current task and a live log stream; the log runs as a
-/// low-contrast background layer, the countdown and task facts sit on a
-/// single compact panel. The single action is terminating the task.
+/// The sidebar stays visible. The live log runs behind a compact floating
+/// panel; the newest line glows and the whole stream drifts slowly, so the
+/// background feels alive without gradient effects.
 struct LiveView: View {
     @EnvironmentObject var m: Model
     @State private var now = Date()
     @State private var confirmDisarm = false
+    @State private var drift = false
 
     private var redemption: Bool { (m.task["mode"] as? String) == "redemption" }
     private var code: String { stringValue(m.task["code"]) ?? "—" }
@@ -20,16 +21,17 @@ struct LiveView: View {
 
     var body: some View {
         ZStack {
-            AppPalette.background.ignoresSafeArea()
+            AppPalette.background
             logBackground
             VStack(spacing: 0) {
                 topBar
-                Spacer(minLength: 24)
+                Spacer(minLength: 20)
                 panel
             }
             .padding(.horizontal, 30)
-            .padding(.vertical, 26)
+            .padding(.vertical, 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             while !Task.isCancelled {
                 now = Date()
@@ -37,6 +39,7 @@ struct LiveView: View {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
+        .onAppear { drift = true }
         .alert("终止本轮布防？", isPresented: $confirmDisarm) {
             Button("继续值守", role: .cancel) {}
             Button("确认终止", role: .destructive) {
@@ -53,18 +56,22 @@ struct LiveView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(m.logLines.suffix(300).enumerated()), id: \.offset) { _, line in
+                    let lines = Array(m.logLines.suffix(160))
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        let newest = index == lines.count - 1
                         Text(line)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Color(white: 0.58))
+                            .foregroundStyle(Color(white: newest ? 0.84 : 0.5))
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .shadow(color: Color.white.opacity(newest ? 0.35 : 0.07),
+                                    radius: newest ? 6 : 2)
                     }
                     Color.clear.frame(height: 1).id("tail")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 30)
-                .padding(.top, 74)
+                .padding(.top, 66)
                 .padding(.bottom, 250)
             }
             .onAppear { proxy.scrollTo("tail", anchor: .bottom) }
@@ -72,8 +79,10 @@ struct LiveView: View {
                 proxy.scrollTo("tail", anchor: .bottom)
             }
         }
+        .offset(y: drift ? -5 : 0)
+        .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true), value: drift)
         .allowsHitTesting(false)
-        .opacity(0.55)
+        .opacity(0.62)
     }
 
     // MARK: 顶部状态
@@ -109,7 +118,7 @@ struct LiveView: View {
                 Spacer()
             }
             Rectangle().fill(Color(white: 0.28)).frame(height: 0.6)
-            HStack(alignment: .bottom, spacing: 36) {
+            HStack(alignment: .bottom, spacing: 34) {
                 stat("产品", code)
                 stat("金额", "\(amount) 元")
                 stat("计划", shortTime(m.task["at"]))
@@ -125,8 +134,13 @@ struct LiveView: View {
             }
         }
         .padding(26)
-        .background(Color(white: 0.13).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color(white: 0.3), lineWidth: 0.6))
+        .frame(maxWidth: 680)
+        .background(Color(white: 0.115).opacity(0.9), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20)
+            .stroke(Color(white: 0.34).opacity(0.65), lineWidth: 0.6))
+        .shadow(color: .black.opacity(0.55), radius: 30, y: 16)
+        .shadow(color: AppPalette.accent.opacity(0.12), radius: 46)
+        .padding(.bottom, 6)
     }
 
     private func stat(_ title: String, _ value: String) -> some View {

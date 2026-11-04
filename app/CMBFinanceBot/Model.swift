@@ -8,6 +8,7 @@ import UserNotifications
     @Published var system: [String: Any] = [:]
     @Published var history: [[String: Any]] = []
     @Published var historyTotal = 0
+    @Published var favorites: [[String: Any]] = []
     @Published var logLines: [String] = []
     @Published var logPath = ""
     @Published var commandOutput: [String] = []
@@ -83,6 +84,7 @@ import UserNotifications
         do {
             let previous = phase
             status = try await backend.run(["status"])
+            favorites = arrayValue(status["favorites"])
             lastRefresh = Date()
             if previous != phase && previous != "未布防" {
                 let content = UNMutableNotificationContent()
@@ -174,7 +176,8 @@ import UserNotifications
         case 2:
             await refresh()
             await loadDevice()
-        case 3: await loadHistory()
+        case 3: await refresh()
+        case 4: await loadHistory()
         default: await refresh()
         }
     }

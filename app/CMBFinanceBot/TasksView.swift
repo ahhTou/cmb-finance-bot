@@ -73,7 +73,7 @@ struct TasksView: View {
                 Button("新建布防") { armMode = .firstLaunch; showArm = true }
                     .buttonStyle(CardButtonStyle(primary: true))
                     .disabled(m.active)
-                Button("查看历史") { tab = 3 }
+                Button("查看历史") { tab = 4 }
             }
         }
     }
@@ -112,7 +112,7 @@ struct TasksView: View {
                 Button("新建布防") { armMode = .redemption; showArm = true }
                     .buttonStyle(CardButtonStyle(primary: true))
                     .disabled(m.active)
-                Button("查看历史") { tab = 3 }
+                Button("查看历史") { tab = 4 }
             }
         }
     }

@@ -2,20 +2,24 @@ import SwiftUI
 
 struct ManagementView: View {
     @EnvironmentObject var m: Model
-    @State private var tab = min(max(UserDefaults.standard.integer(forKey: "selectedTab"), 0), 4)
+    @State private var tab = min(max(UserDefaults.standard.integer(forKey: "selectedTab"), 0), 5)
     private let pages = [
         ("任务", "square.stack.3d.up", "三种购买模式"),
         ("状态", "gauge.with.dots.needle.67percent", "运行环境与设备"),
         ("演练", "testtube.2", "测试命令与撤单"),
+        ("收藏", "star", "常用产品代码"),
         ("历史", "clock.arrow.circlepath", "完成情况与日志"),
         ("设置", "gearshape", "项目与凭据")
     ]
 
     var body: some View {
-        ZStack {
-            HStack(spacing: 0) {
-                sidebar
-                VStack(alignment: .leading, spacing: 18) {
+        HStack(spacing: 0) {
+            sidebar
+            VStack(alignment: .leading, spacing: 18) {
+                if m.active {
+                    LiveView()
+                        .transition(.opacity)
+                } else {
                     header
                     ZStack {
                         TasksView(tab: $tab)
@@ -24,34 +28,28 @@ struct ManagementView: View {
                             .opacity(tab == 1 ? 1 : 0).allowsHitTesting(tab == 1).accessibilityHidden(tab != 1)
                         DrillView()
                             .opacity(tab == 2 ? 1 : 0).allowsHitTesting(tab == 2).accessibilityHidden(tab != 2)
-                        HistoryView()
+                        FavoritesView()
                             .opacity(tab == 3 ? 1 : 0).allowsHitTesting(tab == 3).accessibilityHidden(tab != 3)
-                        if tab == 4 && m.windowVisible { SettingsView() }
+                        HistoryView()
+                            .opacity(tab == 4 ? 1 : 0).allowsHitTesting(tab == 4).accessibilityHidden(tab != 4)
+                        if tab == 5 && m.windowVisible { SettingsView() }
                     }
-                    .disabled(m.root.isEmpty && tab != 4)
+                    .disabled(m.root.isEmpty && tab != 5)
                     .padding(.bottom, 26)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(AppPalette.background)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppPalette.background)
-            .foregroundStyle(Color(white: 0.94)).tint(AppPalette.accent)
-            .buttonStyle(CardButtonStyle()).toggleStyle(.switch).preferredColorScheme(.dark)
-            .errorToast(topInset: 82)
-
-            if m.active {
-                LiveView()
-                    .transition(.opacity)
-                    .zIndex(20)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
         .background(AppPalette.background)
+        .foregroundStyle(Color(white: 0.94)).tint(AppPalette.accent)
+        .buttonStyle(CardButtonStyle()).toggleStyle(.switch).preferredColorScheme(.dark)
+        .errorToast(topInset: 82)
         .animation(.easeInOut(duration: 0.2), value: m.active)
         .task {
-            if m.root.isEmpty { tab = 4 }
+            if m.root.isEmpty { tab = 5 }
             await m.refreshCurrent(tab)
             while !Task.isCancelled {
                 let interval: UInt64 = m.windowVisible ? 5_000_000_000 : 30_000_000_000

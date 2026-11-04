@@ -112,6 +112,7 @@ struct ArmSheet: View {
                 field("产品代码", $code, "如 JX040229")
                 field("购买金额", $amount, "上限 50000 元")
             }
+            FavoritePicker(code: $code)
             if mode == .redemption {
                 HStack {
                     Picker("开始盯盘时间", selection: $timeChoice) {
