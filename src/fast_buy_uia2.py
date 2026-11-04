@@ -283,7 +283,14 @@ def wait_keypad_stable(timeout=1.2):
 
 
 def password_taps(password, keys, confirm_wait):
-    """Pace native key taps in one ADB shell session; never log this list."""
+    """Pace native key taps in one ADB shell session; never log this list.
+
+    Repeated taps on the same coordinate are merged by the app: six
+    back-to-back taps on one digit landed five digits in 11/20 trials, while
+    the same taps with PASSWORD_DIGIT_GAP apart landed six every time. Six
+    different digits did not drop either way. Keeping the gap also protects
+    any repeated digits in the real password.
+    """
     commands = []
     for index, digit in enumerate(password):
         commands.append(f"input tap {keys[digit][0]} {keys[digit][1]}")
