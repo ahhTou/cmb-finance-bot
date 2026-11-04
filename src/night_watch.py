@@ -58,6 +58,9 @@ MAX_LEAD = timedelta(hours=24)
 HEALTH_EVERY = 120                   # seconds between overnight checks
 LOGIN_TRIES = 3                      # patterns actually sent; stays clear of lockout
 LOGIN_CYCLES = 5                     # cold starts, including ones with no login page
+EMULATOR_WIFI = "AndroidWifi"        # the emulator's own virtual AP (netsim)
+WIFI_STUCK_CYCLES = 3                # login cycles in a row with no network -> reboot
+NET_STRIKES = 2                      # overnight checks in a row with no network -> reboot
 
 MODES = ("first_launch", "redemption")
 DEFAULT_WINDOW_MINUTES = 2           # redemption: keep reopening this long
@@ -253,9 +256,17 @@ def parse_target(value, now=None, prep_minutes=PREP_MINUTES, label="开售时间
         raise Abort("时间格式应为 YYYY-MM-DDTHH:MM:SS。")
     if when.tzinfo is not None:
         raise Abort("请使用本机本地时间，不要带时区。")
-    if not 1 <= prep_minutes <= 60:
-        raise Abort("冷启动提前量必须为 1–60 分钟。")
+    if not 0 <= prep_minutes <= 60:
+        raise Abort("冷启动提前量必须为 0–60 分钟。")
     lead = when - (now or datetime.now())
+    if prep_minutes == 0:
+        # Emergency arming: the sale is already (nearly) here. Do not judge
+        # whether the remaining time is enough — start immediately and take
+        # whatever the sale window still allows. A late failure is reported,
+        # never retried.
+        if lead > MAX_LEAD:
+            raise Abort(f"{label}不能超过 24 小时之后。")
+        return when
     min_lead = timedelta(minutes=prep_minutes) + ARM_SLACK
     if lead < min_lead:
         raise Abort(f"{label}至少要在 {min_lead.seconds // 60} 分钟之后，留给登录和打开购买页。")
@@ -318,8 +329,8 @@ def _arm(args):
     if args.prep_minutes is None:
         args.prep_minutes = retry_settings['cold_start_minutes']
     amount = fast_buy.parse_amount(args.amount)
-    if not 1 <= args.prep_minutes <= 60:
-        raise Abort("冷启动提前量必须为 1–60 分钟。")
+    if not 0 <= args.prep_minutes <= 60:
+        raise Abort("冷启动提前量必须为 0–60 分钟。")
     if args.now:
         # Rehearsal: preparation starts at once (the sale is already inside
         # the prep window) and leaves ~2 min before the last-minute check.
@@ -342,6 +353,22 @@ def _arm(args):
         print("邮件未配置：通知只写日志，用 status 查看。")
     if not (emulator_running() and booted()):
         raise Abort("模拟器没有在运行；先 ./scripts/project start。")
+    # Arming is the last moment the user is awake to see a dead network.
+    state = network_state()
+    if state == "no-device":
+        raise Abort("adb 连不上模拟器，无法确认网络；先 ./scripts/project status。")
+    if state == "down":
+        log(f"布防前检查：模拟器没有网络，Wi-Fi 未通过验证={wifi_never_validated()}")
+        reconnect_wifi()
+        for _ in range(15):
+            time.sleep(2)
+            if network_state() == "up":
+                break
+        else:
+            raise Abort("模拟器没有网络，布防已取消。先修好网络再布防："
+                        f"./scripts/project start/stop 重启模拟器，或用 adb 执行 "
+                        f"cmd wifi connect-network {EMULATOR_WIFI} open。")
+        print("布防前检查：模拟器网络本来不通，已重新连接 Wi-Fi 恢复。")
     if "AC Power" not in subprocess.run(["pmset", "-g", "batt"], capture_output=True,
                                         text=True).stdout:
         print("提醒：Mac 当前没有接电源。caffeinate 在电池供电时不能阻止合盖睡眠。")
@@ -464,6 +491,8 @@ def emulator_running():
 
 
 def restart_emulator():
+    """Reboot the VM. Only returns once the booted emulator has the network;
+    a restart that comes back without Wi-Fi is not a usable restart."""
     log("重启模拟器")
     manage.stop()
     manage.start()
@@ -472,9 +501,18 @@ def restart_emulator():
         if booted():
             time.sleep(10)
             keep_screen_on()
-            return
+            break
         time.sleep(5)
-    raise Abort("模拟器重启后 5 分钟仍未开机。")
+    else:
+        raise Abort("模拟器重启后 5 分钟仍未开机。")
+    # netsim needs a few seconds after boot before the virtual AP accepts a join.
+    for attempt in range(6):
+        if network_state() == "up":
+            log("重启后网络正常")
+            return
+        reconnect_wifi()
+        time.sleep(10 if attempt == 0 else 15)
+    raise Abort("模拟器重启后仍然没有网络，开售前无法登录。")
 
 
 def keep_screen_on():
@@ -497,11 +535,118 @@ def ensure_emulator(strikes):
         alert("模拟器已自动重启", "App 本来就是关闭状态，开售前 15 分钟照常登录。")
 
 
+def health_network(net):
+    """A live emulator without internet cannot log in at sale time. Two failed
+    checks in a row (~4 min) reboot it, so the watch never discovers a dead
+    network five minutes before the sale."""
+    if network_state() == "up":
+        net[0] = 0
+        if net[1]:
+            net[1] = False
+            alert("模拟器网络已恢复", "夜间巡检继续，开售前照常登录。")
+        return
+    net[0] += 1
+    log(f"夜间检查：模拟器没有网络（第 {net[0]} 次）")
+    if net[0] < NET_STRIKES:
+        return
+    net[0] = 0
+    try:
+        ensure_network()
+    except Abort as exc:
+        if not net[1]:
+            net[1] = True
+            alert("模拟器没有网络，已重启仍失败", f"{exc}\n\n夜间巡检继续重试；"
+                  "开售前若仍无网络将无法登录，请起床检查。")
+        return
+    alert("模拟器无网络，已自动重启恢复", "夜间巡检继续，开售前照常登录。")
+
+
 def ensure_awake():
     power = adb("shell", "dumpsys", "power")
     if "mWakefulness=Awake" not in power:
         log("屏幕不是 Awake，发送唤醒")
         adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+
+
+# ---------------------------------------------------------------- network
+
+TCP_PROBE = (
+    "H=$(dumpsys connectivity 2>/dev/null | grep -m1 -o 'TcpProbeAddr[^/]*'); "
+    "if nc -z -w 5 www.baidu.com 443; then echo up; "
+    "elif nc -z -w 5 10.0.2.2 7897; then echo up; "   # host proxy reachable = path out
+    "elif [ -n \"$H\" ] && eval \"nc -z -w 5 $H\"; then echo up; "
+    "else echo down; fi"
+)
+
+
+def network_state():
+    """"up" / "down" / "no-device" — judged from inside the emulator.
+
+    Android's own "validated" flag is not trusted: the emulator's `ping` never
+    gets a reply (it is not ICMP-capable), so the validator can permanently
+    disable AndroidWifi. That is exactly how the 11-05 watch lost the network.
+    """
+    try:
+        out = adb("shell", TCP_PROBE, timeout=45).strip()
+    except (subprocess.SubprocessError, OSError):
+        return "no-device"
+    return "up" if out.endswith("up") else "down"
+
+
+def wifi_never_validated():
+    """Diagnosis only, never a decision: the emulator's network validation is
+    unreliable (`ping` gets no answer there), so AndroidWifi usually stays
+    flagged NO_INTERNET_PERMANENT even while the network works. Whether the
+    network is usable is decided by network_state()'s TCP probe alone."""
+    try:
+        dump = adb("shell", "dumpsys", "wifi", timeout=30)
+        begin = dump.find("Configured networks Begin")
+        segment = dump[begin:dump.find("Configured networks End", begin)] if begin >= 0 else ""
+        return (EMULATOR_WIFI in segment
+                and "NETWORK_SELECTION_PERMANENTLY_DISABLED" in segment)
+    except Exception:      # diagnosis must never break arming
+        return False
+
+
+def reconnect_wifi():
+    """Bring the radio up, then re-join the virtual AP.
+
+    `connect-network` on its own is not enough: with the radio switched off
+    (`svc wifi disable`, or a stray tap) it silently does nothing and the
+    watch would just keep failing.
+    """
+    try:
+        if adb("shell", "settings", "get", "global", "wifi_on", timeout=15).strip() == "0":
+            log("模拟器 Wi-Fi 开关是关的，先打开")
+            adb("shell", "svc", "wifi", "enable", timeout=20)
+            for _ in range(10):
+                time.sleep(1)
+                if adb("shell", "settings", "get", "global", "wifi_on", timeout=15).strip() == "1":
+                    break
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"打开 Wi-Fi 失败：{exc}")
+    log("重新连接模拟器 Wi-Fi")
+    try:
+        adb("shell", "cmd", "wifi", "connect-network", EMULATOR_WIFI, "open", timeout=30)
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"Wi-Fi 重连命令失败：{exc}")
+
+
+def ensure_network():
+    """Cold start needs the network. Try the cheap fix first, then reboot."""
+    state = network_state()
+    if state == "up":
+        return
+    log(f"模拟器没有网络（{state}）")
+    if state == "no-device":
+        raise Abort("adb 连不上模拟器，无法确认网络。")
+    reconnect_wifi()
+    for _ in range(15):
+        time.sleep(2)
+        if network_state() == "up":
+            log("Wi-Fi 重连后网络恢复")
+            return
+    restart_emulator()      # reboot the VM; ensure_network() re-runs after it
 
 
 # ---------------------------------------------------------------- login
@@ -568,8 +713,23 @@ def login_fresh(task):
 
     patterns_sent is saved before each attempt, so a crash or restart can
     never push the total past LOGIN_TRIES.
+
+    No network is not an app failure: such a cycle never sends a pattern and
+    is not counted against LOGIN_CYCLES. After WIFI_STUCK_CYCLES in a row the
+    emulator is rebooted instead of force-stopping the app a sixth time.
     """
-    for cycle in range(1, LOGIN_CYCLES + 1):
+    cycles = no_net = 0
+    while cycles < LOGIN_CYCLES:
+        if network_state() != "up":
+            no_net += 1
+            log(f"登录前检查：模拟器没有网络（连续 {no_net} 次）")
+            if no_net >= WIFI_STUCK_CYCLES:
+                raise Abort("模拟器连续多次没有网络，登录无法完成，未输入图案。")
+            ensure_network()
+            continue
+        no_net = 0
+        cycles += 1
+        cycle = cycles
         try:
             cold_start()
         except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
@@ -723,6 +883,9 @@ def prepare(task, strikes, done):
     jump failed, retry it without a cold start that would log out again."""
     ensure_emulator(strikes)
     ensure_awake()
+    # A cold start on a dead network looks exactly like a broken app: 首页 never
+    # renders, every login cycle burns a pattern. Check the network first.
+    ensure_network()
     if not (done.get("login") and adb("shell", "pidof", PACKAGE).strip()):
         if task.get("after_manual_login"):
             if not tap_text("我的", timeout=10) or not logged_in() or on_login_page():
@@ -902,8 +1065,13 @@ def run(_args):
         return
     sale = datetime.fromisoformat(task["at"])
     fire_at = datetime.fromisoformat(task["fire_at"])
+    # 0 = 「立即」: start cold start/login/purchase page right after arming and
+    # wait for the sale with the page already up. It is not "cold start at the
+    # sale second", so the overnight wait below must be skipped entirely.
+    immediate = task.get("prep_minutes", PREP_MINUTES) == 0
     prep_lead = timedelta(minutes=task.get("prep_minutes", PREP_MINUTES if task.get("purchase_flow") else 15))
     strikes = [0]
+    net = [0, False]     # consecutive "no network" checks, alert-already-sent
     action = "演练" if task.get("dry_run") else "真实提交一次"
     if task.get("mode") == "redemption":
         alert(f"不定时抢购已开始：{task['code']} {task['amount']} 元，"
@@ -913,10 +1081,11 @@ def run(_args):
         alert(f"值守已开始：{task['code']} {task['amount']} 元，开售 {sale:%m-%d %H:%M:%S}（{action}）")
     try:
         reported = None
-        while datetime.now() < sale - prep_lead:
+        while not immediate and datetime.now() < sale - prep_lead:
             try:
                 ensure_emulator(strikes)
                 ensure_awake()
+                health_network(net)
                 reported = None
             except Exception as exc:   # keep watching; mail each new problem once
                 log(f"夜间检查异常：{exc}")
@@ -926,13 +1095,16 @@ def run(_args):
             sleep_until(min(sale - prep_lead, datetime.now() + timedelta(seconds=HEALTH_EVERY)),
                         HEALTH_EVERY, task)
 
-        log("开始准备：冷启动并登录")
+        log("立即冷启动并登录" if immediate else "开始准备：冷启动并登录")
         task["phase"] = "preparing"
         persist(task)
         last = None
         done = {}
         prepare_until = fire_at - timedelta(seconds=2) if task.get('purchase_flow') == query_gate.FLOW else sale - FINAL_LEAD
-        while datetime.now() < prepare_until:
+        # Always attempt once: with `immediate` (or an already-open sale window)
+        # prepare_until may be in the past, and a skipped loop used to end the
+        # watch without ever trying. Retries stay bounded by prepare_until.
+        while True:
             task["last_tick"] = datetime.now().isoformat()
             persist(task)
             try:
@@ -943,9 +1115,9 @@ def run(_args):
             except Exception as exc:   # transient: page not loaded, adb hiccup
                 last = exc
                 log(f"准备失败，稍后重试：{exc}")
+                if datetime.now() >= prepare_until:
+                    raise Abort(f"准备阶段一直没有成功：{last}")
                 time.sleep(20)
-        else:
-            raise Abort(f"准备阶段一直没有成功：{last}")
         if task.get('purchase_flow') == query_gate.FLOW:
             gated_fire(task)
             return
@@ -960,6 +1132,10 @@ def run(_args):
         # app link and stops on its own if the form never shows up.
         if not adb("shell", "pidof", PACKAGE).strip():
             log("最后检查：招行 App 不在运行，到点仍会尝试打开购买页")
+        if network_state() != "up":
+            # Never abort here: the buy step may still succeed on a warm page.
+            log("最后检查：模拟器没有网络，到点仍会尝试打开购买页")
+            alert("开售前检查：模拟器没有网络", "仍会按计划尝试提交；失败请查交易记录。")
         if task.get("mode") == "redemption":
             redemption_fire(task, sale)
         else:
@@ -987,7 +1163,8 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="演练：只到密码页，不输密码、不提交")
     p.add_argument("--settings-revision", help=argparse.SUPPRESS)
     p.add_argument("--prep-minutes", type=int,
-                   help="开始前几分钟冷启动登录（1–60，默认使用设置，初始 7 分钟）")
+                   help="开始前几分钟冷启动登录（0–60，默认使用设置，初始 7 分钟）。"
+                        "0 = 立即：布防后马上冷启动、登录并进入购买页，再等到开售时间")
     p.add_argument("--mode", choices=MODES, default="first_launch",
                    help="first_launch 首发（默认）或 redemption 不定时抢购")
     p.add_argument("--window-minutes", type=int,

@@ -16,7 +16,12 @@ import { Dialog } from './ui/dialog'
 import { Field, Input, Segmented, Select, Switch } from './ui/form'
 
 const QUOTA_TIMES = ['00:15', '09:00', '09:15', '10:15', '11:15']
-const PREP_CHOICES = [2, 5, 7]
+const PREP_CHOICES = [0, 2, 5, 7]
+
+/** 0 is not "0 minutes before the sale"; arming starts the cold start at once. */
+function prepLabel(minutes: number) {
+  return minutes === 0 ? '立即' : `${minutes} 分钟`
+}
 
 /** The next time today or later at `hhmm` that is after `after`. */
 function nextQuota(hhmm: string, after: Date) {
@@ -104,7 +109,8 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
 
   const window = settings.irregular_window_minutes ?? 2
   const configuration =
-    `提前 ${prep} 分钟冷启动，登录后进入购买页等待。` +
+    (prep === 0 ? '布防后立即冷启动' : `提前 ${prep} 分钟冷启动`) +
+    '，登录后进入购买页等待。' +
     (mode === 'redemption'
       ? `首次查询提前 ${settings.irregular_advance_ms ?? 200} ms；无额度后前 ${settings.irregular_burst_seconds ?? 15} 秒间隔 ${settings.irregular_retry_min_ms ?? 250}–${settings.irregular_retry_max_ms ?? 400} ms，${settings.irregular_ramp_seconds ?? 20} 秒起 ${settings.irregular_slow_min_ms ?? 1000}–${settings.irregular_slow_max_ms ?? 2000} ms，${settings.irregular_idle_after_seconds ?? 60} 秒起 ${settings.irregular_idle_min_ms ?? 2500}–${settings.irregular_idle_max_ms ?? 4000} ms，最长 ${window} 分钟。`
       : `首次查询延后 ${settings.first_offset_ms ?? 200} ms；无额度后最多再重试 ${settings.first_max_retries ?? 5} 次。`)
@@ -116,7 +122,9 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
 
   function problem() {
     if (now && !dry && !drill) return '立即排练只能使用演练。'
-    if (!now && +date <= Date.now() + (prep + 2) * 60_000) {
+    // prep 0 is the emergency path: the sale may be seconds away or already
+    // past, so no minimum lead is enforced here either.
+    if (prep > 0 && !now && +date <= Date.now() + (prep + 2) * 60_000) {
       return `${mode === 'redemption' ? '额度放出时间' : '开售时间'}至少要在 ${prep + 2} 分钟之后。`
     }
     return null
@@ -308,15 +316,19 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
             <div className="flex flex-col gap-2">
               <div className="flex justify-between">
                 <span className="text-[11px] text-muted">冷启动提前量</span>
-                <span className="font-semibold text-[11px]">{prep} 分钟</span>
+                <span className="font-semibold text-[11px]">{prepLabel(prep)}</span>
               </div>
               <Segmented
                 label="冷启动提前量"
                 value={prep}
                 onChange={setPrep}
-                options={PREP_CHOICES.map((value) => ({ value, label: `${value} 分钟` }))}
+                options={PREP_CHOICES.map((value) => ({ value, label: prepLabel(value) }))}
               />
-              <Hint>测试可用 2 分钟；正式布防建议 7 分钟。</Hint>
+              <Hint>
+                {prep === 0
+                  ? '立即：布防后马上冷启动、登录并进入购买页，再等到开售时间。'
+                  : '测试可用 2 分钟；正式布防建议 7 分钟。'}
+              </Hint>
             </div>
             <div className="flex flex-col gap-[5px]">
               <span className="text-[11px] text-muted">当前配置</span>

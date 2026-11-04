@@ -1,6 +1,6 @@
 # Agent 执行手册
 
-最后更新：2026-11-04。
+最后更新：2026-11-05。
 
 这是本项目的操作手册。接手时先读 §0 和 §1，再按要做的事跳到对应流程：
 
@@ -10,6 +10,7 @@
 | 现在买一笔 / 测速 / 演练 | §4 流程 B：单独购买测试 | `src/fast_buy_uia2.py`、`src/buy_timed.py` |
 | 撤掉测试订单 | §5 流程 C：撤单 | `src/cancel_orders.py` |
 | 不定时等额度放出再买 | §5A 流程 D：不定时抢购 | `night_watch.py arm --mode redemption` |
+| 改管理 App 界面或重启它 | §2A 管理 App 的构建与重启 | `pnpm tauri build`、`pkill -x cmb-desktop` |
 | 接手 2026-11-03 会话的遗留问题 | `docs/handoff-2026-11-03.md` | — |
 
 所有命令都在项目根目录运行：
@@ -28,6 +29,10 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 - **一笔交易只提交一次。** 结果不明时先查交易记录，绝不补单或重试提交。
 
 ## 1. 当前状态
+
+- **2026-11-05 布防增加网络前置检查，冷启动可选「立即」**：断网时冷启动的表现和 App 故障完全一样（首页渲染不出来），此前会被当成 App 问题连打三次图案再中止。现在把网络作为冷启动的前置条件，共四处检查：`arm` 布防时验网络，修不好直接拒绝布防；夜间巡检连续 2 次（约 4 分钟）无网才重启，避免偶发抖动；`restart_emulator()` 重启后必须网络恢复才算成功；`prepare()` 与 `login_fresh()` 每轮冷启动前先验网络，无网的轮次不发图案、不占登录重试次数，连续 3 轮无网就重启。修复按代价递增：开射频 → `cmd wifi connect-network AndroidWifi open` → 重启模拟器。判定依据是模拟器内实测 TCP（外网 443 / 宿主机代理 / `TcpProbeAddr`），**不看** Android 的"已验证"标志——模拟器 `ping` 收不到回复，该标志常年是 `NETWORK_SELECTION_PERMANENTLY_DISABLED`，实测网络正常时也一样，只能当诊断信息。
+
+  冷启动提前量新增 **0 =「立即」**：布防之后立刻冷启动、登录、进入购买页，然后带着已就绪的页面**等到开售时间**再买。它不等于"开售那一刻才冷启动"——`run()` 用 `immediate` 跳过夜间巡检等待，直接进入准备。布防时也不校验剩余时间够不够（只保留 24 小时上限），因为立即布防常常发生在开售前几分钟甚至开售之后。桌面端表单把 0 显示为「立即」。`query_gate.watch()` 的安装窗口在开售时刻已过时给 10 秒兜底（原本会因 `max(0, …)` 变成 0 秒、循环一次不执行就报"未能在开始时间前确认 queryBuy 挂起"，看起来像时间不够，实际是循环没跑）。
 
 - **2026-11-04 取消布防关闭购买页、不定时分段降频**：取消（`disarm`）时若任务处于 `preparing` / `waiting`，结束值守进程后对招行 App 执行 `am force-stop`，页面内 `queryBuy` 轮询立即停止；此前进程被终止会跳过 CDP 收尾，页面要等 15 秒租约过期才停。关闭失败不影响取消，页面仍会因租约过期自停。不定时抢购改为分段降频：前 15 秒随机等 250–400ms，15–20 秒线性放慢，20–60 秒 1–2 秒，60 秒后 2.5–4 秒，5 分钟窗口约 140 次查询（原约近千次）；分段参数在设置页可改。已通过隔离测试，尚未在模拟器上实测。不定时默认窗口随后改为 2 分钟（约 70 次查询）。
 
@@ -93,6 +98,79 @@ var/android-sdk/platform-tools/adb -P 15039 -s emulator-15554 shell dumpsys batt
 - **只用项目自己的 ADB**：端口 15039，设备 `emulator-15554`。不要运行系统默认的 `adb`，它会在 5037 端口另起一个服务。
 - **判断是否已登录**：先进"我的"页面。能正常截图 = 已登录；截图全黑或停在九宫格页 = 未登录。首页能看到账户信息**不能**当作已登录的证据。
 - **iOS 模拟器工具不适用**，这里是 Android 模拟器。
+
+## 2A. 管理 App 的构建与重启（`desktop/`，Tauri 2）
+
+### 2A.1 Rust 工具链与 PATH
+
+rustup 把 cargo / rustc 装在 `~/.cargo/bin`，但用户的 shell 配置没有把它加进 PATH。**新开的 shell（包括 Agent 的非交互 shell）找不到 `cargo`，这不代表没安装。** 动手前先确认：
+
+```sh
+command -v cargo                                   # 可能为空
+. "$HOME/.cargo/env"                               # 或者改用下面的内联写法
+cargo --version                                    # 应为 1.96.0 或更高
+```
+
+构建命令一律带上内联 PATH，避免依赖当前 shell 的初始化：
+
+```sh
+PATH="$HOME/.cargo/bin:$PATH" pnpm tauri build
+```
+
+### 2A.2 构建
+
+在仓库根目录执行。`pnpm tauri build` 会先跑 `beforeBuildCommand`（`tsc --noEmit && vite build`），再编译 Rust 壳并打包：
+
+```sh
+cd desktop && PATH="$HOME/.cargo/bin:$PATH" pnpm tauri build
+```
+
+产物：`desktop/src-tauri/target/release/bundle/macos/招行理财值守.app`。
+
+构建前可先跑端到端检查（Playwright，假后端，不碰真实环境）：`pnpm e2e`。
+
+两个**既有问题**，不是新改动引入的，不必追查：
+
+- `pnpm check` 会报 `Live.tsx` 的格式问题；
+- `pnpm test` 会把 e2e 用例当单元测试跑。
+
+### 2A.3 重启 App
+
+启动前先确认没有正在提交的值守任务：
+
+```sh
+/usr/bin/python3 -B src/night_watch.py status      # 阶段不能是 firing
+```
+
+关窗口**不会**退出 App（Cmd-W 只是隐藏），必须结束进程：
+
+```sh
+pkill -x cmb-desktop
+open "desktop/src-tauri/target/release/bundle/macos/招行理财值守.app"
+```
+
+注意路径基准：`open` 那条要在**仓库根目录**执行（前面 `cd desktop` 之后需先回到根目录）。后端随 App 用 `--exit-with-parent` 启动，`pkill` 后自行退出，无需单独清理。
+
+确认启动成功：
+
+```sh
+pgrep -x cmb-desktop
+pgrep -fl "admin_server.py"        # 应看到 --port <随机端口> --exit-with-parent
+```
+
+`ps` 在部分 Agent 沙箱里被禁止（`Operation not permitted: 'ps'`），用 `pgrep` 代替。`admin_server` 用随机端口，别按固定端口找。
+
+`night_watch.py run` 是单独启动的进程，不属于 App，**重启 App 不影响正在进行的值守**。
+
+### 2A.4 哪些改动需要重新构建
+
+| 改动 | 要不要重建 | 要不要重启 App |
+|---|---|---|
+| `desktop/src` 前端、`src-tauri`（Rust） | 要 | 要 |
+| `src/admin_server.py` | 不用 | 要 |
+| `admin_cli.py`、`night_watch.py`、`query_gate.py`/`.js`、`purchase_settings.py` 等 | 不用 | 不用 |
+
+后端每个请求都会新起子进程运行 `admin_cli`，下一次请求或下一次布防就用上新代码。**已布防的任务沿用布防时保存的配置快照**，改设置不会影响它。
 
 ## 3. 流程 A：完整值守购买（`src/night_watch.py`）
 
@@ -438,6 +516,21 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 - 正式 `admin_cli buy --dry-run` 入口已在 133045A 验证：约 3.36 秒到密码页（包含打开购买页及控件确认），未读取/输入密码、未提交，空面板已关闭。此值不代表所有网络条件或产品性能，也不是只计风险处理的 0.69 秒。
 - 16 项 JS 测试全部通过；129 项 Python 测试仅保留已记录的旧 `test_timed_buy` 错误。真实交易仍须按 §0 经用户明确确认后执行。
 
+### 6.9 断网如何伪装成"容器打不开"（2026-11-05 事故复盘）
+
+一次 00:15 的不定时抢购任务在 00:08 准备阶段中止，报错是 `未能打开隔离的购买过渡容器；未打开购买页、未发送 queryBuy`。**这条文案会误导排查方向**，真实因果链是：
+
+1. 模拟器 Wi-Fi 因"无网络"被 Android 永久禁用，`wlan0` 处于 `NO-CARRIER`，全程无网络。
+2. `login_fresh()` 冷启动后，`logged_in()` 只判断"能否正常截屏"（`not screen_protected()`），**不看页面内容**，在首页根本没加载出来的情况下误判为"登录成功"并发出成功通知。
+3. 带着失效会话发 deep link（`needlogin=true`），App 弹出 `PBLoginActivity`，10 秒内没有 `PBWebContainerActivity`。
+4. `blank_target()` 超时，统一报"未能打开隔离的购买过渡容器"。
+
+排查要点：
+
+- **报错文案不等于原因。** 遇到这类"容器/页面打不开"，先看 `adb logcat -d | grep ActivityTaskManager`：如果出现 `PBLoginActivity`，就是会话失效，不是容器问题。对照实验很有效——同一入口在会话有效时会出现 `PBWebContainerActivity`（`Displayed … +88ms`），失效时完全不出现。
+- **`logged_in()` 只看截屏不可靠。** 它无法区分"已登录"和"页面没渲染出来"。
+- 网络问题已在 §1 的 2026-11-05 条目中加了前置检查。登录判定这一层**尚未修改**，`logged_in()` 仍只看截屏。
+
 ## 7. 安全与边界
 
 - 只操作项目模拟器 `emulator-15554` 和专用 ADB 端口 15039。不碰其他真机、其他模拟器，也不碰 Mac 上的其他进程。
@@ -454,7 +547,7 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 | `src/night_watch.py` | 夜间值守：`arm`（首发 / 不定时抢购）/ `status` / `disarm` / `resume` / `run` |
 | `src/admin_cli.py` | 管理 App / Agent 共用的单行 JSON 接口 |
 | `src/admin_server.py` | 管理 App 用的本地 HTTP 后端，逐请求调用 `admin_cli.py` |
-| `desktop/` | 管理 App：Tauri 壳 + React 前端、假后端与端到端测试 |
+| `desktop/` | 管理 App：Tauri 壳 + React 前端、假后端与端到端测试；构建与重启见 §2A |
 | `skills/cmb-watch/SKILL.md` | Agent 监听规则，唯一实现版本 |
 | `src/notify.py` | 可选的 QQ 邮箱 SMTP 通知（`setup` / `test`） |
 | `src/fast_buy_uia2.py` | 单笔购买（推荐），值守也调用它 |

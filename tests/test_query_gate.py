@@ -27,7 +27,11 @@ class GateTest(unittest.TestCase):
         self.assertEqual(migrated['cold_start_minutes'], 7)
         self.assertEqual(migrated['first_max_retries'], 5)
         self.assertEqual(migrated['reopen_deadline'], 90)
-        for value in ({'cold_start_minutes': 0}, {'cold_start_minutes': True},
+        # 0 is the valid "立即" setting; -1, booleans and >60 stay rejected.
+        self.assertEqual(settings.validate({'cold_start_minutes': 0})['cold_start_minutes'], 0)
+        self.assertEqual(settings.validate({'cold_start_minutes': 60})['cold_start_minutes'], 60)
+        for value in ({'cold_start_minutes': -1}, {'cold_start_minutes': True},
+                      {'cold_start_minutes': 61},
                       {'first_max_retries': -1}, {'irregular_window_minutes': 61},
                       {'irregular_retry_min_ms': 251, 'irregular_retry_max_ms': 250},
                       {'irregular_advance_ms': -1}, {'unknown': 1},

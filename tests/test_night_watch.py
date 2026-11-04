@@ -51,8 +51,19 @@ class NightWatchTest(unittest.TestCase):
                          datetime(2026, 11, 2, 23, 7))
         with self.assertRaises(nw.Abort):
             nw.parse_target("2026-11-02T23:06:59", now, prep_minutes=5)
-        with self.assertRaises(nw.Abort):
-            nw.parse_target("2026-11-02T23:30:00", now, prep_minutes=0)
+
+    def test_zero_prep_is_immediate_and_skips_the_time_check(self):
+        # 0 does not mean "cold start at the sale second": arming starts the
+        # cold start at once, so no remaining-time requirement applies.
+        now = datetime(2026, 11, 2, 23, 0)
+        self.assertEqual(nw.parse_target("2026-11-02T23:00:30", now, prep_minutes=0),
+                         datetime(2026, 11, 2, 23, 0, 30))
+        self.assertEqual(nw.parse_target("2026-11-02T23:00:00", now, prep_minutes=0),
+                         datetime(2026, 11, 2, 23, 0))
+        with self.assertRaises(nw.Abort):   # the 24 h ceiling still applies
+            nw.parse_target("2026-11-04T09:00:00", now, prep_minutes=0)
+        with self.assertRaises(nw.Abort):   # out of range
+            nw.parse_target("2026-11-02T23:30:00", now, prep_minutes=-1)
 
     def test_fire_marks_firing_before_submitting(self):
         seen = []
@@ -179,6 +190,7 @@ class NightWatchTest(unittest.TestCase):
         task = self.task()
         done = {}
         with patch.object(nw, "ensure_emulator"), patch.object(nw, "ensure_awake"), \
+             patch.object(nw, "ensure_network"), \
              patch.object(nw, "adb", return_value="1234\n"), \
              patch.object(nw, "login_fresh") as login, \
              patch.object(nw, "log"), \

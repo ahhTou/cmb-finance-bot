@@ -29,6 +29,10 @@ class RedemptionTest(unittest.TestCase):
                         patch.object(nw, "log"),
                         patch.object(nw, "spawn_watch"),
                         patch.object(nw, "adb", return_value=""),
+                        # Arming verifies the emulator can reach the network.
+                        # Default it to reachable; otherwise every arm test
+                        # waits out the real 30 s reconnect poll.
+                        patch.object(nw, "network_state", return_value="up"),
                         patch.object(nw, "emulator_running", return_value=True),
                         patch.object(nw, "booted", return_value=True),
                         patch.object(nw, "keychain_store", keys),

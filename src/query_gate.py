@@ -19,6 +19,9 @@ SCRIPT = Path(__file__).with_suffix('.js')
 FLOW = 'query_gate_v1'
 REQUEST_TIMEOUT_MS = 10000
 LEASE_MS = 15000
+# Minimum time to watch for the wrapper to install when the planned start has
+# already passed (emergency arming). Without it the loop below never runs.
+MIN_INSTALL_SECONDS = 10
 STAGING_URL = 'https://mobile.cmbchina.com/IEntrustFinance/subsidiaryfinancing/sfoveramount.html'
 
 
@@ -150,7 +153,17 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
         succeeded = False
         try:
             await client.call('Page.navigate', {'url': fast_buy.BUY_URL.format(code=task['code'], amount=task['amount'])})
-            install_deadline = min(time.monotonic()+15, time.monotonic()+max(0,(start-datetime.now()).total_seconds()-1))
+            # Emergency arming (cold start 0 min) reaches here with `start`
+            # already in the past: still give the wrapper a minimum window to
+            # install instead of stopping before the first check. When the
+            # planned start is still ahead, the original budget is kept.
+            left = (start - datetime.now()).total_seconds() - 1
+            if left <= 0:
+                # Planned start already here: watch for the wrapper for a
+                # short fixed window, then give up rather than stop instantly.
+                install_deadline = time.monotonic() + MIN_INSTALL_SECONDS
+            else:
+                install_deadline = time.monotonic() + min(15, left)
             while time.monotonic() < install_deadline:
                 state = await client.evaluate(READ_STATE)
                 if (state and state['token'] == token and state['installed']
