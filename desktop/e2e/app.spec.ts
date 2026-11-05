@@ -36,23 +36,6 @@ test('task cards change background on hover without moving', async ({ page }) =>
   expect(after).toEqual(before)
 })
 
-test('simulated password input defaults off and saves the switch value', async ({ page }) => {
-  await open(page, '/settings')
-  const toggle = page.getByRole('switch', { name: '模拟密码输入' })
-  const save = page.getByRole('button', { name: '保存值守配置', exact: true })
-  await expect(toggle).toBeEnabled()
-  await expect(toggle).not.toBeChecked()
-  await toggle.click()
-  const write = page.waitForRequest(
-    (request) => request.method() === 'PUT' && request.url().endsWith('/api/settings'),
-  )
-  await save.click()
-  expect((await write).postDataJSON().simulate_password_input).toBe(1)
-  await expect(page.getByText('已保存，之后的新布防使用这套配置')).toBeVisible()
-  await page.getByRole('button', { name: '恢复默认' }).click()
-  await expect(toggle).not.toBeChecked()
-})
-
 test('drill arm goes through confirm and switches to the live view', async ({ page }) => {
   await open(page, '/tasks', 'empty')
   await page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' }).click()

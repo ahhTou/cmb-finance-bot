@@ -1071,8 +1071,6 @@ def gated_fire(task):
     """Open once before release; persist the firing marker only after checks."""
     import fast_buy_uia2
 
-    # Tasks armed before this setting existed keep the original keyboard path.
-    simulate_password = bool(task.get('watch_settings', {}).get('simulate_password_input', 1))
     logged = [0]
 
     def heartbeat(attempts, results=None):
@@ -1094,9 +1092,6 @@ def gated_fire(task):
         # Everything the purchase needs that does not depend on quota happens
         # now, while queryBuy is still held: a keychain or uia2 failure stops
         # the watch here instead of costing a second once quota shows up.
-        if not simulate_password:
-            import native_password
-            native_password.require_runtime()
         # The drill prepares the password too (stopping before 确定).
         payment['password'] = fast_buy_uia2.load_payment_password()
         fast_buy_uia2.warm()
@@ -1130,8 +1125,7 @@ def gated_fire(task):
                                       risk_page=lambda: found.get('page'),
                                       before_submit=None if task.get('dry_run') else before_submit,
                                       password=payment.pop('password', None), warm_up=False,
-                                      mark=marks.setdefault,
-                                      simulate_password_input=simulate_password)
+                                      mark=marks.setdefault)
         finally:
             log_timings(ready, marks)
         task['phase'] = 'done'

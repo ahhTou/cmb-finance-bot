@@ -123,11 +123,8 @@ class RedemptionTest(unittest.TestCase):
             task, _ = self.arm(mode='first_launch', prep_minutes=None)
         self.assertEqual(task['prep_minutes'], 9)
         self.assertEqual(task['watch_settings']['first_max_retries'], 2)
-        self.assertEqual(task['watch_settings']['simulate_password_input'], 0)
         values['first_max_retries'] = 99
-        values['simulate_password_input'] = 1
         self.assertEqual(nw.load_task()['watch_settings']['first_max_retries'], 2)
-        self.assertEqual(nw.load_task()['watch_settings']['simulate_password_input'], 0)
 
     def test_stale_ui_configuration_is_rejected_before_credentials_or_arming(self):
         with patch.object(nw.keychain_store, 'load') as credentials:
@@ -135,7 +132,7 @@ class RedemptionTest(unittest.TestCase):
                 self.arm(settings_revision='stale')
             credentials.assert_not_called()
 
-    def test_gated_flow_marks_only_after_native_checks(self):
+    def test_gated_flow_marks_only_after_checks(self):
         task = self.task(purchase_flow=nw.query_gate.FLOW)
         root = object()
         def waiting(task, heartbeat, prepared, **kwargs):
@@ -147,7 +144,6 @@ class RedemptionTest(unittest.TestCase):
         def purchase(*args, **kwargs):
             self.assertIs(kwargs['prepared_form'], root)
             self.assertEqual(kwargs['product_quota'], '3000')
-            self.assertTrue(kwargs['simulate_password_input'])  # old task with no saved flag
             self.assertEqual(nw.load_task()['phase'], 'waiting')
             kwargs['before_submit']()
             self.assertEqual(nw.load_task()['phase'], 'firing')

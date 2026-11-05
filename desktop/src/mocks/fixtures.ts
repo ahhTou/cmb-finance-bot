@@ -196,7 +196,6 @@ export const HISTORY: HistoryRecord[] = [
 export const SETTINGS = {
   reopen_deadline: 3,
   drill_form_deadline: 3,
-  simulate_password_input: 0,
   cold_start_minutes: 7,
   first_offset_ms: 200,
   first_max_retries: 5,
