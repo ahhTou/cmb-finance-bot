@@ -7,7 +7,7 @@ import { q, useAction, useWatch } from '../api/hooks'
 import type { PurchaseSettings } from '../api/types'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint } from '../components/ui/card'
-import { Field, Input, Segmented } from '../components/ui/form'
+import { Field, Input, Segmented, Switch } from '../components/ui/form'
 import { cn } from '../lib/utils'
 import { type BackendConfig, backendConfig, setBackendConfig } from '../platform'
 import { useUI } from '../store'
@@ -52,6 +52,7 @@ const DEFAULTS = {
   irregular_idle_max_ms: 4000,
   reopen_deadline: 60,
   drill_form_deadline: 10,
+  simulate_password_input: 0,
 }
 type Key = keyof typeof DEFAULTS
 type Values = Record<Key, string>
@@ -72,6 +73,7 @@ const LIMITS: Record<Key, [number, number]> = {
   irregular_idle_max_ms: [1, 60000],
   reopen_deadline: [1, 300],
   drill_form_deadline: [1, 300],
+  simulate_password_input: [0, 1],
 }
 
 function validate(v: Values) {
@@ -142,6 +144,17 @@ function WatchSettings() {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={save}>
+      <Card title="密码输入" subtitle="适用于单笔购买、演练和新布防。关闭时由招行组件在当前会话内转换密码。">
+        <Switch
+          label="模拟密码输入"
+          checked={values.simulate_password_input === '1'}
+          disabled={disabled}
+          onChange={(checked) => {
+            form.setValue('simulate_password_input', checked ? '1' : '0', { shouldDirty: true })
+            setSaved(false)
+          }}
+        />
+      </Card>
       <Card title="首发模式" subtitle="开售时间一到就查询；没有额度时立即重试，次数用完就停。">
         <div className="grid grid-cols-2 gap-4">
           <Setting label="首次查询延后" help="开售后多久发出第一次查询" error={errors.first_offset_ms}>

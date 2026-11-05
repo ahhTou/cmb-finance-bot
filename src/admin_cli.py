@@ -267,11 +267,13 @@ def dispatch(a):
             if task and (task.get('phase') in ('armed', 'preparing', 'waiting', 'firing') or nw.alive(task.get('pid'))):
                 raise nw.Abort('值守任务活动期间不能单笔购买或演练。')
             import fast_buy_uia2
+            settings = purchase_settings.load()
             buffer = io.StringIO()
             with redirect_stdout(buffer):
                 result = fast_buy_uia2.run(a.code, amount, dry_run=a.dry_run,
-                                  form_deadline=purchase_settings.load()[
-                                      'drill_form_deadline' if a.dry_run else 'reopen_deadline'])
+                                  form_deadline=settings[
+                                      'drill_form_deadline' if a.dry_run else 'reopen_deadline'],
+                                  simulate_password_input=bool(settings['simulate_password_input']))
         return {'output': buffer.getvalue().splitlines(), 'result': result}
     if a.cmd.startswith('set-'):
         with nw.task_lock(False):

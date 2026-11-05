@@ -517,7 +517,7 @@ def warm():
 def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True,
         form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None,
         prepared_form=None, product_quota=None, verify_form=None,
-        password=None, warm_up=True, risk_page=None):
+        password=None, warm_up=True, risk_page=None, simulate_password_input=True):
     """One purchase. `mark(name, monotonic_time)` is an optional read-only
     timing hook; it never changes the flow.
 
@@ -532,6 +532,10 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     def note(name, when):
         if mark is not None:
             mark(name, when)
+
+    if not simulate_password_input:
+        import native_password
+        native_password.require_runtime()
 
     # The drill also types the password (it stops before 确定), so both paths
     # need it; it stays in this process only.
@@ -594,6 +598,10 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         print(f"购买页显示单笔可购买额度 {shown_quota} 元（本次 {amount} 元）", flush=True)
         if Decimal(amount) > shown_quota:
             raise fast_buy.Stop("布防金额高于页面可购额度，已停止，未提交。")
+    if not simulate_password_input:
+        return native_password.run(code, amount, password, dry_run=dry_run,
+                                   page=risk_page() if risk_page is not None else None,
+                                   before_submit=before_submit, mark=note, wait_result=wait_result)
     if before_submit is not None:
         before_submit()
     try:

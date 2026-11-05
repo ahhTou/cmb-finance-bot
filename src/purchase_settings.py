@@ -5,6 +5,7 @@ from pathlib import Path
 SETTINGS = Path(__file__).resolve().parents[1] / 'var/night/purchase-settings.json'
 DEFAULTS = {
     'reopen_deadline': 60, 'drill_form_deadline': 10,
+    'simulate_password_input': 0,
     'cold_start_minutes': 7,
     'first_offset_ms': 200, 'first_max_retries': 5,
     'irregular_advance_ms': 200, 'irregular_window_minutes': 2,
@@ -19,6 +20,7 @@ DEFAULTS = {
 }
 LIMITS = {
     'reopen_deadline': (1, 300), 'drill_form_deadline': (1, 300),
+    'simulate_password_input': (0, 1),
     'cold_start_minutes': (0, 60),
     'first_offset_ms': (0, 10000), 'first_max_retries': (0, 100),
     'irregular_advance_ms': (0, 10000), 'irregular_window_minutes': (1, 60),

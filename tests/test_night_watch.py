@@ -100,7 +100,8 @@ class NightWatchTest(unittest.TestCase):
             nw.disarm(None)
 
     def login_env(self, logged_in, login_page=lambda: True):
-        return [patch.object(nw, "cold_start"),
+        return [patch.object(nw, "network_state", return_value="up"),
+                patch.object(nw, "cold_start"),
                 patch.object(nw, "logged_in", side_effect=logged_in),
                 patch.object(nw, "on_login_page", side_effect=login_page),
                 patch.object(nw, "read_screen", return_value="tree"),
