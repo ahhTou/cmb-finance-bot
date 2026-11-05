@@ -230,8 +230,8 @@ def raw_digit_buttons(root):
 
 
 # Defaults only; must equal purchase_settings.DEFAULTS (the pace overrides them).
-KEYPAD_STABLE_SECONDS = 0.20
-KEYPAD_STABLE_SAMPLES = 3
+KEYPAD_STABLE_SECONDS = 0.06
+KEYPAD_STABLE_SAMPLES = 2
 KEYPAD_SAMPLE_GAP = 0.0
 PASSWORD_SAME_DIGIT_GAP = 0.05      # repeated coordinate: merged below this
 PASSWORD_DIFFERENT_DIGIT_GAP = 0.01  # distinct coordinates need no long gap

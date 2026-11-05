@@ -27,8 +27,10 @@ DEFAULTS = {
     # 单位：*_ms 毫秒，*_s 秒。
     'password_page_timeout_s': 10,        # 风险确认 → 密码面板出现
     'keypad_timeout_ms': 1200,            # 等焦点 + 10 键可用 + 位置稳定
-    'keypad_stable_ms': 200,              # 连续不动多久才认为键盘就绪
-    'keypad_stable_samples': 3,           # 至少连续几次采样不动
+    # 11-05 晚 18 次演练：密码页识别出来时键盘已停稳，第 1 次采样起布局就
+    # 不再变化；2 次 / 60ms 在 93–183ms 就绪，6 位全部第一轮输入成功。
+    'keypad_stable_ms': 60,               # 连续不动多久才认为键盘就绪
+    'keypad_stable_samples': 2,           # 至少连续几次采样不动
     # 两次采样之间额外 sleep。读一次控件树本身约 0.1 秒，已经是节拍；原来再
     # 加 40ms 时第 3 次采样要到约 280ms 才到，实测稳定 227–314ms（11-05）。
     'keypad_sample_gap_ms': 0,

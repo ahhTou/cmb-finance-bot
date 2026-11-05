@@ -158,15 +158,24 @@ class PasswordPanelTest(unittest.TestCase):
         self.assertGreaterEqual(read.call_count,fu.KEYPAD_STABLE_SAMPLES)
         self.assertEqual(sleep.call_count,0)  # no extra gap by default
 
-    def test_keypad_with_100ms_dump_is_ready_on_the_third_sample(self):
-        # 11-05: dump ~0.1 s + 40 ms sleep put the third sample at ~280 ms.
+    def test_keypad_with_slow_dump_is_ready_on_the_second_sample(self):
+        # 11-05: dump ~0.1 s + 40 ms sleep + 3 samples/200 ms took ~260-350 ms.
         clock=Clock()
         with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
              patch.object(fu.time,'sleep',side_effect=clock.sleep), \
              patch.object(fu,'dump',side_effect=self.slow_dump(clock))as read:
             fu.wait_keypad_stable()
+        self.assertEqual(read.call_count,2)
+        self.assertAlmostEqual(clock.now,.2)
+
+    def test_keypad_with_fast_dump_still_waits_the_stable_floor(self):
+        clock=Clock()
+        with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
+             patch.object(fu.time,'sleep',side_effect=clock.sleep), \
+             patch.object(fu,'dump',side_effect=self.slow_dump(clock,.031))as read:
+            fu.wait_keypad_stable()
         self.assertEqual(read.call_count,3)
-        self.assertAlmostEqual(clock.now,.3)
+        self.assertGreaterEqual(clock.now-.031,fu.KEYPAD_STABLE_SECONDS)
 
     def test_keypad_sample_count_and_gap_are_honoured(self):
         clock=Clock()
@@ -264,7 +273,7 @@ class PasswordPaceTest(unittest.TestCase):
              patch.object(fu.time,'sleep'):
             fu.enter_password('111111',pace=pace)
         self.assertEqual(wait.call_args.kwargs,{'timeout':2.5,'stable_seconds':1.5,
-                                                'samples_needed':3,'gap':0.0})
+                                                'samples_needed':2,'gap':0.0})
         self.assertEqual(confirm.call_args.kwargs,{'timeout':1.1})
         self.assertEqual(calls[0].count('sleep 0.07'),5)
         self.assertEqual(calls[-1],['input tap 160 220'])
@@ -278,7 +287,7 @@ class PasswordPaceTest(unittest.TestCase):
         values=fu.purchase_settings.validate(fu.purchase_settings.DEFAULTS)
         self.assertEqual(values['password_same_digit_gap_ms'],50)
         self.assertEqual(values['password_different_digit_gap_ms'],10)
-        self.assertEqual(values['keypad_stable_ms'],200)
+        self.assertEqual(values['keypad_stable_ms'],60)
         self.assertEqual(values['keypad_stable_samples'],fu.KEYPAD_STABLE_SAMPLES)
         self.assertEqual(values['keypad_sample_gap_ms']/1000,fu.KEYPAD_SAMPLE_GAP)
         self.assertEqual(values['keypad_stable_ms']/1000,fu.KEYPAD_STABLE_SECONDS)
