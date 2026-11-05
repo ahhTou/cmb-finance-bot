@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Copy, Minus, Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useRefreshPage, useWatch } from '../api/hooks'
 import type { CancelRequest, CommandResult } from '../api/types'
@@ -9,8 +9,8 @@ import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Card, Hint, Metric, MetricGrid } from '../components/ui/card'
 import { Dialog } from '../components/ui/dialog'
-import { Field, Input, Switch } from '../components/ui/form'
-import { copyText, validAmount, validCode } from '../lib/utils'
+import { Checkbox, Field, Input, Switch } from '../components/ui/form'
+import { copyText, formatAmount, testItemText, validAmount, validCode } from '../lib/utils'
 import { useUI } from '../store'
 import { deviceFacts, useDeviceAction, useScreenshot } from './Dashboard'
 
@@ -39,9 +39,20 @@ export function DrillPage() {
   const [limit, setLimit] = useState(1)
   const [allOrders, setAllOrders] = useState(false)
   const [sheet, setSheet] = useState<'arm' | 'output' | 'cancel' | 'buy' | null>(null)
-  const [confirmBuyAmount, setConfirmBuyAmount] = useState('')
+  const [confirmBuy, setConfirmBuy] = useState(false)
   const close = (open: boolean) => !open && setSheet(null)
   const canBuy = validCode(code) && validAmount(amount)
+  const { testItem } = w
+  const testItemUsed = useRef(false)
+
+  // Open with the saved test item so a drill never has to look up product and
+  // amount again; an already typed value wins.
+  useEffect(() => {
+    if (testItemUsed.current || !testItem) return
+    testItemUsed.current = true
+    setCode((value) => value.trim() || testItem.code)
+    setAmount((value) => (value.trim() === '' || value === '0.01' ? testItem.amount : value))
+  }, [testItem])
 
   async function buy(real: boolean) {
     useUI.getState().setOutput([])
@@ -91,6 +102,11 @@ export function DrillPage() {
             </Field>
           </div>
           <FavoritePicker onPick={setCode} />
+          {testItem && (
+            <Hint className="text-[10px]">
+              测试项（来自收藏）：{testItemText(testItem)}；打开时自动填入，可直接修改。
+            </Hint>
+          )}
           <Switch
             label="实际付款：输入交易密码并提交"
             checked={realBuy}
@@ -107,7 +123,7 @@ export function DrillPage() {
               disabled={busy || w.active || !canBuy}
               onClick={() => {
                 if (!realBuy) return buy(false)
-                setConfirmBuyAmount('')
+                setConfirmBuy(false)
                 setSheet('buy')
               }}
             >
@@ -283,23 +299,30 @@ export function DrillPage() {
         </div>
       </Dialog>
       <Dialog open={sheet === 'buy'} onOpenChange={close} title="确认真实单笔购买" width={480}>
-        <p className="text-[13px] leading-relaxed">
-          现在购买产品 {code.trim()}，金额 {amount} 元。将输入交易密码并提交一次。
-        </p>
-        <Field label="再输入一次金额">
-          <Input
-            data-testid="confirm-buy-amount"
-            value={confirmBuyAmount}
-            onChange={(e) => setConfirmBuyAmount(e.target.value)}
-            placeholder="金额"
-          />
-        </Field>
+        <div
+          data-testid="confirm-buy-price"
+          className="flex flex-col items-center gap-1 rounded-xl bg-field px-4 py-4 text-center ring-1 ring-white/6"
+        >
+          <span className="text-[11px] text-muted">本次真实支付金额</span>
+          <span className="font-rounded font-semibold text-[38px] leading-none tracking-tight">
+            <span className="mr-0.5 align-top text-[18px] text-muted">¥</span>
+            {formatAmount(amount)}
+          </span>
+          <span className="mt-1.5 text-[11px] text-muted">{code.trim() || '—'} · 立即购买一笔</span>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted">将输入交易密码并提交一次，不创建值守任务。</p>
+        <Checkbox
+          testId="confirm-buy-check"
+          checked={confirmBuy}
+          onChange={setConfirmBuy}
+          label={`我已核对产品、金额和时间，确认真实支付 ¥${formatAmount(amount)}`}
+        />
         <Hint tone="warn">结果以银行交易记录为准；结果不明时先核对，不要重复购买。</Hint>
         <div className="flex justify-end gap-2.5">
           <Button onClick={() => setSheet(null)}>取消</Button>
           <Button
             variant="primary"
-            disabled={busy || w.active || confirmBuyAmount !== amount}
+            disabled={busy || w.active || !confirmBuy}
             onClick={() => {
               setSheet(null)
               buy(true)

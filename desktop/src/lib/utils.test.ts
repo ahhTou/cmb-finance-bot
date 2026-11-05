@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { ageText, localISO, parseLocal, phaseName, shortTime, validAmount, validCode } from './utils'
+import {
+  ageText,
+  formatAmount,
+  localISO,
+  parseLocal,
+  phaseName,
+  shortTime,
+  testItemText,
+  validAmount,
+  validCode,
+} from './utils'
 
 describe('time helpers', () => {
   it('reads the backend naive ISO time as local time', () => {
@@ -34,6 +44,21 @@ describe('validation', () => {
     expect(validAmount('50000.01')).toBe(false)
     expect(validAmount('1.234')).toBe(false)
     expect(validAmount('-1')).toBe(false)
+  })
+
+  it('formats the confirmation amount with grouping and two decimals', () => {
+    expect(formatAmount('50000')).toBe('50,000.00')
+    expect(formatAmount('5000')).toBe('5,000.00')
+    expect(formatAmount('0.01')).toBe('0.01')
+    expect(formatAmount('100.5')).toBe('100.50')
+  })
+
+  it('describes the saved test item in one line', () => {
+    expect(testItemText({ code: 'JX040229', amount: '0.01', title: '招睿丰和' })).toBe(
+      '招睿丰和 JX040229 · 0.01 元',
+    )
+    expect(testItemText({ code: 'JX040229', amount: '100' })).toBe('JX040229 · 100.00 元')
+    expect(testItemText(null)).toBe('')
   })
 })
 

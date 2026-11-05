@@ -27,6 +27,15 @@ export interface Task {
 export interface Favorite {
   code: string
   title?: string
+  /** Set on the one test item; drills use this product and amount by default. */
+  test_amount?: string | null
+}
+
+/** The saved product + amount drills fill in, from the favourites page. */
+export interface TestItem {
+  code: string
+  amount: string
+  title?: string
 }
 
 export interface Status {
@@ -39,6 +48,8 @@ export interface Status {
   mail_configured: boolean
   log_path: string
   favorites: Favorite[]
+  /** The test item, if one is set. */
+  test_item?: TestItem | null
 }
 
 export interface Device {

@@ -295,6 +295,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/favorites/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Favorite Test */
+        post: operations["set_favorite_test_api_favorites_test_post"];
+        /** Clear Favorite Test */
+        delete: operations["clear_favorite_test_api_favorites_test_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/favorites/{code}": {
         parameters: {
             query?: never;
@@ -461,6 +479,13 @@ export interface components {
              * @default
              */
             title: string;
+        };
+        /** FavoriteTestRequest */
+        FavoriteTestRequest: {
+            /** Code */
+            code: string;
+            /** Amount */
+            amount: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -977,6 +1002,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_favorite_test_api_favorites_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FavoriteTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_favorite_test_api_favorites_test_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

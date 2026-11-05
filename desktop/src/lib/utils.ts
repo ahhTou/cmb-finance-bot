@@ -108,6 +108,20 @@ export const amountSchema = z
 export const validCode = (text: string) => codeSchema.safeParse(text).success
 export const validAmount = (text: string) => amountSchema.safeParse(text).success
 
+/** "5000" → "5,000.00" for confirmation screens; already-valid amounts only. */
+export function formatAmount(text: string) {
+  const [whole = '', fraction = ''] = text.replace(/,/g, '').trim().split('.')
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const decimals = `${fraction}00`.slice(0, 2)
+  return `${grouped || '0'}.${decimals}`
+}
+
+/** The saved test item ({code, amount, title}) as one line for hints. */
+export function testItemText(item: { code: string; amount: string; title?: string } | null): string {
+  if (!item) return ''
+  return `${item.title ? `${item.title} ` : ''}${item.code} · ${formatAmount(item.amount)} 元`
+}
+
 export async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)

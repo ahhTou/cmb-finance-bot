@@ -49,6 +49,7 @@ export function useWatch() {
     agentShort:
       status?.agent?.state === 'watching' ? '监听中' : status?.agent?.state === 'stale' ? '已失联' : '未监听',
     favorites: status?.favorites ?? [],
+    testItem: status?.test_item ?? null,
   }
 }
 

@@ -47,6 +47,53 @@ class FavoritesTest(unittest.TestCase):
             encoding="utf-8")
         self.assertEqual(favorites.load(), [{"code": "JX040229", "title": "好"}])
 
+    def test_test_item_is_saved_and_only_one_row_has_it(self):
+        favorites.add("JX040229", "招睿丰和 30 天")
+        favorites.add("133045A", "月月宝")
+        favorites.set_test("jx040229", "0.01")
+        self.assertEqual(favorites.test_item(),
+                         {"code": "JX040229", "amount": "0.01", "title": "招睿丰和 30 天"})
+        favorites.set_test("133045A", "100")
+        self.assertEqual([row.get("test_amount") for row in favorites.load()], [None, "100.00"])
+        self.assertEqual(favorites.test_item()["code"], "133045A")
+
+    def test_renaming_keeps_the_test_item(self):
+        favorites.add("JX040229", "旧标题")
+        favorites.set_test("JX040229", "0.02")
+        favorites.add("jx040229", "新标题")
+        self.assertEqual(favorites.test_item(),
+                         {"code": "jx040229", "amount": "0.02", "title": "新标题"})
+
+    def test_test_item_requires_a_favourite_and_a_valid_amount(self):
+        with self.assertRaises(RuntimeError):
+            favorites.set_test("JX040229", "0.01")
+        favorites.add("JX040229", "标题")
+        for amount in ("", "0", "-1", "1.234", "50000.01", "abc"):
+            with self.subTest(amount=amount), self.assertRaises(RuntimeError):
+                favorites.set_test("JX040229", amount)
+        self.assertIsNone(favorites.test_item())
+
+    def test_clear_and_remove_clear_the_test_item(self):
+        favorites.add("JX040229", "标题")
+        favorites.set_test("JX040229", "0.01")
+        favorites.clear_test()
+        self.assertIsNone(favorites.test_item())
+        favorites.set_test("JX040229", "0.01")
+        favorites.remove("JX040229")
+        self.assertIsNone(favorites.test_item())
+
+    def test_load_normalizes_and_keeps_only_one_test_item(self):
+        favorites.PATH.write_text(
+            '[{"code":"A123","title":"a","test_amount":"0.01"},'
+            '{"code":"B123","title":"b","test_amount":2},'
+            '{"code":"C123","title":"c","test_amount":"bad"}]',
+            encoding="utf-8")
+        rows = favorites.load()
+        self.assertEqual(rows[0]["test_amount"], "0.01")
+        self.assertNotIn("test_amount", rows[1])
+        self.assertNotIn("test_amount", rows[2])
+        self.assertEqual(favorites.test_item(), {"code": "A123", "amount": "0.01", "title": "a"})
+
 
 if __name__ == "__main__":
     unittest.main()

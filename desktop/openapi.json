@@ -478,6 +478,56 @@
     }
    }
   },
+  "/api/favorites/test": {
+   "post": {
+    "summary": "Set Favorite Test",
+    "operationId": "set_favorite_test_api_favorites_test_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FavoriteTestRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Clear Favorite Test",
+    "operationId": "clear_favorite_test_api_favorites_test_delete",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/favorites/{code}": {
    "delete": {
     "summary": "Remove Favorite",
@@ -764,6 +814,24 @@
      "code"
     ],
     "title": "FavoriteRequest"
+   },
+   "FavoriteTestRequest": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "amount": {
+      "type": "string",
+      "title": "Amount"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "amount"
+    ],
+    "title": "FavoriteTestRequest"
    },
    "HTTPValidationError": {
     "properties": {

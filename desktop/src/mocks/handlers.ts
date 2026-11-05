@@ -18,7 +18,7 @@ import {
 const kind = scenario()
 const state = {
   task: makeTask(kind),
-  favorites: kind === 'empty' ? [] : [...FAVORITES],
+  favorites: kind === 'empty' ? [] : FAVORITES.map((row) => ({ ...row })),
   logs: kind === 'empty' ? [] : [...LOG_LINES],
   history: kind === 'empty' ? [] : [...HISTORY],
 }
@@ -176,6 +176,18 @@ export const handlers = [
     const existing = state.favorites.find((f) => f.code === body.code)
     if (existing) existing.title = body.title
     else state.favorites.push(body)
+    return HttpResponse.json({ favorites: state.favorites, ok: true })
+  }),
+  http.post('/api/favorites/test', async ({ request }) => {
+    const body = (await request.json()) as { code: string; amount: string }
+    const row = state.favorites.find((f) => f.code.toLowerCase() === body.code.toLowerCase())
+    if (!row) return fail('先收藏这个产品，再设为测试项。')
+    for (const favorite of state.favorites) delete favorite.test_amount
+    row.test_amount = body.amount
+    return HttpResponse.json({ favorites: state.favorites, ok: true })
+  }),
+  http.delete('/api/favorites/test', () => {
+    for (const favorite of state.favorites) delete favorite.test_amount
     return HttpResponse.json({ favorites: state.favorites, ok: true })
   }),
   http.delete('/api/favorites/:code', ({ params }) => {

@@ -1,6 +1,6 @@
-# 待办：收藏（产品代码 + 标题）
+# 收藏（产品代码 + 标题 + 测试项）
 
-状态：**已实现**（2026-11-04）。入口在侧边栏「收藏」；布防与单笔购买演练的代码框下方有收藏快捷选择。
+状态：**已实现**（2026-11-04；2026-11-05 增加测试项）。入口在侧边栏「收藏」；布防与单笔购买演练的代码框下方有收藏快捷选择。
 
 ## 要做什么
 
@@ -9,19 +9,28 @@
 - **任何可以填产品代码的地方都能从收藏里选**。当前有两处：任务页的布防表单、演练页的「单笔购买演练」。
 - 后续功能点：标题以后自动从招行获取；现在由账户持有人手动填写。
 
-## 建议做法（未定稿）
+## 测试项（2026-11-05）
 
-- 数据放 `var/favorites.json`（Git 忽略，0600），Python 维护，App 通过 `admin_cli` 读写，终端也能用同一份列表。
-- 结构 `[{"code": "JX040229", "title": "…"}]`；代码 4–20 位字母数字（和 `night_watch` 的校验一致），标题 1–40 字，按代码忽略大小写去重。
-- 新增 `admin_cli favorites --list / --add CODE TITLE / --remove CODE`；`status` 里带上列表，App 随刷新更新。
-- App：新增「收藏」页；布防和演练的代码输入框加一个收藏选择，选中后填入代码并显示对应标题。
-- 侧边栏变成：任务 / 状态 / 演练 / 收藏 / 历史 / 设置。代码里写死的 tab 序号要一起改（`ManagementView`、`TasksView`、`DashboardView`、`Model.refreshCurrent`）。
+- 可以把**一项**收藏设为测试项，并给一个测试金额（0 < 金额 ≤ 50000，最多两位小数）。同时只能有一项。
+- 演练布防、单笔购买演练打开时自动带入这个产品和金额；已经输入的内容优先，不会覆盖。
+- 读取入口：`admin_cli.py status` 的 `test_item`（`{code, amount, title}` 或 `null`）、`admin_cli.py favorites --test`。后续测试脚本可直接读这两处。
+- 测试项只是**默认参数**，不构成付款授权：真实付款仍要在确认页勾选大字号金额，并遵守“一笔只提交一次”。
+- 改标题不会清掉测试项；删除该收藏会一并清掉；也可以「取消测试」只清测试项。
 
-## 需要先确认
+## 实现
 
-- 自动获取标题的数据源：不能重放购买接口（见 `AGENT_WORKFLOW.md` §6.3、§7），大概率要从 App 内的详情页读取，或走开户行允许的查询页。
-- 收藏上限、重名处理（建议按代码去重）。
+- 数据放 `var/favorites.json`（Git 忽略，0600），Python 维护：
+
+  ```json
+  [{"code": "JX040229", "title": "招睿丰和 30 天", "test_amount": "0.01"}]
+  ```
+
+  代码 4–20 位字母数字（和 `night_watch` 的校验一致），标题 1–40 字，按代码忽略大小写去重；`test_amount` 最多出现在一项。
+- `src/favorites.py`：`add` / `remove` / `set_test` / `clear_test` / `test_item`；保留旧文件的未知字段忽略行为。
+- `admin_cli.py`：`favorites --list / --add CODE --title TITLE / --remove CODE / --set-test CODE --test-amount AMOUNT / --clear-test / --test`；`status` 同时带 `favorites` 和 `test_item`。
+- HTTP：`POST /api/favorites/test {code, amount}`、`DELETE /api/favorites/test`；旧的增删改接口不变。
+- App：收藏页每行有测试金额输入和「设为测试 / 更新测试 / 取消测试」；布防（仅演练）和单笔购买演练在空表单上自动填入测试项，并显示来源提示。
 
 ## 不做
 
-- 收藏里不存金额、时间等交易参数。
+- 收藏不存交易时间或凭据；只给测试项存一个金额，且不当作付款授权。

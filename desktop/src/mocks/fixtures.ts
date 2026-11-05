@@ -119,6 +119,7 @@ export function makeTask(kind: Scenario): Task | null {
 
 export function makeStatus(task: Task | null, favorites: Favorite[], logs: string[]): Status {
   const live = task?.phase && ['armed', 'preparing', 'waiting', 'firing'].includes(task.phase)
+  const test = favorites.find((row) => Boolean(row.test_amount))
   return {
     task,
     running: Boolean(live),
@@ -129,6 +130,7 @@ export function makeStatus(task: Task | null, favorites: Favorite[], logs: strin
     mail_configured: true,
     log_path: '/mock/var/night/watch.log',
     favorites,
+    test_item: test?.test_amount ? { code: test.code, amount: test.test_amount, title: test.title } : null,
   }
 }
 

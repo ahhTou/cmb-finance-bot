@@ -1,19 +1,19 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { api } from '../api/client'
-import { q, useAction } from '../api/hooks'
+import { q, useAction, useWatch } from '../api/hooks'
 import type { ArmRequest, Mode } from '../api/types'
-import { amountSchema, codeSchema, inputDateTime, localISO } from '../lib/utils'
+import { amountSchema, codeSchema, formatAmount, inputDateTime, localISO, testItemText } from '../lib/utils'
 import { useUI } from '../store'
 import { BusyLine, FavoritePicker, Spinner } from './shared'
 import { Button } from './ui/button'
 import { Hint } from './ui/card'
 import { Dialog } from './ui/dialog'
-import { Field, Input, Segmented, Select, Switch } from './ui/form'
+import { Checkbox, Field, Input, Segmented, Select, Switch } from './ui/form'
 
 const QUOTA_TIMES = ['00:15', '09:00', '09:15', '10:15', '11:15']
 const PREP_CHOICES = [0, 2, 5, 7]
@@ -80,15 +80,29 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
   const loaded = Boolean(revision)
 
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { code: '', amount: '' } })
+  const { testItem } = useWatch()
+  const testItemUsed = useRef(false)
   const [date, setDate] = useState(() => defaultDate(mode))
   const [timeChoice, setTimeChoice] = useState(() => hhmm(defaultDate(mode)))
   const [prep, setPrep] = useState(7)
   const [dry, setDry] = useState(drill)
   const [now, setNow] = useState(drill)
   const [confirm, setConfirm] = useState(false)
-  const [confirmAmount, setConfirmAmount] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
   const [step, setStep] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+
+  // Drills (including the 演练 switch on a normal arm form) start from the
+  // saved test item so it never has to be looked up again. Only fills empty
+  // fields, and only once.
+  useEffect(() => {
+    if (!dry || testItemUsed.current || !testItem) return
+    const values = form.getValues()
+    if (values.code.trim() || values.amount.trim()) return
+    testItemUsed.current = true
+    form.setValue('code', testItem.code, { shouldValidate: true })
+    form.setValue('amount', testItem.amount, { shouldValidate: true })
+  }, [dry, form, testItem])
 
   // Once settings arrive, adopt the stored cold-start lead and the next quota slot after it.
   useEffect(() => {
@@ -134,7 +148,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
     () => {
       const issue = problem()
       if (issue) return setMessage(issue)
-      setConfirmAmount('')
+      setConfirmed(false)
       setConfirm(true)
     },
     (errors) => setMessage(errors.code?.message ?? errors.amount?.message ?? '请检查输入。'),
@@ -144,11 +158,6 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
   const when = now
     ? '约三分钟后'
     : date.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const verb = dry ? '演练到输完密码' : '提交一次'
-  const summary =
-    mode === 'redemption'
-      ? `产品 ${code.trim()}，${when} 起 ${window} 分钟窗口内在同一购买页查询，有额度就${verb} ${amount} 元。`
-      : `产品 ${code.trim()}，${when} ${verb} ${amount} 元。`
 
   async function submit() {
     const values = form.getValues()
@@ -217,20 +226,30 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
             transition={{ duration: 0.18 }}
             className="flex flex-col gap-4"
           >
-            <p className="selectable text-[13px] leading-relaxed">
-              {summary}
-              <br />
-              {configuration}
-            </p>
+            <div
+              data-testid="confirm-price"
+              className="flex flex-col items-center gap-1 rounded-xl bg-field px-4 py-4 text-center ring-1 ring-white/6"
+            >
+              <span className="text-[11px] text-muted">
+                {dry ? '演练金额（停在确定前，不提交）' : '本次真实支付金额'}
+              </span>
+              <span className="font-rounded font-semibold text-[38px] leading-none tracking-tight">
+                <span className="mr-0.5 align-top text-[18px] text-muted">¥</span>
+                {formatAmount(amount)}
+              </span>
+              <span className="mt-1.5 text-[11px] text-muted">
+                {code.trim() || '—'} · {when}
+                {mode === 'redemption' ? ` 起 ${window} 分钟窗口` : ''}
+              </span>
+            </div>
+            <p className="selectable text-[11px] leading-relaxed text-muted">{configuration}</p>
             {!dry && (
-              <Field label="再输入一次金额">
-                <Input
-                  data-testid="confirm-amount"
-                  value={confirmAmount}
-                  onChange={(e) => setConfirmAmount(e.target.value)}
-                  placeholder="金额"
-                />
-              </Field>
+              <Checkbox
+                testId="confirm-check"
+                checked={confirmed}
+                onChange={setConfirmed}
+                label={`我已核对产品、金额和时间，确认真实支付 ¥${formatAmount(amount)}`}
+              />
             )}
             <Hint>一笔只提交一次；结果以银行交易记录为准。提交后不再重试。</Hint>
             {locked && <BusyLine text={step} />}
@@ -244,11 +263,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
               >
                 返回
               </Button>
-              <Button
-                variant="primary"
-                disabled={locked || (!dry && confirmAmount !== amount)}
-                onClick={submit}
-              >
+              <Button variant="primary" disabled={locked || (!dry && !confirmed)} onClick={submit}>
                 {locked && <Spinner className="text-white" />}
                 {dry ? '开始演练' : '确认真实布防'}
               </Button>
@@ -273,6 +288,11 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
               </Field>
             </div>
             <FavoritePicker onPick={(value) => form.setValue('code', value)} />
+            {dry && testItem && (
+              <Hint className="text-[10px]">
+                测试项（来自收藏）：{testItemText(testItem)}；打开演练时自动填入，可直接修改。
+              </Hint>
+            )}
             {mode === 'redemption' ? (
               <>
                 <div className="flex items-center gap-3">

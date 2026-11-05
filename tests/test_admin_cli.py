@@ -26,6 +26,7 @@ class AdminTest(unittest.TestCase):
         self.stack.enter_context(patch.object(admin.keychain_store, 'credential_info', return_value={'state': 'configured'}))
         self.stack.enter_context(patch.object(admin.manage, "status_info", return_value={"emulator": {"running": False}}))
         self.stack.enter_context(patch.object(admin.notify, 'configured', return_value=False))
+        self.stack.enter_context(patch.object(admin.favorites, 'PATH', state / 'favorites.json'))
 
     def tearDown(self):
         self.stack.close()
@@ -70,6 +71,22 @@ class AdminTest(unittest.TestCase):
         code, data = self.call('set-payment-password', '--new', 'do-not-echo')
         self.assertEqual(code, 1)
         self.assertNotIn('do-not-echo', json.dumps(data))
+
+    def test_favorites_test_item_cli(self):
+        code, data = self.call('favorites', '--add', 'JX040229', '--title', '标题')
+        self.assertEqual(code, 0)
+        self.assertIsNone(data['test_item'])
+        code, data = self.call('favorites', '--set-test', 'JX040229', '--test-amount', '0.02')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['test_item'],
+                         {'code': 'JX040229', 'amount': '0.02', 'title': '标题'})
+        code, data = self.call('favorites', '--test')
+        self.assertEqual(data['test_item']['amount'], '0.02')
+        code, _ = self.call('favorites', '--set-test', 'JX040229')
+        self.assertEqual(code, 1)
+        code, data = self.call('favorites', '--clear-test')
+        self.assertEqual(code, 0)
+        self.assertIsNone(data['test_item'])
 
     def test_credential_payload_not_echoed(self):
         code, data = self.call('set-login-pattern', stdin='invalid-sensitive-text')

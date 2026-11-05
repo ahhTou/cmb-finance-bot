@@ -77,6 +77,17 @@ class ServerTest(unittest.TestCase):
             '--confirm-real-payment'])
 
     @patch('admin_server.subprocess.run')
+    def test_favorite_test_endpoints(self, run):
+        run.return_value = done({'ok': True, 'favorites': [], 'test_item': None})
+        r = self.call('POST', '/api/favorites/test', json={'code': 'JX040229', 'amount': '0.02'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], [
+            'favorites', '--set-test', 'JX040229', '--test-amount', '0.02'])
+        r = self.call('DELETE', '/api/favorites/test')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['favorites', '--clear-test'])
+
+    @patch('admin_server.subprocess.run')
     def test_buy_and_cancel_flags_and_timeouts(self, run):
         run.return_value = done({'ok': True, 'output': []})
         self.call('POST', '/api/buy', json={'code': 'JX040229', 'amount': '0.01'})

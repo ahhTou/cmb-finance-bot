@@ -118,6 +118,11 @@ class FavoriteRequest(BaseModel):
     title: str = ''
 
 
+class FavoriteTestRequest(BaseModel):
+    code: str
+    amount: str
+
+
 class PatternRequest(BaseModel):
     new: str
 
@@ -238,6 +243,18 @@ def favorites():
 @app.post('/api/favorites')
 def add_favorite(body: FavoriteRequest):
     return run(['favorites', '--add', body.code, '--title', body.title])
+
+
+# Declared before /api/favorites/{code}: a DELETE to /api/favorites/test must
+# clear the test item instead of removing a favourite called "test".
+@app.post('/api/favorites/test')
+def set_favorite_test(body: FavoriteTestRequest):
+    return run(['favorites', '--set-test', body.code, '--test-amount', body.amount])
+
+
+@app.delete('/api/favorites/test')
+def clear_favorite_test():
+    return run(['favorites', '--clear-test'])
 
 
 @app.delete('/api/favorites/{code}')

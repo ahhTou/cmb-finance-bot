@@ -1,6 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
 import { Clock, Hammer, type LucideIcon, Repeat, ShieldCheck, Zap } from 'lucide-react'
-import { motion } from 'motion/react'
 import { type ReactNode, useState } from 'react'
 import { api } from '../api/client'
 import { useAction, useWatch } from '../api/hooks'
@@ -170,11 +169,9 @@ function ModeCard({
   testId: string
 }) {
   return (
-    <motion.section
+    <section
       data-testid={testId}
-      whileHover={{ y: -2 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-      className="flex min-h-0 items-center gap-[18px] rounded-[14px] bg-card p-5"
+      className="flex min-h-0 items-center gap-[18px] rounded-[14px] bg-card p-5 transition-colors duration-150 hover:bg-card-hover"
     >
       <IconTile icon={icon} tone={tone} />
       <div className="flex min-w-0 flex-1 flex-col gap-[7px] self-stretch overflow-y-auto py-0.5 [justify-content:safe_center]">
@@ -186,7 +183,7 @@ function ModeCard({
         <Badge tone={badge[1]}>{badge[0]}</Badge>
         {actions}
       </div>
-    </motion.section>
+    </section>
   )
 }
 

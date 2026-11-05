@@ -1,13 +1,13 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useAction, useWatch } from '../api/hooks'
 import type { Favorite } from '../api/types'
 import { Button } from '../components/ui/button'
-import { Card } from '../components/ui/card'
+import { Badge, Card } from '../components/ui/card'
 import { Confirm } from '../components/ui/dialog'
 import { Field, Input } from '../components/ui/form'
-import { validCode } from '../lib/utils'
+import { validAmount, validCode } from '../lib/utils'
 import { useUI } from '../store'
 
 export function FavoritesPage() {
@@ -28,7 +28,7 @@ export function FavoritesPage() {
 
   return (
     <div className="flex flex-col gap-4 overflow-y-auto px-[26px]">
-      <Card title="添加收藏" subtitle="只保存产品代码和标题，不保存金额、时间或凭据。">
+      <Card title="添加收藏" subtitle="收藏保存产品代码和标题；可给其中一项设置测试金额，供演练自动带入。">
         <form
           className="flex items-end gap-3"
           onSubmit={(e) => {
@@ -47,7 +47,10 @@ export function FavoritesPage() {
           </Button>
         </form>
       </Card>
-      <Card title="已收藏" subtitle={`布防和单笔演练都能直接选；共 ${favorites.length} 项`}>
+      <Card
+        title="已收藏"
+        subtitle={`设为测试项的收藏会在演练布防和单笔购买演练里自动填入；共 ${favorites.length} 项`}
+      >
         {favorites.length === 0 ? (
           <p className="text-muted text-xs">还没有收藏。添加后，填产品代码的地方会出现快捷选择。</p>
         ) : (
@@ -69,6 +72,7 @@ export function FavoritesPage() {
             </AnimatePresence>
           </ul>
         )}
+        <p className="text-[10px] text-muted">测试项只是默认参数，实际付款仍要在确认页勾选金额。</p>
       </Card>
       <Confirm
         open={removing !== null}
@@ -91,26 +95,76 @@ function FavoriteRow({ row, onRemove }: { row: Favorite; onRemove: () => void })
   const busy = useUI((s) => s.busy)
   const action = useAction()
   const [draft, setDraft] = useState(row.title ?? '')
+  const [testDraft, setTestDraft] = useState(row.test_amount ?? '0.01')
+  const canSetTest = validAmount(testDraft.trim())
+
+  useEffect(() => {
+    if (row.test_amount) setTestDraft(row.test_amount)
+  }, [row.test_amount])
+
   return (
-    <div className="flex items-center gap-3 py-[7px]">
-      <span className="w-24 shrink-0 font-medium font-mono text-xs">{row.code}</span>
-      <Input
-        aria-label={`${row.code} 标题`}
-        placeholder="标题"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-      />
-      <Button
-        disabled={busy || draft.trim() === ''}
-        onClick={() =>
-          action('修改标题', () => api('POST', '/api/favorites', { code: row.code, title: draft.trim() }))
-        }
-      >
-        保存标题
-      </Button>
-      <Button className="text-accent" onClick={onRemove}>
-        删除
-      </Button>
+    <div className="flex flex-col gap-1.5 py-[7px]">
+      <div className="flex items-center gap-3">
+        <span className="w-24 shrink-0 font-medium font-mono text-xs">{row.code}</span>
+        <Input
+          aria-label={`${row.code} 标题`}
+          placeholder="标题"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Button
+          disabled={busy || draft.trim() === ''}
+          onClick={() =>
+            action('修改标题', () => api('POST', '/api/favorites', { code: row.code, title: draft.trim() }))
+          }
+        >
+          保存标题
+        </Button>
+        <Button className="text-accent" onClick={onRemove}>
+          删除
+        </Button>
+      </div>
+      <div className="flex items-center gap-2.5 pl-[108px]">
+        {row.test_amount ? (
+          <Badge tone="purple">测试项</Badge>
+        ) : (
+          <span className="text-[10px] text-muted">测试项</span>
+        )}
+        <span className="text-[10px] text-muted">金额</span>
+        <Input
+          aria-label={`${row.code} 测试金额`}
+          data-testid={`test-amount-${row.code}`}
+          className="h-[30px] w-28"
+          inputMode="decimal"
+          placeholder="0.01"
+          value={testDraft}
+          onChange={(e) => setTestDraft(e.target.value)}
+        />
+        <Button
+          size="compact"
+          disabled={busy || !canSetTest}
+          onClick={() =>
+            action(row.test_amount ? '更新测试项' : '设为测试项', () =>
+              api('POST', '/api/favorites/test', { code: row.code, amount: testDraft.trim() }),
+            )
+          }
+        >
+          {row.test_amount ? '更新测试' : '设为测试'}
+        </Button>
+        {row.test_amount && (
+          <>
+            <Button
+              size="compact"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => action('取消测试项', () => api('DELETE', '/api/favorites/test'))}
+            >
+              取消测试
+            </Button>
+            <span className="text-[10px] text-muted">演练自动带入</span>
+          </>
+        )}
+      </div>
     </div>
   )
 }

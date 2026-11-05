@@ -31,7 +31,9 @@ test('simulated password input defaults off and saves the switch value', async (
   await expect(toggle).toBeEnabled()
   await expect(toggle).not.toBeChecked()
   await toggle.click()
-  const write = page.waitForRequest((request) => request.method() === 'PUT' && request.url().endsWith('/api/settings'))
+  const write = page.waitForRequest(
+    (request) => request.method() === 'PUT' && request.url().endsWith('/api/settings'),
+  )
   await save.click()
   expect((await write).postDataJSON().simulate_password_input).toBe(1)
   await expect(page.getByText('已保存，之后的新布防使用这套配置')).toBeVisible()
@@ -48,13 +50,14 @@ test('drill arm goes through confirm and switches to the live view', async ({ pa
   await dialog.getByRole('switch').first().click() // 演练
   await dialog.getByRole('switch').nth(1).click() // 立即排练
   await dialog.getByRole('button', { name: '下一步' }).click()
-  await expect(dialog.getByText(/约三分钟后 演练到输完密码 0\.01 元/)).toBeVisible()
+  await expect(dialog.getByTestId('confirm-price')).toContainText('约三分钟后')
+  await expect(dialog.getByTestId('confirm-price')).toContainText('0.01')
   await dialog.getByRole('button', { name: '开始演练' }).click()
   await expect(page.getByTestId('live')).toBeVisible()
   await expect(page.getByTestId('countdown')).toHaveAttribute('aria-label', /^0[23]:\d\d$/)
 })
 
-test('real arm needs the amount typed again', async ({ page }) => {
+test('real arm needs the amount checkbox', async ({ page }) => {
   await open(page, '/tasks', 'empty')
   await page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' }).click()
   const dialog = page.getByRole('dialog')
@@ -62,10 +65,44 @@ test('real arm needs the amount typed again', async ({ page }) => {
   await dialog.getByPlaceholder('上限 50000 元').fill('100')
   await dialog.getByRole('button', { name: '下一步' }).click()
   const confirm = dialog.getByRole('button', { name: '确认真实布防' })
+  await expect(dialog.getByTestId('confirm-price')).toContainText('100.00')
   await expect(confirm).toBeDisabled()
-  await dialog.getByTestId('confirm-amount').fill('10')
+  await dialog.getByTestId('confirm-check').check()
+  await expect(confirm).toBeEnabled()
+  await dialog.getByTestId('confirm-check').uncheck()
   await expect(confirm).toBeDisabled()
-  await dialog.getByTestId('confirm-amount').fill('100')
+})
+
+test('favourites test item fills drills', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  const testAmount = page.getByTestId('test-amount-AB1234')
+  await testAmount.fill('0.02')
+  await page.getByRole('button', { name: '设为测试' }).click()
+  await expect(page.getByRole('button', { name: '取消测试' })).toBeVisible()
+
+  await page.getByRole('link', { name: '演练' }).click()
+  await expect(page.getByPlaceholder('如 JX040229')).toHaveValue('AB1234')
+  await expect(page.getByPlaceholder('0.01').first()).toHaveValue('0.02')
+  await page.getByRole('button', { name: '打开演练布防' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByPlaceholder('如 JX040229')).toHaveValue('AB1234')
+  await expect(dialog.getByPlaceholder('上限 50000 元')).toHaveValue('0.02')
+})
+
+test('real single buy needs the amount checkbox', async ({ page }) => {
+  await open(page, '/drill', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('JX040229')
+  await page.getByPlaceholder('0.01').first().fill('0.02')
+  await page.getByRole('switch').first().click()
+  await page.getByRole('button', { name: '直接购买…' }).click()
+  const dialog = page.getByRole('dialog', { name: '确认真实单笔购买' })
+  await expect(dialog.getByTestId('confirm-buy-price')).toContainText('0.02')
+  const confirm = dialog.getByRole('button', { name: '确认实际付款' })
+  await expect(confirm).toBeDisabled()
+  await dialog.getByTestId('confirm-buy-check').check()
   await expect(confirm).toBeEnabled()
 })
 

@@ -1,4 +1,5 @@
 import * as SwitchPrimitive from '@radix-ui/react-switch'
+import { Check } from 'lucide-react'
 import { motion } from 'motion/react'
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { cn } from '../../lib/utils'
@@ -80,6 +81,53 @@ export function Switch({
           />
         </SwitchPrimitive.Thumb>
       </SwitchPrimitive.Root>
+    </label>
+  )
+}
+
+/** Checkbox confirmation; the real input stays on top so clicking and focus work. */
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  disabled,
+  testId,
+}: {
+  checked: boolean
+  onChange: (value: boolean) => void
+  label: ReactNode
+  disabled?: boolean
+  testId?: string
+}) {
+  return (
+    <label
+      className={cn(
+        'relative flex items-start gap-2.5 text-[13px] leading-snug',
+        disabled ? 'opacity-45' : 'cursor-pointer',
+      )}
+    >
+      <input
+        type="checkbox"
+        data-testid={testId}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="peer absolute top-[1px] left-0 z-10 size-4 cursor-pointer opacity-0 disabled:cursor-default"
+      />
+      <span
+        aria-hidden
+        className={cn(
+          'pointer-events-none mt-[1px] flex size-4 shrink-0 items-center justify-center rounded-[4px] ring-1 transition-colors',
+          checked ? 'bg-accent ring-accent' : 'bg-field ring-white/25',
+          'peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60',
+        )}
+      >
+        <Check
+          className={cn('size-3 text-white transition-opacity', checked ? 'opacity-100' : 'opacity-0')}
+          strokeWidth={3}
+        />
+      </span>
+      <span>{label}</span>
     </label>
   )
 }

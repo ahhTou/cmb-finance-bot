@@ -49,7 +49,7 @@ def status():
     data.update(agent=agent_info(data['task']), processes=manage.status_info(),
                 credentials=keychain_store.credential_info(),
                 mail_configured=notify.configured(), log_path=str(nw.LOG),
-                favorites=favorites.load())
+                favorites=favorites.load(), test_item=favorites.test_item())
     return data
 
 
@@ -173,6 +173,10 @@ def parser():
     saved.add_argument('--add')
     saved.add_argument('--title')
     saved.add_argument('--remove')
+    saved.add_argument('--set-test', metavar='CODE')
+    saved.add_argument('--test-amount')
+    saved.add_argument('--clear-test', action='store_true')
+    saved.add_argument('--test', action='store_true')
     return p
 
 
@@ -188,10 +192,21 @@ def dispatch(a):
     if a.cmd == 'status': return status()
     if a.cmd == 'favorites':
         if a.add is not None:
-            return {'favorites': favorites.add(a.add, a.title or '')}
+            return {'favorites': favorites.add(a.add, a.title or ''),
+                    'test_item': favorites.test_item()}
         if a.remove is not None:
-            return {'favorites': favorites.remove(a.remove)}
-        return {'favorites': favorites.load()}
+            return {'favorites': favorites.remove(a.remove),
+                    'test_item': favorites.test_item()}
+        if a.set_test is not None:
+            if a.test_amount is None:
+                raise nw.Abort('设置测试项需要同时给出 --test-amount。')
+            return {'favorites': favorites.set_test(a.set_test, a.test_amount),
+                    'test_item': favorites.test_item()}
+        if a.clear_test:
+            return {'favorites': favorites.clear_test(), 'test_item': None}
+        if a.test:
+            return {'test_item': favorites.test_item()}
+        return {'favorites': favorites.load(), 'test_item': favorites.test_item()}
     if a.cmd == 'device': return device()
     if a.cmd == 'system': return system()
     if a.cmd == 'history':
