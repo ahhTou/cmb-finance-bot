@@ -37,12 +37,11 @@ function earliestQuota(prep: number) {
   return QUOTA_TIMES.map((t) => nextQuota(t, after)).sort((a, b) => +a - +b)[0]
 }
 
-function defaultDate(mode: Mode) {
-  if (mode === 'redemption') return earliestQuota(7)
-  const tomorrow = new Date()
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  tomorrow.setHours(9, 0, 0, 0)
-  return tomorrow
+function defaultDate(mode: Mode, prep = 7) {
+  if (mode === 'redemption') return earliestQuota(prep)
+  // First launch sells at 09:00. Never assume tomorrow: at 00:47 today's 09:00
+  // is still ahead, and only a sale too close for the cold start rolls over.
+  return nextQuota('09:00', new Date(Date.now() + (prep + 2) * 60_000))
 }
 
 const hhmm = (date: Date) => inputDateTime(date).slice(11, 16)
@@ -104,17 +103,17 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
     form.setValue('amount', testItem.amount, { shouldValidate: true })
   }, [dry, form, testItem])
 
-  // Once settings arrive, adopt the stored cold-start lead and the next quota slot after it.
+  // Once settings arrive, adopt the stored cold-start lead and the next sale
+  // slot that still leaves room for it (both modes; first launch used to stay
+  // pinned to tomorrow 09:00).
   useEffect(() => {
     if (!settingsQuery.data) return
     const stored = settingsQuery.data.settings.cold_start_minutes ?? 7
     const lead = PREP_CHOICES.includes(stored) ? stored : 7
     setPrep(lead)
-    if (mode === 'redemption') {
-      const next = earliestQuota(lead)
-      setDate(next)
-      setTimeChoice(hhmm(next))
-    }
+    const next = defaultDate(mode, lead)
+    setDate(next)
+    setTimeChoice(hhmm(next))
   }, [settingsQuery.data, mode])
 
   useEffect(() => {
@@ -132,6 +131,15 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
   function pickTime(value: string) {
     setTimeChoice(value)
     if (value !== 'custom') setDate(nextQuota(value, new Date(Date.now() + (prep + 2) * 60_000)))
+  }
+
+  /** A shorter lead can make today's sale reachable again (08:55, 7 min -> 立即). */
+  function pickPrep(value: number) {
+    setPrep(value)
+    if (timeChoice === 'custom') return // keep a time the user chose by hand
+    const next = defaultDate(mode, value)
+    setDate(next)
+    setTimeChoice(hhmm(next))
   }
 
   function problem() {
@@ -341,7 +349,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
               <Segmented
                 label="冷启动提前量"
                 value={prep}
-                onChange={setPrep}
+                onChange={pickPrep}
                 options={PREP_CHOICES.map((value) => ({ value, label: prepLabel(value) }))}
               />
               <Hint>
