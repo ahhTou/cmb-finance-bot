@@ -149,33 +149,37 @@ export function DrillPage() {
           <Metric title="App 进程" value={d.running ? d.appPid : '—'} />
           <Metric title="画面" value={d.running ? (d.awake ? 'Awake' : '未知') : '—'} />
         </MetricGrid>
-        <div className="mt-1.5 flex flex-col gap-2">
-          <div className="flex gap-2">
+        <div className="mt-auto flex flex-col gap-2">
+          {w.active && <Hint className="text-[10px]">值守活动期间不能启动或关闭模拟器。</Hint>}
+          <div className="flex gap-1.5">
             <Button
+              size="compact"
               disabled={busy || w.active}
               onClick={() => deviceAction('启动模拟器', '/api/emulator/start')}
             >
               启动
             </Button>
             <Button
+              size="compact"
               disabled={busy || w.active}
               onClick={() => deviceAction('关闭模拟器', '/api/emulator/stop')}
             >
               关闭
             </Button>
-            <Button disabled={busy} onClick={() => deviceAction('恢复常亮', '/api/keep-awake')}>
+            <Button
+              size="compact"
+              disabled={busy}
+              onClick={() => deviceAction('恢复常亮', '/api/keep-awake')}
+            >
               恢复常亮
             </Button>
-          </div>
-          <div className="flex gap-2">
-            <Button disabled={busy} onClick={shoot}>
+            <Button size="compact" disabled={busy} onClick={shoot}>
               截图
             </Button>
-            <Button disabled={busy} onClick={() => refresh('/drill')}>
+            <Button size="compact" disabled={busy} onClick={() => refresh('/drill')}>
               刷新设备
             </Button>
           </div>
-          {w.active && <Hint className="text-[10px]">值守活动期间不能启动或关闭模拟器。</Hint>}
         </div>
       </Card>
 
