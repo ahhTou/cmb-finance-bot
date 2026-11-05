@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { Fragment } from 'react'
+import { Fragment, memo } from 'react'
 import { type Progress, STEPS, type StepState } from '../lib/progress'
 import { cn } from '../lib/utils'
 
@@ -9,7 +9,7 @@ import { cn } from '../lib/utils'
  * It never takes layout space and ignores the pointer. Done nodes dim, the
  * running one glows and types its real call chain underneath.
  */
-export function ChainProgress({ progress }: { progress: Progress }) {
+export const ChainProgress = memo(function ChainProgress({ progress }: { progress: Progress }) {
   const done = progress.states.filter((s) => s === 'done').length
   const total = STEPS.length - (progress.dryRun ? 1 : 0)
   const current = progress.active >= 0 ? progress.active : null
@@ -37,7 +37,7 @@ export function ChainProgress({ progress }: { progress: Progress }) {
       <Detail progress={progress} current={current} />
     </section>
   )
-}
+})
 
 function Node({ id, state, running }: { id: string; state: StepState; running: boolean }) {
   return (

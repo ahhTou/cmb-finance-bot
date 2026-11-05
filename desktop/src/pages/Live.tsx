@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import { ChainProgress } from '../components/ChainProgress'
@@ -64,7 +64,11 @@ function PhaseDot({ phase, size = 7 }: { phase: string; size?: number }) {
  * in the middle over the live log, scrolling project code and glowing waves.
  */
 export function LivePage() {
-  const { w, task, redemption, text, hint } = useCountdown()
+  // The countdown ticks four times a second; keep that re-render inside
+  // <CountdownLine> so the log stream and chain rail only render on new data.
+  const w = useWatch()
+  const task = w.task ?? {}
+  const redemption = task.mode === 'redemption'
   const busy = useUI((s) => s.busy)
   const lastRefresh = useUI((s) => s.lastRefresh)
   const action = useAction()
@@ -73,8 +77,8 @@ export function LivePage() {
   // query); poll faster once queries run, when steps pass in a second.
   const hot = w.phase === 'waiting' || w.phase === 'firing'
   const { data: log } = useQuery({ ...q.log(400), refetchInterval: hot ? 700 : 1500 })
-  const lines = log?.lines ?? []
-  const progress = readProgress(lines, w.phase, !!task.dry_run)
+  const lines = useMemo(() => log?.lines ?? [], [log])
+  const progress = useMemo(() => readProgress(lines, w.phase, !!task.dry_run), [lines, w.phase, task.dry_run])
 
   return (
     <motion.div
@@ -116,10 +120,7 @@ export function LivePage() {
             '0 30px 90px rgb(0 0 0 / 0.8), 0 10px 28px rgb(0 0 0 / 0.55), 0 0 120px rgb(224 66 82 / 0.2)',
           )}
         >
-          <div className="flex items-baseline gap-3.5">
-            <Countdown text={text} />
-            <span className="text-muted text-xs">{hint}</span>
-          </div>
+          <CountdownLine />
           <div className="h-[0.6px] bg-white/15" />
           <div className="flex items-end gap-[34px]">
             <Stat title="产品" value={task.code ?? '—'} />
@@ -185,6 +186,16 @@ export function WatchBubble() {
   )
 }
 
+function CountdownLine() {
+  const { text, hint } = useCountdown()
+  return (
+    <div className="flex items-baseline gap-3.5">
+      <Countdown text={text} />
+      <span className="text-muted text-xs">{hint}</span>
+    </div>
+  )
+}
+
 /** Each character slides up when it changes, like a split-flap counter. */
 function Countdown({ text }: { text: string }) {
   return (
@@ -204,9 +215,9 @@ function Countdown({ text }: { text: string }) {
             <motion.span
               key={char}
               className="inline-block"
-              initial={{ y: '60%', opacity: 0, filter: 'blur(4px)' }}
-              animate={{ y: 0, opacity: 1, filter: 'blur(0px)' }}
-              exit={{ y: '-60%', opacity: 0, filter: 'blur(4px)' }}
+              initial={{ y: '60%', opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: '-60%', opacity: 0 }}
               transition={{ type: 'spring', stiffness: 380, damping: 30 }}
             >
               {char}
@@ -231,7 +242,7 @@ function Stat({ title, value }: { title: string; value: string }) {
  * Real watch.log, newest at the bottom. Lines are stacked from the bottom up
  * (no scrolling), the newest glows, and new lines rise in.
  */
-function LogStream({ lines, first }: { lines: string[]; first: number }) {
+const LogStream = memo(function LogStream({ lines, first }: { lines: string[]; first: number }) {
   const shown = lines.slice(-36)
   const offset = first + lines.length - shown.length
   return (
@@ -246,16 +257,13 @@ function LogStream({ lines, first }: { lines: string[]; first: number }) {
             <motion.div
               // biome-ignore lint/suspicious/noArrayIndexKey: offset + index is the absolute line number
               key={offset + index}
-              layout="position"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.35 }}
               className={cn(
                 'shrink-0 truncate py-[1.5px] font-mono text-[11px] transition-colors duration-700',
-                newest
-                  ? 'text-[#e6e6e6] [filter:drop-shadow(0_0_6px_rgb(255_255_255/0.4))]'
-                  : 'text-[#7a7a7a]',
+                newest ? 'text-[#e6e6e6]' : 'text-[#7a7a7a]',
               )}
             >
               {line}
@@ -265,7 +273,7 @@ function LogStream({ lines, first }: { lines: string[]; first: number }) {
       </AnimatePresence>
     </div>
   )
-}
+})
 
 // What the watcher is actually doing, as a faint backdrop.
 const CODE = `async function gate(queryBuy) {
@@ -359,7 +367,8 @@ function Waves({ phase }: { phase: string }) {
     let width = 0
     let height = 0
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1
+      // Soft glowing lines don't need Retina pixels; 1x quarters the fill cost.
+      const dpr = 1
       width = el.clientWidth
       height = el.clientHeight
       el.width = width * dpr
@@ -374,6 +383,11 @@ function Waves({ phase }: { phase: string }) {
     let last = performance.now()
     let frame = 0
     const draw = (now: number) => {
+      // ~30 fps is plenty for slow waves and halves the work on the WebKit GPU process.
+      if (now - last < 32) {
+        frame = requestAnimationFrame(draw)
+        return
+      }
       t += ((now - last) / 1000) * speed.current
       last = now
       ctx.clearRect(0, 0, width, height)
@@ -390,10 +404,15 @@ function Waves({ phase }: { phase: string }) {
           if (x === 0) ctx.moveTo(x, y)
           else ctx.lineTo(x, y)
         }
+        // Glow without shadowBlur (WebKit blurs canvas shadows on every frame):
+        // a wide faint stroke under the thin one.
+        if (wave.blur) {
+          ctx.strokeStyle = `rgba(${wave.color},${wave.alpha * 0.18})`
+          ctx.lineWidth = wave.width + wave.blur * 0.6
+          ctx.stroke()
+        }
         ctx.strokeStyle = `rgba(${wave.color},${wave.alpha})`
         ctx.lineWidth = wave.width
-        ctx.shadowColor = `rgba(${wave.color},${wave.alpha})`
-        ctx.shadowBlur = wave.blur
         ctx.stroke()
         if (i === 0) {
           // A faint glow under the leading wave.
@@ -403,7 +422,6 @@ function Waves({ phase }: { phase: string }) {
           const fill = ctx.createLinearGradient(0, base - wave.amp, 0, height)
           fill.addColorStop(0, `rgba(${wave.color},0.10)`)
           fill.addColorStop(1, `rgba(${wave.color},0)`)
-          ctx.shadowBlur = 0
           ctx.fillStyle = fill
           ctx.fill()
         }
