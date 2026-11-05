@@ -295,7 +295,12 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
                 <Input placeholder="上限 50000 元" inputMode="decimal" {...form.register('amount')} />
               </Field>
             </div>
-            <FavoritePicker onPick={(value) => form.setValue('code', value)} />
+            <FavoritePicker
+              onPick={(row) => {
+                form.setValue('code', row.code)
+                if (row.test_amount) form.setValue('amount', row.test_amount)
+              }}
+            />
             {dry && testItem && (
               <Hint className="text-[10px]">
                 测试项（来自收藏）：{testItemText(testItem)}；打开演练时自动填入，可直接修改。

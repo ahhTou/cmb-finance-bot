@@ -29,7 +29,7 @@
 - `src/favorites.py`：`add` / `remove` / `set_test` / `clear_test` / `test_item`；保留旧文件的未知字段忽略行为。
 - `admin_cli.py`：`favorites --list / --add CODE --title TITLE / --remove CODE / --set-test CODE --test-amount AMOUNT / --clear-test / --test`；`status` 同时带 `favorites` 和 `test_item`。
 - HTTP：`POST /api/favorites/test {code, amount}`、`DELETE /api/favorites/test`；旧的增删改接口不变。
-- App：收藏页每行有测试金额输入和「设为测试 / 更新测试 / 取消测试」；布防（仅演练）和单笔购买演练在空表单上自动填入测试项，并显示来源提示。
+- App：收藏页在「保存标题」旁提供「设为测试」按钮，弹窗配置金额；保存后在代码下方显示轻量 Tag。布防（仅演练）和单笔购买演练打开时自动填入测试项；收藏快捷选择里的测试项带 Tag 并排在最前，点它同时填入产品和金额。
 
 ## 不做
 

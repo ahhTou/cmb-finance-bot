@@ -101,7 +101,12 @@ export function DrillPage() {
               <Input placeholder="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
             </Field>
           </div>
-          <FavoritePicker onPick={setCode} />
+          <FavoritePicker
+            onPick={(row) => {
+              setCode(row.code)
+              if (row.test_amount) setAmount(row.test_amount)
+            }}
+          />
           {testItem && (
             <Hint className="text-[10px]">
               测试项（来自收藏）：{testItemText(testItem)}；打开时自动填入，可直接修改。

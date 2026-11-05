@@ -4,7 +4,7 @@ import { LoaderCircle, Star } from 'lucide-react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import type { Favorite } from '../api/types'
-import { cn, copyText } from '../lib/utils'
+import { cn, copyText, formatAmount } from '../lib/utils'
 import { useUI } from '../store'
 import { Button } from './ui/button'
 import { Hint } from './ui/card'
@@ -37,17 +37,39 @@ export function BusyLine({ text }: { text?: string | null }) {
   )
 }
 
-/** Compact chips that fill a product-code field from saved favorites. */
-export function FavoritePicker({ onPick }: { onPick: (code: string) => void }) {
+/** Small purple tag for the one favorite that is the drill test item. */
+export function TestTag({ amount, testId }: { amount: string; testId?: string }) {
+  return (
+    <span
+      data-testid={testId}
+      className="whitespace-nowrap rounded bg-purple/15 px-1.5 py-[1px] font-medium text-[9px] text-purple leading-none"
+    >
+      测试 ¥{formatAmount(amount)}
+    </span>
+  )
+}
+
+/** Compact chips that fill product code (and test amount) from saved favorites. */
+export function FavoritePicker({ onPick }: { onPick: (row: Favorite) => void }) {
   const { favorites } = useWatch()
   if (!favorites.length) return null
   const label = (row: Favorite) => row.title || row.code
+  // Keep the test item among the visible chips even with more than four.
+  const ordered = [...favorites].sort(
+    (a, b) => Number(Boolean(b.test_amount)) - Number(Boolean(a.test_amount)),
+  )
   return (
     <div className="flex flex-wrap items-center gap-[7px]">
       <Star className="size-2.5 fill-warn/85 text-warn/85" />
-      {favorites.slice(0, 4).map((row) => (
-        <Button key={row.code} size="compact" onClick={() => onPick(row.code)}>
+      {ordered.slice(0, 4).map((row) => (
+        <Button
+          key={row.code}
+          size="compact"
+          data-testid={`favorite-${row.code}`}
+          onClick={() => onPick(row)}
+        >
           {label(row)}
+          {row.test_amount && <TestTag amount={row.test_amount} />}
         </Button>
       ))}
       {favorites.length > 4 && (
@@ -62,13 +84,14 @@ export function FavoritePicker({ onPick }: { onPick: (code: string) => void }) {
               sideOffset={4}
               className="z-[70] min-w-[180px] rounded-lg bg-button p-1 shadow-xl ring-1 ring-white/8"
             >
-              {favorites.map((row) => (
+              {ordered.map((row) => (
                 <Menu.Item
                   key={row.code}
-                  onSelect={() => onPick(row.code)}
+                  onSelect={() => onPick(row)}
                   className="cursor-pointer rounded-md px-2.5 py-1.5 text-xs outline-none data-[highlighted]:bg-accent"
                 >
                   {label(row)} · {row.code}
+                  {row.test_amount ? ` · 测试 ¥${formatAmount(row.test_amount)}` : ''}
                 </Menu.Item>
               ))}
             </Menu.Content>
