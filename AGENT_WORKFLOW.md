@@ -31,7 +31,7 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
-- **2026-11-05 登录页精确判定与购买页登录**：不再用截图大小猜登录页，改为看控件树里的 `cmb.pb:id/vGestureInputArea` + `cmb.pb:id/vGestureContentView`（九宫格输入区）。「我的」上的登录层和购买链接拉起的 `PBLoginActivity` 都带这两个控件，正常「我的」页没有。冷启动登录仍走「我的」；`query_gate` 打开购买过渡容器或挂起查询前如果出现登录页，会发一次钥匙串图案，登录后继续等页面。已在模拟器验证两条路径：冷启动 → 我的 → 图案 → `PBMainActivity`；冷启动 → 打开过渡购买页 → 图案 → `PBWebContainerActivity`（过渡页 URL 正常）。图案次数仍在发送前持久化，任务内最多 3 次。
+- **2026-11-05 登录页精确判定与购买页登录**：不再用截图大小猜登录页，改为看控件树里的 `cmb.pb:id/vGestureInputArea` + `cmb.pb:id/vGestureContentView`（九宫格输入区）。「我的」上的登录层和购买链接拉起的 `PBLoginActivity` 都带这两个控件，正常「我的」页没有。冷启动登录仍走「我的」；`query_gate` 打开过渡容器时，只有 3 秒还没出现新页面才兜底检查一次登录页并登录，正常路径只轮询 CDP、不读控件树，不增加开售前耗时。已在模拟器验证两条路径：冷启动 → 我的 → 图案 → `PBMainActivity`；冷启动 → 打开过渡购买页 → 图案 → `PBWebContainerActivity`（过渡页 URL 正常）；正常已登录路径打开过渡容器 0.65 秒、登录回调 0 次。图案次数仍在发送前持久化，任务内最多 3 次。
 
 - **2026-11-05 布防确认改为勾选、收藏测试项、任务卡片 hover**：真实布防和真实单笔购买的确认页不再要求重新输入金额——金额以大字号居中显示，勾选「我已核对产品、金额和时间」后才能提交；金额仍由 Python 校验。收藏可把一项设为测试项并填测试金额（`var/favorites.json` 的 `test_amount`，最多一项）；`admin_cli status` 的 `test_item`、`admin_cli favorites --test` 可读，演练布防和单笔购买演练打开时自动带入，仍可手动修改。测试项只是默认参数，不构成付款授权，实际付款仍要在确认页勾选。任务页卡片 hover 只变背景色，不再上移。本轮只做静态编写、单元测试和假后端 e2e，未重建/重启 App，也未上真机。第二轮手动验收项和登录页取证清单见 [管理 App 界面与登录判断测试清单](docs/app-ui-test-plan.md)。
 

@@ -65,7 +65,7 @@ P12 wait_result → log_timings → query_gate.finish
 | P2 | 夜间巡检 | `run` → `ensure_emulator` / `ensure_awake` / `health_network` | `src/night_watch.py` | 布防 → 开售前 E 分钟 | 每轮 `HEALTH_EVERY` |
 | P3 | 冷启动登录 | `prepare` → `login_fresh` → `cold_start` / `secure_input.login` | `src/night_watch.py` | 开售前 E 分钟（E=0 为立即） | 约 26 秒（11-05：08:53:00→08:53:26） |
 | P4 | 预读凭据、预热 uia2 | `gated_fire.prepared` → `fast_buy_uia2.load_payment_password` / `warm` | `src/night_watch.py`、`src/fast_buy_uia2.py` | 购买页就绪时 | 约 0.3–1 秒，不在关键路径 |
-| P5 | 打开过渡容器 | `query_gate.blank_target` | `src/query_gate.py` | 登录后立即 | ≤10 秒上限 |
+| P5 | 打开过渡容器 | `query_gate.blank_target` | `src/query_gate.py` | 登录后立即 | 正常约 0.65 秒；容器迟到才兜底登录（另给 15 秒） |
 | P6 | 进入购买页并挂起 queryBuy | `query_gate.watch`（`Page.navigate` + `query_gate.js` 安装钩子） | `src/query_gate.py`、`src/query_gate.js` | 紧接 P5 | 约 5 秒（11-05：08:53:26→08:53:31，含 P5） |
 | P7 | 到点查询与重试 | `query_gate.js` 内 `api.queryBuy` 包装 + `retryRange` | `src/query_gate.js` | 首发 T+200ms；不定时 T−200ms | 见下方「P7 参数」 |
 | P8 | 发现有额度 | `query_gate.watch` 轮询 `READ_STATE` + 控件树确认 | `src/query_gate.py` | 查询返回非售罄 | 轮询 80ms + 一次 `dump` |
@@ -105,7 +105,7 @@ P9→P11（`began` 到点确定）合计：11-05 09:00 为 **3.34 秒**；同日
 
 - 先确认网络（`ensure_network`），无网的轮次不发图案、不计登录次数。
 - `cold_start`：`force-stop` → `monkey` 启动 → 40 秒内点到「我的」。
-- 已登录（截图未被遮挡）直接返回；在登录页才输九宫格（读钥匙串 `login_pattern`，用完即丢）。
+- 已登录（没有九宫格登录层且截图可读）直接返回；在登录页才输九宫格（读钥匙串 `login_pattern`，用完即丢）。
 - 上限：真实发出的图案 `LOGIN_TRIES=3` 次、冷启动 `LOGIN_CYCLES=5` 次；`patterns_sent` 先写盘再输入，崩溃重启也不会超限。
 - 失败按 20 秒间隔重试，直到 `fire_at − 2 秒` 仍未成功就中止。
 
@@ -117,6 +117,7 @@ P9→P11（`began` 到点确定）合计：11-05 09:00 为 **3.34 秒**；同日
 ### P5 打开过渡容器 `blank_target`
 
 - 银行不支持深链 `about:blank`，所以先用 App 链接打开无害的 `sfoveramount.html`，等出现**唯一一个**新的可见全屏 WebView，作为隔离容器。
+- 登录兜底只在**意外**时工作：正常路径只轮询 CDP 页面，不读控件树、不截图；如果 3 秒还没出现新容器，才检查一次九宫格登录页（`PBLoginActivity`），登录后重新给 15 秒容器窗口。11-05 实测正常路径 0.65 秒、登录回调 0 次，不增加开售前耗时。
 
 ### P6 进入购买页并挂起 `query_gate.watch`
 

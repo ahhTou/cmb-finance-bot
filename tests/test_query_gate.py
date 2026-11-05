@@ -49,13 +49,26 @@ class GateTest(unittest.TestCase):
             burstMs=60000, rampMs=65000, idleMs=90000,
             burst=[300, 500], slow=[1000, 2000], idle=[2500, 4000]))
 
-    def test_blank_target_logs_in_before_waiting_for_the_container(self):
+    def test_blank_target_does_not_check_login_when_the_container_is_quick(self):
         target = {'id': 'T', 'url': gate.STAGING_URL,
                   'description': json.dumps({'visible': True, 'width': 320, 'height': 640})}
         login = MagicMock(return_value=True)
         with patch.object(gate, 'pages', side_effect=[[], [target]]), \
              patch.object(fast_buy, 'adb'):
             self.assertIs(asyncio.run(gate.blank_target(login=login)), target)
+        login.assert_not_called()
+
+    def test_blank_target_logs_in_only_when_the_container_is_late(self):
+        target = {'id': 'T', 'url': gate.STAGING_URL,
+                  'description': json.dumps({'visible': True, 'width': 320, 'height': 640})}
+        login = MagicMock(return_value=True)
+
+        def page_list():
+            return [target] if login.called else []
+
+        with patch.object(gate, 'pages', side_effect=page_list), \
+             patch.object(fast_buy, 'adb'):
+            self.assertIs(asyncio.run(gate.blank_target(login=login, login_after=0)), target)
         self.assertEqual(login.call_count, 1)
 
     def test_prepared_form_uses_raw_quota_and_never_reopens_or_marks_over_quota(self):

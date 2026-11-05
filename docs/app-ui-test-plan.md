@@ -74,12 +74,13 @@
 
 - 登录页 = 控件树同时有 `cmb.pb:id/vGestureInputArea` 和 `cmb.pb:id/vGestureContentView`（九宫格输入区）。「我的」上的登录层和购买链接拉起的 `PBLoginActivity` 都符合；正常「我的」页两者都没有。
 - 已登录 = 没有九宫格登录层，且 `screencap -p` 可正常读取（不是全黑/极小 PNG）。支付密码、风险弹窗等其他受保护页面不算已登录，也不会被当成登录页。
-- 代码：`src/secure_input.py` 的 `login_page()`、`night_watch.py` 的 `on_login_page()` / `logged_in()` / `login_here()`；购买页在 `query_gate.blank_target()` 和挂起查询的安装循环里复用同一个登录回调。
+- 代码：`src/secure_input.py` 的 `login_page()`、`night_watch.py` 的 `on_login_page()` / `logged_in()` / `login_here()`。购买页只在 `query_gate.blank_target()` 的过渡容器迟到（3 秒）时兜底调用一次登录；正常路径只轮询 CDP，不读控件树、不截图，不影响购买速度。
 
 已实测（模拟器，只发正确图案，每条路径 1 次）：
 
 - [x] 冷启动 → 我的 → 识别九宫格 → 钥匙串图案 → `PBMainActivity`，`on_login_page=False`、`logged_in=True`。
 - [x] 冷启动 → 打开过渡购买页 → 识别 `PBLoginActivity` 九宫格 → 图案 → `PBWebContainerActivity`，拿到 `sfoveramount.html` 过渡页 URL。
+- [x] 正常已登录路径直接打开过渡容器：实测 0.65 秒，登录回调 0 次（不读控件树）。
 - [x] 正常「我的」页没有这两个 ID；旧的文本判断（我的头像 + 更多选项）不足以区分，已改。
 - [x] 隔离测试：`tests/test_login_page.py`、`tests/test_open_form.py` 的登录页用例、`tests/test_night_watch.py` 的 `login_here` 预算/等待用例、`tests/test_query_gate.py` 的 `blank_target` 登录回调用例。
 
@@ -87,7 +88,7 @@
 
 - [ ] 密码登录、协议/公告弹窗、网络错误页、App 白屏/WebView 报错；目前未知页面会走原有的有限次冷启动重试，不会把它们当登录页发图案。
 - [ ] 图案错误后的停留页和重试预算（不要为了测试故意输错，避免锁定）。
-- [ ] `watch()` 安装循环里登录后页面重新加载的时序（`blank_target` 路径已实测；安装循环的回调只有隔离测试）。
+- [ ] 页面打开后的二次登录（例如会话在购买页中途失效）未覆盖；当前只在过渡容器迟到时兜底。
 - [ ] 账户持有人真机上的同样两条路径（模拟器已通过）。
 
 以后遇到新的登录变体，按下面收集一次证据再改规则：
@@ -102,5 +103,5 @@
 
 - `tsc`、`pnpm build`、`biome check` 通过。
 - Vitest 14 项通过；Playwright e2e 36 项通过（假后端）。
-- Python 全量 195 项（含新增登录页 / `login_here` / `blank_target` 用例），仅既有 `test_timed_buy` 错误；`admin_server` 9 项用 `.venv` 全过。
+- Python 全量 196 项（含新增登录页 / `login_here` / `blank_target` 用例），仅既有 `test_timed_buy` 错误；`admin_server` 9 项用 `.venv` 全过。
 - 需求 4 的两条登录路径已在模拟器上实测（见 G）；管理 App 的界面手动项还没做，App 未重建/重启。
