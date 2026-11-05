@@ -45,3 +45,17 @@ class RiskConfirmTest(unittest.TestCase):
 
     def test_real_path_retains_marker_before_risk_and_single_submit(self):
         self.assertEqual(self.run_purchase(False),['marker','risk','submit'])
+
+
+class ResultPageTest(unittest.TestCase):
+    def test_sold_out_result_page_is_recognized(self):
+        # Real page text after 135005A on 11-05 09:00.
+        page = tree('额度不足', '购买失败', '额度不足，小招将会火速增加额度')
+        with patch.object(fu, 'dump', return_value=page):
+            self.assertEqual(fu.wait_result(timeout=1), '购买失败：额度不足')
+        with patch.object(fb, 'screen', return_value=page):
+            self.assertEqual(fb.read_result(timeout=1), '购买失败：额度不足')
+
+    def test_success_still_wins(self):
+        with patch.object(fu, 'dump', return_value=tree('提交成功')):
+            self.assertEqual(fu.wait_result(timeout=1), '提交成功')

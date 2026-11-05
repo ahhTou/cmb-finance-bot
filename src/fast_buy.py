@@ -463,6 +463,10 @@ def read_result(timeout=20.0):
         for needle in ("提交成功", "申请失败", "密码错误", "购买成功"):
             if needle in text:
                 return needle
+        if "额度不足" in text:
+            return "购买失败：额度不足"
+        if "购买失败" in text:
+            return "购买失败"
         time.sleep(0.2)
     raise Stop("结果页没有出现可识别的提示")
 

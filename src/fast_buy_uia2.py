@@ -115,6 +115,12 @@ def wait_result(timeout=20.0):
         for needle in ("提交成功", "申请失败", "密码错误", "购买成功", "交易委托已接受"):
             if needle in text:
                 return needle
+        # Sold-out result page (135005A, 11-05 09:00): title 额度不足,
+        # body 购买失败. Nothing was bought.
+        if "额度不足" in text:
+            return "购买失败：额度不足"
+        if "购买失败" in text:
+            return "购买失败"
         time.sleep(0.1)
     raise fast_buy.Stop("结果页没有出现可识别的提示。")
 
