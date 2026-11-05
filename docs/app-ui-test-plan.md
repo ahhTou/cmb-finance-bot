@@ -102,6 +102,6 @@
 ## H. 当前基线（2026-11-05）
 
 - `tsc`、`pnpm build`、`biome check` 通过。
-- Vitest 14 项通过；Playwright e2e 36 项通过（假后端）。
+- Vitest 14 项通过；Playwright e2e 38 项通过（假后端）。
 - Python 全量 196 项（含新增登录页 / `login_here` / `blank_target` 用例），仅既有 `test_timed_buy` 错误；`admin_server` 9 项用 `.venv` 全过。
 - 需求 4 的两条登录路径已在模拟器上实测（见 G）；管理 App 的界面手动项还没做，App 未重建/重启。

@@ -24,6 +24,20 @@ test('tasks page shows modes and the last ended task', async ({ page }) => {
   await expect(page.getByTestId('mode-pickup').getByRole('button', { name: '敬请期待' })).toBeDisabled()
 })
 
+test('task cards change background on hover without moving', async ({ page }) => {
+  await open(page, '/tasks')
+  const card = page.getByTestId('mode-first_launch')
+  const before = await card.boundingBox()
+  if (!before) throw new Error('task card has no box')
+  const beforeColor = await card.evaluate((el) => getComputedStyle(el).backgroundColor)
+  await card.hover()
+  await expect
+    .poll(() => card.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .not.toBe(beforeColor)
+  const after = await card.boundingBox()
+  expect(after).toEqual(before)
+})
+
 test('simulated password input defaults off and saves the switch value', async ({ page }) => {
   await open(page, '/settings')
   const toggle = page.getByRole('switch', { name: '模拟密码输入' })
