@@ -109,13 +109,24 @@ class Client:
         return result.get('result', {}).get('value')
 
 
-async def blank_target():
-    """Create an isolated native container on the inert quota-result page first."""
+async def blank_target(login=None):
+    """Create an isolated native container on the inert quota-result page first.
+
+    A cold app can answer the purchase link with PBLoginActivity instead of
+    the WebView. `login` logs in from that page and returns True; the
+    container window restarts after a login so the extra time is not charged
+    to the page load.
+    """
     existing = {p['id'] for p in pages()}
     fast_buy.adb('shell', 'am', 'start', '-a', 'android.intent.action.VIEW',
                  '-d', "'" + fast_buy.app_link(STAGING_URL) + "'", 'cmb.pb')
-    end = time.monotonic() + 10
-    while time.monotonic() < end:
+    deadline = time.monotonic() + (25 if login is not None else 10)
+    next_login = 0.0
+    while time.monotonic() < deadline:
+        if login is not None and time.monotonic() >= next_login:
+            next_login = time.monotonic() + .5
+            if login():
+                deadline = time.monotonic() + 15
         new = []
         for page in pages():
             if page['id'] in existing or urlparse(page.get('url', '')).path != urlparse(STAGING_URL).path:
@@ -128,7 +139,7 @@ async def blank_target():
         if len(new) > 1:
             raise fast_buy.Stop('新建购买容器不唯一，已停止。')
         await asyncio.sleep(.1)
-    raise fast_buy.Stop('未能打开隔离的购买过渡容器；未打开购买页、未发送 queryBuy。')
+    raise fast_buy.Stop('未能打开隔离的购买过渡容器（可能停在登录页或页面异常）；未打开购买页、未发送 queryBuy。')
 
 
 READ_STATE = r"""(()=>{
@@ -146,7 +157,7 @@ READ_STATE = r"""(()=>{
 })()"""
 
 
-async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
+async def watch(task, heartbeat, prepared=None, *, stop_after_held=False, login=None):
     """Return (native form, raw product quota). stop_after_held is read-only QA."""
     import websockets
     import fast_buy_uia2 as fu
@@ -154,7 +165,7 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
     start = datetime.fromisoformat(task['fire_at'])
     end = datetime.fromisoformat(task['end_at'])
     settings = purchase_settings.validate(task['watch_settings'])
-    target = await blank_target()
+    target = await blank_target(login)
     token = uuid.uuid4().hex
     async with websockets.connect(target['webSocketDebuggerUrl'], open_timeout=2, close_timeout=.2) as ws:
         client = Client(ws)
@@ -193,7 +204,16 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                 install_deadline = time.monotonic() + MIN_INSTALL_SECONDS
             else:
                 install_deadline = time.monotonic() + min(15, left)
+            next_login = 0.0
             while time.monotonic() < install_deadline:
+                if login is not None and time.monotonic() >= next_login:
+                    next_login = time.monotonic() + .5
+                    if login():
+                        # Login can reload the purchase document; the preload
+                        # script applies again, so give installation a fresh
+                        # minimum window instead of failing on the old clock.
+                        install_deadline = max(install_deadline,
+                                               time.monotonic() + MIN_INSTALL_SECONDS)
                 state = await client.evaluate(READ_STATE)
                 if (state and state['token'] == token and state['installed']
                         and state['heldCalls'] > 0 and state['status'] == 'waiting'):
@@ -256,8 +276,8 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                 pass  # lease expiry still prevents background polling
 
 
-def run(task, heartbeat, prepared=None):
-    return asyncio.run(watch(task, heartbeat, prepared))
+def run(task, heartbeat, prepared=None, *, login=None):
+    return asyncio.run(watch(task, heartbeat, prepared, login=login))
 
 
 def verify_prepared(task, root=None, found=None):

@@ -691,21 +691,87 @@ def cold_start():
     time.sleep(3)
 
 
-def on_login_page():
+def on_login_page(root=None):
+    """The native nine-dot login page, over 我的 or over a purchase WebView.
+
+    Both contexts expose vGestureInputArea + vGestureContentView (observed
+    2026-11-05); the normal 我的 page has neither. The screenshot size is not
+    used here: it only says the page protects its content, not that it is a
+    login page.
+    """
     try:
-        root = read_screen()
-        return (secure_input.has(root, "我的头像") and secure_input.has(root, "更多选项")
-                and secure_input.screen_protected())
+        return secure_input.login_page(read_screen() if root is None else root)
     except Exception:
         return False
 
 
-def logged_in():
-    """On 我的: a normal (unblanked) screenshot means logged in."""
+def logged_in(root=None):
+    """A readable frame outside the login overlay.
+
+    Conservative: a protected page that is not the login page (payment
+    password, risk dialog) is not called logged in. Normal 我的 and the
+    purchase WebView are both capturable.
+    """
     try:
-        return not secure_input.screen_protected()
+        if root is None:
+            root = read_screen()
+        return not secure_input.login_page(root) and not secure_input.screen_protected()
     except (RuntimeError, subprocess.SubprocessError, OSError):
         return False
+
+
+def login_wait(timeout=20.0):
+    """True once the login overlay is gone for two consecutive reads."""
+    end = time.monotonic() + timeout
+    clear = 0
+    while time.monotonic() < end:
+        try:
+            root = read_screen()
+        except Exception:
+            clear = 0
+        else:
+            clear = 0 if secure_input.login_page(root) else clear + 1
+            if clear >= 2:
+                return True
+        time.sleep(.5)
+    return False
+
+
+def send_login(task, root):
+    """Persist the attempt count, then send the keychain pattern once."""
+    if task.get("patterns_sent", 0) >= LOGIN_TRIES:
+        raise Abort(f"已输入图案 {LOGIN_TRIES} 次仍未登录，为避免锁定不再尝试。")
+    pattern = keychain_store.load().get("login_pattern")
+    if not isinstance(pattern, str) or not re.fullmatch(r"[1-9]{4,9}", pattern):
+        raise Abort("钥匙串中没有有效的登录图案，未输入图案。")
+    task["patterns_sent"] = task.get("patterns_sent", 0) + 1
+    persist(task)
+    log(f"输入图案（第 {task['patterns_sent']}/{LOGIN_TRIES} 次）")
+    try:
+        secure_input.login(pattern, root=root)
+    finally:
+        pattern = None
+
+
+def login_here(task, root=None):
+    """Log in if the nine-dot page is frontmost; False means nothing to do.
+
+    Used after cold_start and whenever a purchase link raises PBLoginActivity
+    instead of the WebView. The caller keeps the task's pattern budget.
+    """
+    if root is None:
+        try:
+            root = read_screen()
+        except Exception as exc:
+            log(f"读不到页面，暂不判断登录页：{exc}")
+            return False
+    if not secure_input.login_page(root):
+        return False
+    send_login(task, root)
+    if not login_wait():
+        raise Abort("图案已发送，但仍停在登录页；请检查图案或手动登录。")
+    log("登录页已消失，已登录")
+    return True
 
 
 def login_fresh(task):
@@ -736,13 +802,11 @@ def login_fresh(task):
             log(f"第 {cycle} 次冷启动失败：{exc}")
             continue
         if logged_in():
-            log("“我的”可正常截图，已登录")
+            log("没有登录层且可正常截图，已登录")
             return
         if not on_login_page():
             log(f"第 {cycle} 次：既不是登录页也不是已登录，重启 App")
             continue
-        if task.get("patterns_sent", 0) >= LOGIN_TRIES:
-            raise Abort(f"已输入图案 {LOGIN_TRIES} 次仍未登录，为避免锁定不再尝试。")
         # Read the tree here with uia2, before counting an attempt. login()'s
         # own `uiautomator dump` fails once uia2 is running (23:18 rehearsal:
         # three attempts burned, no gesture ever drawn).
@@ -751,16 +815,12 @@ def login_fresh(task):
         except Exception as exc:
             log(f"第 {cycle} 次：读不到登录页控件，重启 App：{exc}")
             continue
-        task["patterns_sent"] = task.get("patterns_sent", 0) + 1
-        persist(task)
-        log(f"输入图案（第 {task['patterns_sent']}/{LOGIN_TRIES} 次）")
-        pattern = keychain_store.load().get("login_pattern")
         try:
-            secure_input.login(pattern, root=root)
+            send_login(task, root)
+        except Abort:
+            raise
         except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
             log(f"图案输入异常：{exc}")
-        finally:
-            pattern = None
         time.sleep(6)
         if logged_in() and not on_login_page():
             alert(f"登录成功（第 {task['patterns_sent']} 次图案）")
@@ -1055,7 +1115,8 @@ def gated_fire(task):
 
     marks = {}
     try:
-        root, quota = query_gate.run(task, heartbeat, prepared)
+        root, quota = query_gate.run(task, heartbeat, prepared,
+                                     login=lambda: login_here(task))
         ready = time.monotonic()
         log(f"queryBuy 有额度，表单已就绪（{datetime.now():%H:%M:%S.%f}"[:-3] + "）")
         found = {}

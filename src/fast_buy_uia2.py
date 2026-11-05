@@ -30,7 +30,7 @@ import keychain_store
 import purchase_settings
 import purchase_page
 import risk_confirm
-from secure_input import center, has, screen_protected, send_commands
+from secure_input import center, has, login_page, send_commands
 
 DEVICE = None
 
@@ -410,18 +410,6 @@ def enter_password(password, confirm_wait=0.15, submit=True):
     raise fast_buy.Stop("确定按钮仍不可用，已关闭密码框，未提交。")
 
 
-def protected_login_page():
-    """A blanked PNG is the login page's signature; a normal page is not.
-
-    Only called when the tree shows the login-page controls, so the extra
-    screencap stays off the fast path and a page transition cannot trigger it.
-    """
-    try:
-        return screen_protected()
-    except Exception:
-        return False
-
-
 def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REOPEN_GAP,
               load_timeout=FORM_LOAD_TIMEOUT, tick=None):
     """Wait for a new document and business controls, never an old error page.
@@ -471,8 +459,7 @@ def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REO
                 root = None
             if root is not None:
                 text = " ".join(fast_buy.label(n) for n in root.iter("node"))
-                if ("我的头像" in text and "更多选项" in text
-                        and protected_login_page()):
+                if login_page(root):
                     raise fast_buy.Stop("App 停在登录页，需要重新登录；本轮已停止，未提交。")
                 pages = purchase_page.snapshot()
                 seen = time.monotonic()

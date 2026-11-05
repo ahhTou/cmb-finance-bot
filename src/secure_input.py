@@ -34,6 +34,21 @@ def has(root, text):
     return any(text in (n.get("text", "") + n.get("content-desc", ""))
                for n in root.iter("node"))
 
+
+def has_id(root, resource_id):
+    return any(n.get("resource-id") == resource_id for n in root.iter("node"))
+
+
+# The native nine-dot login overlay. Observed 2026-11-05 over both the 我的
+# page (PBMainActivity) and a purchase link (PBLoginActivity); the normal
+# logged-in 我的 page has neither, so this does not depend on screenshot size.
+LOGIN_VIEW_IDS = ("cmb.pb:id/vGestureInputArea", "cmb.pb:id/vGestureContentView")
+
+
+def login_page(root):
+    return (root is not None
+            and all(has_id(root, resource_id) for resource_id in LOGIN_VIEW_IDS))
+
 def center(bounds):
     match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds or "")
     if not match:
@@ -70,8 +85,8 @@ def login(provided=None, root=None):
     fails while a UiAutomator2 server holds the UiAutomation connection."""
     if root is None:
         root = screen()
-    if not (has(root, "我的头像") and has(root, "更多选项")):
-        raise RuntimeError("页面不符合已观察到的招行九宫格登录页。")
+    if not login_page(root):
+        raise RuntimeError("页面不是已观察到的招行九宫格登录页。")
     if not screen_protected():
         raise RuntimeError("当前页面可正常截图，可能已登录；未发送登录手势。")
     size = adb("shell", "wm", "size")

@@ -14,6 +14,16 @@ def tree(*texts):
         f'<node text="{t}" content-desc="" />' for t in texts) + "</hierarchy>")
 
 
+def with_ids(root, *resource_ids):
+    for resource_id in resource_ids:
+        ET.SubElement(root, "node", {"resource-id": resource_id})
+    return root
+
+
+LOGIN = with_ids(tree("我的头像", "更多选项", "招商银行"),
+                 "cmb.pb:id/vGestureInputArea", "cmb.pb:id/vGestureContentView")
+
+
 FORM = tree("理财购买", "可用余额 ￥34,567.89", "同意协议下一步")
 BLANK = tree()
 ERROR = tree("TOPI101W - 购买失败，当前时间不在产品交易开放期")
@@ -144,17 +154,14 @@ class OpenFormTest(unittest.TestCase):
         self.assertLess(clock.now, 6.0)
 
     def test_login_page_stops_instead_of_polling_forever(self):
-        login = tree("我的头像", "更多选项", "招商银行")
-        with patch.object(fu, "screen_protected", return_value=True):
-            exc, opener, _, _ = self.run_open([login] * 4, wait=1.5, gap=0.95)
+        exc, opener, _, _ = self.run_open([LOGIN] * 4, wait=1.5, gap=0.95)
         self.assertIsInstance(exc, fb.Stop)
         self.assertIn("登录页", str(exc))
 
     def test_normal_page_with_same_labels_is_not_a_login_page(self):
-        # 我的 also shows these labels; only the blanked frame means login.
+        # 我的 also shows these labels; only the gesture view means login.
         mine = tree("我的头像", "更多选项", "账户总览")
-        with patch.object(fu, "screen_protected", return_value=False):
-            exc, _, _, _ = self.run_open([mine] * 40, wait=1.0, gap=0.5, deadline=1.4)
+        exc, _, _, _ = self.run_open([mine] * 40, wait=1.0, gap=0.5, deadline=1.4)
         self.assertIsInstance(exc, fb.Stop)
         self.assertNotIn("登录页", str(exc))
 

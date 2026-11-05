@@ -68,28 +68,39 @@
 - [ ] 不定时模式按设置里保存的冷启动提前量选最近一档。
 - [ ] 补测试建议：把 `defaultDate` / `nextQuota` 提到 `src/lib` 用固定时间做单测（Vitest），或用 Playwright `page.clock` 在假后端固定 00:47 / 08:55 做 e2e；当前没有这几条日期场景的专门测试。
 
-## G. 登录页精确判断（需求 4，尚未实现）
+## G. 登录页精确判断（需求 4，已实现 2026-11-05）
 
-现状（2026-11-05）：
+判定规则（不再用截图大小猜）：
 
-- `on_login_page()`：控件树同时有「我的头像」「更多选项」，**并且** PNG 截图小于 12000 字节。
-- `logged_in()`：只看 PNG 截图像素大小，不小于阈值就当已登录。
-- 问题：截图大小只是“受保护页面”的代理，不是登录页的身份；登录变体（密码登录、协议弹窗、网络错误）可能没有这两个控件，误判为“既不是登录页也不是已登录”而反复重启；支付密码、风险弹窗等其他加密页也可能被截图规则误判。需要换成登录页自身的稳定标识，并引入“未知”状态。
+- 登录页 = 控件树同时有 `cmb.pb:id/vGestureInputArea` 和 `cmb.pb:id/vGestureContentView`（九宫格输入区）。「我的」上的登录层和购买链接拉起的 `PBLoginActivity` 都符合；正常「我的」页两者都没有。
+- 已登录 = 没有九宫格登录层，且 `screencap -p` 可正常读取（不是全黑/极小 PNG）。支付密码、风险弹窗等其他受保护页面不算已登录，也不会被当成登录页。
+- 代码：`src/secure_input.py` 的 `login_page()`、`night_watch.py` 的 `on_login_page()` / `logged_in()` / `login_here()`；购买页在 `query_gate.blank_target()` 和挂起查询的安装循环里复用同一个登录回调。
 
-卡在登录页时收集一次证据（只读，不改状态）：
+已实测（模拟器，只发正确图案，每条路径 1 次）：
 
-- [ ] 前台窗口/Activity：`dumpsys window windows` 里的 `mCurrentFocus`、`dumpsys activity activities` 里的 resumed activity。
-- [ ] uia2 控件树：每个节点的 `text`、`resource-id`、`content-desc`、`bounds`、`class`、`clickable`。
-- [ ] 截图：`./scripts/capture` 的 PNG 和字节数（登录页可能是全黑，也记录）。
-- [ ] 若登录页在内嵌 WebView：CDP target、文档 URL/标题、页面可见文字。
-- [ ] 页面文字线索：手势密码/密码登录/忘记密码/切换账号/同意协议/网络错误等。
-- [ ] 人为制造并各测一次：已登录、九宫格登录页、密码登录页、协议/公告弹窗、其他加密页（支付密码）、App 白屏/WebView 报错。
+- [x] 冷启动 → 我的 → 识别九宫格 → 钥匙串图案 → `PBMainActivity`，`on_login_page=False`、`logged_in=True`。
+- [x] 冷启动 → 打开过渡购买页 → 识别 `PBLoginActivity` 九宫格 → 图案 → `PBWebContainerActivity`，拿到 `sfoveramount.html` 过渡页 URL。
+- [x] 正常「我的」页没有这两个 ID；旧的文本判断（我的头像 + 更多选项）不足以区分，已改。
+- [x] 隔离测试：`tests/test_login_page.py`、`tests/test_open_form.py` 的登录页用例、`tests/test_night_watch.py` 的 `login_here` 预算/等待用例、`tests/test_query_gate.py` 的 `blank_target` 登录回调用例。
 
-目标判断：分成【已登录】【登录页】【其他加密页】【App/WebView 异常】【未知】；未知时不重启、不发图案，先告警。具体规则等证据齐了再写，本轮不动代码。
+继续观察 / 未覆盖：
+
+- [ ] 密码登录、协议/公告弹窗、网络错误页、App 白屏/WebView 报错；目前未知页面会走原有的有限次冷启动重试，不会把它们当登录页发图案。
+- [ ] 图案错误后的停留页和重试预算（不要为了测试故意输错，避免锁定）。
+- [ ] `watch()` 安装循环里登录后页面重新加载的时序（`blank_target` 路径已实测；安装循环的回调只有隔离测试）。
+- [ ] 账户持有人真机上的同样两条路径（模拟器已通过）。
+
+以后遇到新的登录变体，按下面收集一次证据再改规则：
+
+- 前台窗口/Activity：`dumpsys window` 的 `mCurrentFocus`、`dumpsys activity activities` 的 resumed activity。
+- uia2 控件树：`text`、`resource-id`、`content-desc`、`bounds`、`class`、`clickable`。
+- 截图：`./scripts/capture` 的 PNG 和字节数（登录页可能是全黑）。
+- 若是内嵌 WebView：CDP target、文档 URL/标题、页面可见文字。
+- 页面文字线索：手势密码/密码登录/忘记密码/切换账号/同意协议/网络错误。
 
 ## H. 当前基线（2026-11-05）
 
 - `tsc`、`pnpm build`、`biome check` 通过。
 - Vitest 14 项通过；Playwright e2e 36 项通过（假后端）。
-- Python 全量 186 项，仅既有 `test_timed_buy` 错误；`admin_server` 9 项用 `.venv` 全过。
-- 尚未重建/重启 App，尚未上真机；以上手动项都还没做。
+- Python 全量 195 项（含新增登录页 / `login_here` / `blank_target` 用例），仅既有 `test_timed_buy` 错误；`admin_server` 9 项用 `.venv` 全过。
+- 需求 4 的两条登录路径已在模拟器上实测（见 G）；管理 App 的界面手动项还没做，App 未重建/重启。

@@ -185,6 +185,46 @@ class NightWatchTest(unittest.TestCase):
                     m.stop()
         login.assert_not_called()
 
+    def test_login_here_logs_in_once_on_the_gesture_page(self):
+        task = self.task(patterns_sent=0)
+        pages = iter([True, False, False])   # login page, then gone twice
+        with patch.object(nw, "read_screen", return_value="tree"), \
+             patch.object(nw.secure_input, "login_page", side_effect=lambda root: next(pages)), \
+             patch.object(nw.keychain_store, "load", return_value={"login_pattern": "1235"}), \
+             patch.object(nw.time, "sleep"), \
+             patch.object(nw.secure_input, "login") as login:
+            self.assertTrue(nw.login_here(task))
+        self.assertEqual(login.call_count, 1)
+        self.assertEqual(login.call_args.kwargs["root"], "tree")
+        self.assertEqual(task["patterns_sent"], 1)
+        self.assertEqual(nw.load_task()["patterns_sent"], 1)
+
+    def test_login_here_does_nothing_without_the_login_page(self):
+        task = self.task(patterns_sent=0)
+        with patch.object(nw, "read_screen", return_value="tree"), \
+             patch.object(nw.secure_input, "login_page", return_value=False), \
+             patch.object(nw.secure_input, "login") as login:
+            self.assertFalse(nw.login_here(task))
+        login.assert_not_called()
+        self.assertEqual(task["patterns_sent"], 0)
+
+    def test_login_here_respects_the_pattern_budget(self):
+        task = self.task(patterns_sent=nw.LOGIN_TRIES)
+        with patch.object(nw, "read_screen", return_value="tree"), \
+             patch.object(nw.secure_input, "login_page", return_value=True), \
+             patch.object(nw.secure_input, "login") as login:
+            with self.assertRaises(nw.Abort):
+                nw.login_here(task)
+        login.assert_not_called()
+
+    def test_logged_in_rejects_a_login_overlay(self):
+        # An unprotected screenshot is not enough: the gesture view still
+        # means the login page is on screen.
+        with patch.object(nw, "read_screen", return_value="tree"), \
+             patch.object(nw.secure_input, "login_page", return_value=True), \
+             patch.object(nw.secure_input, "screen_protected", return_value=False):
+            self.assertFalse(nw.logged_in())
+
     def test_detail_failure_does_not_fail_prepare(self):
         # The form opens from the app link at sale time; the detail page is
         # only a warm-up, and a second prepare must not log in again.

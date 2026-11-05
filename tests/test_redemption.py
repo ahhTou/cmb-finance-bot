@@ -138,7 +138,7 @@ class RedemptionTest(unittest.TestCase):
     def test_gated_flow_marks_only_after_native_checks(self):
         task = self.task(purchase_flow=nw.query_gate.FLOW)
         root = object()
-        def waiting(task, heartbeat, prepared):
+        def waiting(task, heartbeat, prepared, **kwargs):
             prepared()
             heartbeat(6)
             self.assertEqual(nw.load_task()['phase'], 'waiting')
@@ -165,7 +165,7 @@ class RedemptionTest(unittest.TestCase):
         fake = self.fake(None)
         fake.load_payment_password = lambda: events.append('keychain') or '111111'
         fake.warm = lambda: events.append('warm')
-        def waiting(task, heartbeat, prepared):
+        def waiting(task, heartbeat, prepared, **kwargs):
             prepared()
             events.append('quota')
             return object(), None
@@ -187,7 +187,7 @@ class RedemptionTest(unittest.TestCase):
 
     def test_gated_heartbeat_logs_each_query_round_trip_once(self):
         task = self.task(purchase_flow=nw.query_gate.FLOW)
-        def waiting(task, heartbeat, prepared):
+        def waiting(task, heartbeat, prepared, **kwargs):
             heartbeat(1, [[1, 180, 'E']])
             heartbeat(2, [[1, 180, 'E'], [2, 95, 'ready']])
             heartbeat(2, [[1, 180, 'E'], [2, 95, 'ready']])
