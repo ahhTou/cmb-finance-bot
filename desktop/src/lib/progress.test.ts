@@ -79,6 +79,15 @@ describe('readProgress', () => {
     expect(p.active).toBe(-1)
   })
 
+  it('does not finish P3 on a failed login retry line', () => {
+    const p = readProgress(
+      [DRILL[1], DRILL[2], '11-05 11:03:40 第 1 次：既不是登录页也不是已登录，重启 App'],
+      'preparing',
+      true,
+    )
+    expect(STEPS[p.active].id).toBe('P3')
+  })
+
   it('falls back to the phase when the task start has scrolled out of the log', () => {
     expect(STEPS[readProgress(['心跳'], 'waiting').active].id).toBe('P7')
     expect(

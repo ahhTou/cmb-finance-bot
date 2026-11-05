@@ -43,10 +43,11 @@ export const STEPS: Step[] = [
 ]
 
 /** A log line that proves the run has reached step index `reach` (all before it done). */
-const MILESTONES: [RegExp, number][] = [
+const MILESTONES: [RegExp, number, RegExp?][] = [
   [/值守已开始|不定时抢购已开始/, 1],
   [/开始准备：冷启动并登录|立即冷启动并登录/, 2],
-  [/登录成功|已登录/, 3],
+  // A failed retry says "既不是登录页也不是已登录"; only real success lines count.
+  [/登录成功|已登录/, 3, /既不是登录页/],
   [/uia2 已连接并预热/, 5],
   [/购买页已就绪，queryBuy 已挂起/, 6],
   [/queryBuy 第 \d+ 次：有额度/, 7],
@@ -112,8 +113,8 @@ export function readProgress(lines: string[], phase: string, dryRun = false): Pr
 
   for (const line of own) {
     lastStamp = line.match(STAMP)?.[1] ?? lastStamp
-    for (const [pattern, index] of MILESTONES) {
-      if (pattern.test(line) && index > reach) {
+    for (const [pattern, index, skip] of MILESTONES) {
+      if (pattern.test(line) && !skip?.test(line) && index > reach) {
         for (let i = reach; i < index; i++) finishedAt[STEPS[i].id] ??= lastStamp
         reach = index
       }
