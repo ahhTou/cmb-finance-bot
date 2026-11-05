@@ -3,18 +3,55 @@ import { localISO } from '../lib/utils'
 
 /**
  * Mock scenarios, picked with `?scenario=` in the page URL (before the `#`):
- * idle (default), armed, redemption, firing, empty, error.
+ * idle (default), armed, redemption, firing, progress, empty, error.
+ * `progress` replays the real 11-05 11:06 drill log step by step.
  */
-export type Scenario = 'idle' | 'armed' | 'redemption' | 'firing' | 'empty' | 'error'
+export type Scenario = 'idle' | 'armed' | 'redemption' | 'firing' | 'progress' | 'empty' | 'error'
 
 export function scenario(): Scenario {
   const value = new URLSearchParams(location.search).get('scenario')
   return (
-    (['idle', 'armed', 'redemption', 'firing', 'empty', 'error'] as const).find((s) => s === value) ?? 'idle'
+    (['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error'] as const).find(
+      (s) => s === value,
+    ) ?? 'idle'
   )
 }
 
 const inMinutes = (minutes: number) => localISO(new Date(Date.now() + minutes * 60_000))
+
+const stamp = () => localISO(new Date()).slice(5).replace('T', ' ')
+
+/**
+ * The 11-05 11:06 drill (133045A, 0.01) as [log line, phase after it, pause ms].
+ * Lines without a time stamp are prints from the purchase script, as in watch.log.
+ */
+export const DRILL_SCRIPT: [() => string, string, number][] = [
+  [() => `${stamp()} 通知：值守已开始：133045A 0.01 元（演练）`, 'armed', 1500],
+  [() => `${stamp()} 开始准备：冷启动并登录`, 'preparing', 2200],
+  [() => `${stamp()} 输入图案（第 1/3 次）`, 'preparing', 1200],
+  [() => '已发送登录手势（约 5.3 秒）；请在模拟器确认登录结果。', 'preparing', 1600],
+  [() => `${stamp()} 通知：登录成功（第 1 次图案）`, 'preparing', 1800],
+  [() => 'uia2 已连接并预热 0.06s', 'preparing', 1200],
+  [() => `${stamp()} 通知：购买页已就绪，queryBuy 已挂起`, 'waiting', 2000],
+  ...[1, 2, 3, 4, 5].map((n): [() => string, string, number] => [
+    () => `${stamp()} queryBuy 第 ${n} 次：售罄，往返 ${170 + ((n * 37) % 60)} ms`,
+    'waiting',
+    700,
+  ]),
+  [() => `${stamp()} queryBuy 第 6 次：有额度，往返 305 ms`, 'waiting', 600],
+  [() => `${stamp()} queryBuy 有额度，表单已就绪`, 'firing', 700],
+  [() => '购买页显示单笔可购买额度 50000000 元（本次 0.01 元）', 'firing', 900],
+  [() => 'JS 风险确认完成：原预检查、资料加载及文本校验通过，密码面板已请求。', 'firing', 1100],
+  [() => '交易密码输入：第 1/2 轮', 'firing', 600],
+  [() => '演练：密码已输入，确定可点；未点确定。', 'firing', 500],
+  [() => '演练：输完密码约 1.85 秒；未点确定、未提交，已关闭密码框。', 'firing', 300],
+  [
+    () =>
+      `${stamp()} 耗时（毫秒，从有额度起）：表单复核 +60，风险确认 +711，密码页 +1101，输完密码（演练，未点确定） +1853`,
+    'firing',
+    6000,
+  ],
+]
 
 export const LOG_LINES = [
   ...Array.from(
@@ -65,6 +102,8 @@ export function makeTask(kind: Scenario): Task | null {
       armed_at: inMinutes(-10),
     }
   if (kind === 'firing') return { ...makeTask('armed'), phase: 'firing' }
+  if (kind === 'progress')
+    return { ...makeTask('armed'), code: '133045A', amount: '0.01', fire_at: inMinutes(0.5), phase: 'armed' }
   if (kind === 'idle')
     return {
       code: '133045A',

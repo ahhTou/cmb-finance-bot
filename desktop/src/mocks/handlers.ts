@@ -3,6 +3,7 @@ import type { ArmRequest, CancelRequest, Favorite, Task } from '../api/types'
 import { localISO } from '../lib/utils'
 import {
   DEVICE,
+  DRILL_SCRIPT,
   FAVORITES,
   HISTORY,
   LOG_LINES,
@@ -25,9 +26,22 @@ const active = () => ['armed', 'preparing', 'waiting', 'firing'].includes(state.
 const fail = (error: string, status = 400) => HttpResponse.json({ error }, { status })
 const status = () => makeStatus(state.task, state.favorites, state.logs)
 
+// `progress`: replay the drill log line by line, then start over.
+if (kind === 'progress') {
+  let step = 0
+  const next = () => {
+    const [line, phase, pause] = DRILL_SCRIPT[step]
+    state.logs.push(line())
+    if (state.task) state.task = { ...state.task, phase }
+    step = (step + 1) % DRILL_SCRIPT.length
+    setTimeout(next, pause)
+  }
+  next()
+}
+
 // Keep the live log moving while a task is active.
 setInterval(() => {
-  if (active())
+  if (active() && kind !== 'progress')
     state.logs.push(`${localISO(new Date()).slice(5).replace('T', ' ')} 心跳：购买页在线，等待查询`)
 }, 2000)
 

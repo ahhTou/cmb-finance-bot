@@ -145,3 +145,15 @@ test('while armed, other pages stay reachable and the sidebar shows the task', a
   await expect(page.getByTestId('live')).toBeVisible()
   await expect(bubble).toBeHidden()
 })
+
+test('focus view shows the purchase chain and follows the running step', async ({ page }) => {
+  await open(page, '/tasks', 'progress')
+  const chain = page.getByTestId('chain-progress')
+  await expect(chain).toBeVisible()
+  const running = chain.locator('[aria-current="step"]')
+  await expect(running).toHaveText('P3', { timeout: 10_000 })
+  await expect(chain).toContainText('冷启动登录')
+  await expect(running).toHaveText('P7', { timeout: 20_000 })
+  await expect(chain).toContainText('到点查询与重试')
+  await expect(chain).toContainText('fired_at')
+})

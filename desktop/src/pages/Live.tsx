@@ -4,8 +4,10 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
+import { ChainProgress } from '../components/ChainProgress'
 import { Button } from '../components/ui/button'
 import { Confirm } from '../components/ui/dialog'
+import { readProgress } from '../lib/progress'
 import { clockTime, cn, parseLocal, phaseName, phaseTone, shortTime, toneBg } from '../lib/utils'
 import { useUI } from '../store'
 
@@ -67,7 +69,12 @@ export function LivePage() {
   const lastRefresh = useUI((s) => s.lastRefresh)
   const action = useAction()
   const [confirmDisarm, setConfirmDisarm] = useState(false)
-  const { data: log } = useQuery({ ...q.log(60), refetchInterval: 1500 })
+  // Enough lines to reach back to this task's start (P7 logs one line per
+  // query); poll faster once queries run, when steps pass in a second.
+  const hot = w.phase === 'waiting' || w.phase === 'firing'
+  const { data: log } = useQuery({ ...q.log(400), refetchInterval: hot ? 700 : 1500 })
+  const lines = log?.lines ?? []
+  const progress = readProgress(lines, w.phase, !!task.dry_run)
 
   return (
     <motion.div
@@ -79,7 +86,7 @@ export function LivePage() {
     >
       <CodeRain />
       <Waves phase={w.phase} />
-      <LogStream lines={log?.lines ?? []} first={(log?.total ?? 0) - (log?.lines.length ?? 0)} />
+      <LogStream lines={lines} first={(log?.total ?? 0) - lines.length} />
       {/* The whole top band drags the window; the bar under it only shows text. */}
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-[72px]" />
       <div className="pointer-events-none relative z-10 flex items-center gap-3 px-[30px] pt-6">
@@ -98,13 +105,16 @@ export function LivePage() {
           上次刷新 {lastRefresh ? clockTime(lastRefresh) : '尚未刷新'}
         </span>
       </div>
+      <ChainProgress progress={progress} />
       <div className="relative z-10 flex flex-1 items-center justify-center px-[30px] pb-6">
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: [0.2, 0.8, 0.2, 1] }}
           className="flex w-full max-w-[680px] flex-col gap-[18px] rounded-[20px] p-[26px] ring-[0.6px] ring-white/15"
-          style={panel('0 30px 90px rgb(0 0 0 / 0.8), 0 10px 28px rgb(0 0 0 / 0.55), 0 0 120px rgb(224 66 82 / 0.2)')}
+          style={panel(
+            '0 30px 90px rgb(0 0 0 / 0.8), 0 10px 28px rgb(0 0 0 / 0.55), 0 0 120px rgb(224 66 82 / 0.2)',
+          )}
         >
           <div className="flex items-baseline gap-3.5">
             <Countdown text={text} />
@@ -159,7 +169,9 @@ export function WatchBubble() {
       transition={{ duration: 0.18 }}
       onClick={() => navigate({ to: '/tasks' })}
       className="flex w-full flex-col gap-1.5 rounded-xl p-3 text-left ring-[0.6px] ring-white/12 transition-colors hover:ring-accent/50"
-      style={panel('0 14px 36px rgb(0 0 0 / 0.65), 0 4px 12px rgb(0 0 0 / 0.45), 0 0 40px rgb(224 66 82 / 0.2)')}
+      style={panel(
+        '0 14px 36px rgb(0 0 0 / 0.65), 0 4px 12px rgb(0 0 0 / 0.45), 0 0 40px rgb(224 66 82 / 0.2)',
+      )}
     >
       <span className="flex items-center gap-2 text-[11px] text-muted">
         <PhaseDot phase={w.phase} />
