@@ -20,6 +20,23 @@ DEFAULTS = {
     'irregular_slow_min_ms': 1000, 'irregular_slow_max_ms': 2000,
     'irregular_idle_after_seconds': 90,
     'irregular_idle_min_ms': 2500, 'irregular_idle_max_ms': 4000,
+    # 密码流程的等待时间：前（等密码页、等键盘就绪）、中（相邻两位之间的
+    # 间隔）、后（点确定到读结果）。安全键盘是同一个 adb shell 里的一串
+    # `input tap` + `sleep`，所以每段停顿都能单独调；同一位数字连按会被 App
+    # 合并成一位（11-20 次里 5 次只进 5 位），所以相同数字的间隔更长。
+    # 单位：*_ms 毫秒，*_s 秒。
+    'password_page_timeout_s': 10,        # 风险确认 → 密码面板出现
+    'keypad_timeout_ms': 1200,            # 等焦点 + 10 键可用 + 位置稳定
+    'keypad_stable_ms': 200,              # 连续不动多久才认为键盘就绪
+    'password_same_digit_gap_ms': 50,     # 相邻两位相同，如 11、22
+    'password_different_digit_gap_ms': 10,  # 相邻两位不同
+    'password_confirm_gap_ms': 150,       # 最后一位输完 → 点确定
+    'password_confirm_timeout_ms': 600,   # 点确定前等按钮变为可用
+    'password_retry_gap_ms': 100,         # 清空重输前
+    'password_done_gap_ms': 150,          # 点「完成」兜底后
+    'password_close_wait_ms': 500,        # 关闭密码框后
+    'result_first_wait_ms': 1000,         # 点确定 → 开始读结果
+    'result_timeout_s': 20,               # 读结果最长等待
 }
 LIMITS = {
     'reopen_deadline': (1, 300), 'drill_form_deadline': (1, 300),
@@ -31,6 +48,18 @@ LIMITS = {
     'irregular_slow_min_ms': (1, 60000), 'irregular_slow_max_ms': (1, 60000),
     'irregular_idle_after_seconds': (0, 3600),
     'irregular_idle_min_ms': (1, 60000), 'irregular_idle_max_ms': (1, 60000),
+    'password_page_timeout_s': (1, 120),
+    'keypad_timeout_ms': (100, 30000),
+    'keypad_stable_ms': (0, 5000),
+    'password_same_digit_gap_ms': (0, 3000),
+    'password_different_digit_gap_ms': (0, 3000),
+    'password_confirm_gap_ms': (0, 5000),
+    'password_confirm_timeout_ms': (0, 30000),
+    'password_retry_gap_ms': (0, 5000),
+    'password_done_gap_ms': (0, 5000),
+    'password_close_wait_ms': (0, 10000),
+    'result_first_wait_ms': (0, 60000),
+    'result_timeout_s': (1, 120),
 }
 PAIRS = (('irregular_retry_min_ms', 'irregular_retry_max_ms', '高频'),
          ('irregular_slow_min_ms', 'irregular_slow_max_ms', '降频'),
@@ -54,6 +83,11 @@ def validate(values):
     if not (result['irregular_burst_seconds'] <= result['irregular_ramp_seconds']
             <= result['irregular_idle_after_seconds']):
         raise RuntimeError('分段时间须满足：高频结束 ≤ 过渡结束 ≤ 进入低频。')
+    # wait_keypad_stable() only accepts a layout that has been still for
+    # `keypad_stable_ms` and still has time left: an equal budget can never
+    # succeed, so reject it here instead of aborting a real purchase.
+    if result['keypad_stable_ms'] >= result['keypad_timeout_ms']:
+        raise RuntimeError('键盘稳定时长必须小于等键盘上限，否则永远等不到就绪。')
     return result
 
 

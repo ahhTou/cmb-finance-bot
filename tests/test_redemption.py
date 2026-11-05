@@ -224,7 +224,7 @@ class RedemptionTest(unittest.TestCase):
         seen = []
 
         def run(code, amount, at=None, dry_run=False, form_deadline=None,
-                form_wait=None, form_gap=None, before_submit=None, tick=None):
+                form_wait=None, form_gap=None, before_submit=None, tick=None, settings=None):
             seen.append((code, amount, form_deadline, form_wait, form_gap))
             before_submit()
             seen.append(nw.load_task()["phase"])   # persisted before submitting
@@ -246,7 +246,7 @@ class RedemptionTest(unittest.TestCase):
 
     def test_probe_heartbeat_is_persisted(self):
         def run(code, amount, at=None, dry_run=False, form_deadline=None,
-                form_wait=None, form_gap=None, before_submit=None, tick=None):
+                form_wait=None, form_gap=None, before_submit=None, tick=None, settings=None):
             tick(30)
             return None
 
@@ -299,7 +299,7 @@ class RedemptionTest(unittest.TestCase):
 
     def test_dry_run_reaches_password_page_without_firing(self):
         def run(code, amount, at=None, dry_run=False, form_deadline=None,
-                form_wait=None, form_gap=None, before_submit=None, tick=None):
+                form_wait=None, form_gap=None, before_submit=None, tick=None, settings=None):
             assert dry_run is True
             assert before_submit is None    # a rehearsal never writes the marker
             return None

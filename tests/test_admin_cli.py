@@ -249,7 +249,9 @@ class AdminTest(unittest.TestCase):
         with patch.dict(sys.modules, {'fast_buy_uia2': module}):
             code, data = self.call('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run')
         self.assertEqual(code, 0)
-        self.assertEqual(calls, [('TEST01', '0.01', True, {'form_deadline': 25})])
+        self.assertEqual([(c, a, d) for c, a, d, _ in calls], [('TEST01', '0.01', True)])
+        self.assertEqual(calls[0][3]['form_deadline'], 25)
+        self.assertEqual(calls[0][3]['settings']['drill_form_deadline'], 25)
         self.assertEqual(data['output'], [])
 
     def test_confirmed_direct_buy_submits_once_without_arming(self):
@@ -262,7 +264,10 @@ class AdminTest(unittest.TestCase):
                                    '--confirm-real-payment')
         self.assertEqual(code, 0)
         self.assertEqual(data['result'], '提交成功')
-        module.run.assert_called_once_with('TEST01', '100.00', dry_run=False, form_deadline=90)
+        self.assertEqual(module.run.call_args.args, ('TEST01', '100.00'))
+        self.assertEqual(module.run.call_args.kwargs['form_deadline'], 90)
+        self.assertEqual(module.run.call_args.kwargs['settings']['reopen_deadline'], 90)
+        self.assertFalse(module.run.call_args.kwargs['dry_run'])
         arm.assert_not_called()
         spawn.assert_not_called()
         self.assertFalse(nw.TASK.exists())

@@ -23,18 +23,18 @@ def panel(enabled=False,keyboard=True,covered=False,done=True):
 
 
 class PasswordPanelTest(unittest.TestCase):
-    def run_input(self,screens,stable=None,settle=False,submit=True):
+    def run_input(self,screens,stable=None,settle=False,submit=True,pace=None):
         stable=stable if stable is not None else panel()
         keys=fu.raw_digit_buttons(stable)
         calls=[]
         clock=Clock()
-        settle_mock = nullcontext() if settle else patch.object(fu, "wait_password_confirm", side_effect=lambda root: root)
+        settle_mock = nullcontext() if settle else patch.object(fu, "wait_password_confirm", side_effect=lambda root,**kw: root)
         with settle_mock, patch.object(fu.time,"monotonic",side_effect=clock.monotonic), patch.object(fu,'wait_keypad_stable',return_value=(stable,keys)) as wait, \
              patch.object(fu,'dump',side_effect=screens), \
              patch.object(fu,'send_commands',side_effect=lambda c:calls.append(c)), \
              patch.object(fu.time,'sleep',side_effect=clock.sleep),patch.object(fu,'close_password_panel') as close:
             error=None
-            try:fu.enter_password('111111',submit=submit)
+            try:fu.enter_password('111111',submit=submit,pace=pace)
             except fb.Stop as exc:error=exc
         return calls,wait,close,error
 
@@ -186,3 +186,74 @@ class PasswordPanelTest(unittest.TestCase):
         # 1-1, 2-2 and 3-3 repeat; 1-2 and 2-3 change.
         self.assertEqual(commands.count('sleep 0.05'),3)
         self.assertEqual(commands.count('sleep 0.01'),2)
+
+
+class PasswordPaceTest(unittest.TestCase):
+    """Every pause in the password flow is a saved setting, not a constant."""
+
+    PACE = dict(password_page_timeout_s=7,keypad_timeout_ms=900,keypad_stable_ms=120,
+                password_same_digit_gap_ms=80,password_different_digit_gap_ms=20,
+                password_confirm_gap_ms=250,password_confirm_timeout_ms=800,
+                password_retry_gap_ms=40,password_done_gap_ms=60,
+                password_close_wait_ms=300,result_first_wait_ms=1500,result_timeout_s=45)
+
+    def test_saved_preferences_become_the_seconds_this_module_sleeps(self):
+        pace=fu.password_pace(self.PACE)
+        self.assertEqual(pace['page_timeout'],7)
+        self.assertAlmostEqual(pace['keypad_timeout'],.9)
+        self.assertAlmostEqual(pace['keypad_stable'],.12)
+        self.assertAlmostEqual(pace['same_gap'],.08)
+        self.assertAlmostEqual(pace['different_gap'],.02)
+        self.assertAlmostEqual(pace['confirm_gap'],.25)
+        self.assertAlmostEqual(pace['confirm_timeout'],.8)
+        self.assertAlmostEqual(pace['retry_gap'],.04)
+        self.assertAlmostEqual(pace['done_gap'],.06)
+        self.assertAlmostEqual(pace['close_wait'],.3)
+        self.assertAlmostEqual(pace['result_wait'],1.5)
+        self.assertEqual(pace['result_timeout'],45)
+
+    def test_pace_with_no_arguments_reads_the_saved_file(self):
+        with patch.object(fu.purchase_settings,'load',return_value=dict(fu.purchase_settings.DEFAULTS,**self.PACE)):
+            pace=fu.password_pace()
+        self.assertAlmostEqual(pace['same_gap'],.08)
+
+    def test_gaps_come_from_the_caller_not_the_module_constants(self):
+        keys=fu.raw_digit_buttons(panel())
+        commands=fu.password_taps('112233',keys,.4,same_gap=.08,different_gap=.02)
+        self.assertEqual(commands.count('sleep 0.08'),3)
+        self.assertEqual(commands.count('sleep 0.02'),2)
+        self.assertEqual(commands[-1],'sleep 0.4')
+
+    def test_enter_password_passes_pace_to_keypad_and_confirm_waits(self):
+        stable=panel();keys=fu.raw_digit_buttons(stable);calls=[]
+        pace=dict(fu.DEFAULT_PACE,keypad_timeout=2.5,keypad_stable=1.5,confirm_timeout=1.1,
+                  same_gap=.07,different_gap=.03)
+        with patch.object(fu,'wait_keypad_stable',return_value=(stable,keys)) as wait, \
+             patch.object(fu,'wait_password_confirm',side_effect=lambda root,**kw:root) as confirm, \
+             patch.object(fu,'dump',return_value=panel(enabled=True)), \
+             patch.object(fu,'send_commands',side_effect=lambda c:calls.append(c)), \
+             patch.object(fu.time,'sleep'):
+            fu.enter_password('111111',pace=pace)
+        self.assertEqual(wait.call_args.kwargs,{'timeout':2.5,'stable_seconds':1.5})
+        self.assertEqual(confirm.call_args.kwargs,{'timeout':1.1})
+        self.assertEqual(calls[0].count('sleep 0.07'),5)
+        self.assertEqual(calls[-1],['input tap 160 220'])
+
+    def test_explicit_confirm_wait_still_overrides_the_saved_gap(self):
+        keys=fu.raw_digit_buttons(panel())
+        commands=fu.password_taps('123456',keys,.33,same_gap=.08,different_gap=.02)
+        self.assertEqual(commands[-1],'sleep 0.33')
+
+    def test_defaults_are_valid_and_keep_the_measured_gaps(self):
+        values=fu.purchase_settings.validate(fu.purchase_settings.DEFAULTS)
+        self.assertEqual(values['password_same_digit_gap_ms'],50)
+        self.assertEqual(values['password_different_digit_gap_ms'],10)
+        self.assertEqual(values['keypad_stable_ms'],200)
+
+    def test_impossible_keypad_stability_is_rejected_at_save_time(self):
+        with self.assertRaisesRegex(RuntimeError,'键盘稳定时长必须小于'):
+            fu.purchase_settings.validate(dict(fu.purchase_settings.DEFAULTS,keypad_stable_ms=1200))
+
+    def test_out_of_range_gap_is_rejected_at_save_time(self):
+        with self.assertRaisesRegex(RuntimeError,'password_same_digit_gap_ms'):
+            fu.purchase_settings.validate(dict(fu.purchase_settings.DEFAULTS,password_same_digit_gap_ms=3001))

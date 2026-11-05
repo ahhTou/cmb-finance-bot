@@ -211,13 +211,13 @@ def confirm_enabled(root):
     return node is not None and node.get("enabled") == "true"
 
 
-def close_password_panel():
+def close_password_panel(wait=0.5):
     root = dump()
     btn = find_node(root, "密码框关闭")
     if btn is not None:
         x, y = center_of(btn)
         send_commands([f"input tap {x} {y}"])
-        time.sleep(0.5)
+        time.sleep(wait)
 
 
 def raw_digit_buttons(root):
@@ -233,6 +233,34 @@ KEYPAD_STABLE_SECONDS = 0.20
 KEYPAD_STABLE_SAMPLES = 3
 PASSWORD_SAME_DIGIT_GAP = 0.05      # repeated coordinate: merged below this
 PASSWORD_DIFFERENT_DIGIT_GAP = 0.01  # distinct coordinates need no long gap
+
+
+def password_pace(settings=None):
+    """Turn saved preferences into the seconds this module actually sleeps.
+
+    `settings` is the arming snapshot when a watch calls in, so a task armed
+    before an edit keeps the pacing it was armed with; a one-off buy passes
+    None and uses what is saved now. Never called per digit: the whole password
+    is one adb shell session, so the gaps are baked into its command list.
+    """
+    saved = purchase_settings.validate(settings if settings is not None else purchase_settings.load())
+    return {
+        'page_timeout': saved['password_page_timeout_s'],
+        'keypad_timeout': saved['keypad_timeout_ms'] / 1000,
+        'keypad_stable': saved['keypad_stable_ms'] / 1000,
+        'same_gap': saved['password_same_digit_gap_ms'] / 1000,
+        'different_gap': saved['password_different_digit_gap_ms'] / 1000,
+        'confirm_gap': saved['password_confirm_gap_ms'] / 1000,
+        'confirm_timeout': saved['password_confirm_timeout_ms'] / 1000,
+        'retry_gap': saved['password_retry_gap_ms'] / 1000,
+        'done_gap': saved['password_done_gap_ms'] / 1000,
+        'close_wait': saved['password_close_wait_ms'] / 1000,
+        'result_wait': saved['result_first_wait_ms'] / 1000,
+        'result_timeout': saved['result_timeout_s'],
+    }
+
+
+DEFAULT_PACE = password_pace(purchase_settings.DEFAULTS)
 
 
 def keypad_ready(root):
@@ -262,8 +290,8 @@ def keypad_ready(root):
     return tuple(sorted(signature)), keys
 
 
-def wait_keypad_stable(timeout=1.2):
-    """Require focus + actionable keys + unchanged full bounds for 200ms.
+def wait_keypad_stable(timeout=1.2, stable_seconds=KEYPAD_STABLE_SECONDS):
+    """Require focus + actionable keys + unchanged full bounds for `stable_seconds`.
 
     Three coherent samples are also required; never type on timeout.
     """
@@ -280,7 +308,7 @@ def wait_keypad_stable(timeout=1.2):
             else:
                 prev, stable_since, samples = signature, now, 1
             if (now < end and samples >= KEYPAD_STABLE_SAMPLES
-                    and now - stable_since >= KEYPAD_STABLE_SECONDS):
+                    and now - stable_since >= stable_seconds):
                 print(f"数字键盘就绪：焦点与10键可用，布局连续稳定 {(now - stable_since) * 1000:.0f}ms。", flush=True)
                 return root, keys
         else:
@@ -289,21 +317,23 @@ def wait_keypad_stable(timeout=1.2):
     raise fast_buy.Stop("数字键盘焦点或布局未稳定，已停止，未继续输入或提交。")
 
 
-def password_taps(password, keys, confirm_wait):
+def password_taps(password, keys, confirm_wait=None, same_gap=None, different_gap=None):
     """Pace native key taps in one ADB shell session; never log this list.
 
     Repeated taps on the same coordinate are merged by the app: six
     back-to-back taps on one digit landed five digits in 11/20 trials, while
-    the same taps with PASSWORD_SAME_DIGIT_GAP apart landed six every time.
-    Different digits land reliably without the longer gap, so only a repeated
-    digit gets the safe spacing.
+    the same taps with the long gap apart landed six every time. Different
+    digits land reliably without it, so only a repeated digit gets the safe
+    spacing. Both gaps and the pause before 确定 come from the saved settings.
     """
+    confirm_wait = DEFAULT_PACE['confirm_gap'] if confirm_wait is None else confirm_wait
+    same_gap = DEFAULT_PACE['same_gap'] if same_gap is None else same_gap
+    different_gap = DEFAULT_PACE['different_gap'] if different_gap is None else different_gap
     commands = []
     for index, digit in enumerate(password):
         commands.append(f"input tap {keys[digit][0]} {keys[digit][1]}")
         if index < len(password) - 1:
-            gap = (PASSWORD_SAME_DIGIT_GAP if password[index + 1] == digit
-                   else PASSWORD_DIFFERENT_DIGIT_GAP)
+            gap = same_gap if password[index + 1] == digit else different_gap
             commands.append(f"sleep {gap}")
     commands.append(f"sleep {confirm_wait}")
     return commands
@@ -360,7 +390,7 @@ def wait_password_confirm(root, timeout=0.6):
     return root
 
 
-def enter_password(password, confirm_wait=0.15, submit=True):
+def enter_password(password, confirm_wait=None, submit=True, pace=None):
     """Type once on a stable keypad; prefer 确定 without closing the keypad.
 
     完成 is only a fallback when 确定 is disabled or covered by the keypad.
@@ -369,15 +399,23 @@ def enter_password(password, confirm_wait=0.15, submit=True):
     enabled and uncovered, then returns without tapping it; the caller closes
     the panel. Six digits alone never submit: the order is only sent from the
     panel's 确定 (onConfirm → doBuy).
+
+    Every pause comes from `pace` (see password_pace); `confirm_wait` overrides
+    only the last-digit → 确定 gap when a caller asks for it explicitly.
     """
-    root, keys = wait_keypad_stable()
+    pace = dict(DEFAULT_PACE, **(pace or {}))
+    if confirm_wait is None:
+        confirm_wait = pace['confirm_gap']
+    root, keys = wait_keypad_stable(timeout=pace['keypad_timeout'],
+                                    stable_seconds=pace['keypad_stable'])
     field = find_node(root, "点击谈出密码键盘")
     field_xy = center_of(field) if field is not None else None
     for attempt in range(2):
         print(f"交易密码输入：第 {attempt + 1}/2 轮", flush=True)
-        commands = password_taps(password, keys, confirm_wait)
+        commands = password_taps(password, keys, confirm_wait,
+                                 same_gap=pace['same_gap'], different_gap=pace['different_gap'])
         send_commands(commands)
-        root = wait_password_confirm(dump())
+        root = wait_password_confirm(dump(), timeout=pace['confirm_timeout'])
         used_done = False
         if not confirm_unobscured(root):
             done = find_node(root, "完成", exact=True)
@@ -385,8 +423,8 @@ def enter_password(password, confirm_wait=0.15, submit=True):
                 x, y = center_of(done)
                 send_commands([f"input tap {x} {y}"])
                 used_done = True
-                time.sleep(0.15)
-                root = wait_password_confirm(dump())
+                time.sleep(pace['done_gap'])
+                root = wait_password_confirm(dump(), timeout=pace['confirm_timeout'])
         if confirm_unobscured(root):
             if not submit:
                 print("演练：密码已输入，确定可点" + ("（已用完成兜底）" if used_done else "")
@@ -397,16 +435,17 @@ def enter_password(password, confirm_wait=0.15, submit=True):
             send_commands([f"input tap {x} {y}"])
             return
         if confirm_enabled(root):
-            close_password_panel()
+            close_password_panel(pace['close_wait'])
             raise fast_buy.Stop("确定按钮仍被键盘遮挡，已关闭密码框，未提交。")
         if attempt == 0 and field_xy is not None:
             print("等待状态刷新后确定仍不可用：清空输入后重输一次，尚未提交。", flush=True)
             send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
-            time.sleep(0.10)
-            root, keys = wait_keypad_stable()
+            time.sleep(pace['retry_gap'])
+            root, keys = wait_keypad_stable(timeout=pace['keypad_timeout'],
+                                            stable_seconds=pace['keypad_stable'])
             continue
         break
-    close_password_panel()
+    close_password_panel(pace['close_wait'])
     raise fast_buy.Stop("确定按钮仍不可用，已关闭密码框，未提交。")
 
 
@@ -501,10 +540,10 @@ def warm():
     print(f"uia2 已连接并预热 {time.monotonic() - t:.2f}s", flush=True)
 
 
-def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True,
+def run(code, amount, at=None, dry_run=False, confirm_wait=None, mark=None, direct=True,
         form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None,
         prepared_form=None, product_quota=None, verify_form=None,
-        password=None, warm_up=True, risk_page=None):
+        password=None, warm_up=True, risk_page=None, settings=None):
     """One purchase. `mark(name, monotonic_time)` is an optional read-only
     timing hook; it never changes the flow.
 
@@ -513,12 +552,18 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     the form is verified and before anything that can create an order, so the
     caller can persist its "submitting" marker at the last safe moment.
 
+    `settings` is the arming snapshot for a watch; None loads what is saved
+    now. It only feeds the password pacing (see password_pace) — the timing
+    around the password panel, never the order itself.
+
     The gated watch passes `password` and `warm_up=False` after doing both
     while the page waits, so neither costs time once quota shows up.
     """
     def note(name, when):
         if mark is not None:
             mark(name, when)
+
+    pace = password_pace(settings)
 
     # The drill also types the password (it stops before 确定), so both paths
     # need it; it stays in this process only.
@@ -591,7 +636,7 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         raise
 
     root = wait_for(lambda r: has(r, "请输入取款密码") and has(r, "招商银行安全输入"),
-                    timeout=STEP_WAIT, what="密码页")
+                    timeout=pace['page_timeout'], what="密码页")
     note("password", time.monotonic())
     # Compare numerically: large amounts may be shown as ￥5,000.00, and a
     # substring test would let ￥5000 match ￥50000.00.
@@ -603,11 +648,11 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         # Same input as a real purchase, stopping before 确定; then close the
         # panel, which discards the typed digits.
         try:
-            enter_password(password, confirm_wait=confirm_wait, submit=False)
+            enter_password(password, confirm_wait=confirm_wait, submit=False, pace=pace)
             typed = time.monotonic()
             note("typed", typed)
         finally:
-            close_password_panel()
+            close_password_panel(pace['close_wait'])
         print(f"演练：输完密码约 {typed - began:.2f} 秒；未点确定、未提交，已关闭密码框。", flush=True)
         return
 
@@ -615,15 +660,15 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     # gap before 确定. Bounds come from the verified native hierarchy;
     # enter_password() also verifies that all six digits landed before tapping
     # 确定.
-    enter_password(password, confirm_wait=confirm_wait)
+    enter_password(password, confirm_wait=confirm_wait, pace=pace)
     submitted = time.monotonic()
     note("submit", submitted)
     print(f"已提交一次，核心流程约 {submitted - began:.2f} 秒；等待结果。", flush=True)
 
-    time.sleep(1.0)
+    time.sleep(pace['result_wait'])
     result = None
     try:
-        result = wait_result(timeout=20.0)
+        result = wait_result(timeout=pace['result_timeout'])
         note("result", time.monotonic())
         print(f"结果页提示：{result}", flush=True)
     except fast_buy.Stop as exc:
@@ -639,7 +684,8 @@ def main():
     parser.add_argument("--amount", required=True)
     parser.add_argument("--at", help="start at local HH:MM:SS.mmm or ISO time")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--confirm-wait", type=float, default=0.15)
+    parser.add_argument("--confirm-wait", type=float, default=None,
+                        help="覆盖设置里的「最后一位 → 点确定」间隔（秒）")
     parser.add_argument("--via-gobuy", action="store_true",
                         help="在已打开的详情页上调用 goBuy()，不用 App 链接直接打开购买页")
     args = parser.parse_args()

@@ -287,7 +287,8 @@ def dispatch(a):
             with redirect_stdout(buffer):
                 result = fast_buy_uia2.run(a.code, amount, dry_run=a.dry_run,
                                   form_deadline=settings[
-                                      'drill_form_deadline' if a.dry_run else 'reopen_deadline'])
+                                      'drill_form_deadline' if a.dry_run else 'reopen_deadline'],
+                                  settings=settings)
         return {'output': buffer.getvalue().splitlines(), 'result': result}
     if a.cmd.startswith('set-'):
         with nw.task_lock(False):

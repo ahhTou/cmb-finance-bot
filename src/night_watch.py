@@ -972,7 +972,8 @@ def fire(task, when):
     try:
         result = fast_buy_uia2.run(task["code"], task["amount"], at=when,
                                    dry_run=task.get("dry_run", False),
-                                   form_deadline=task.get('form_deadline', purchase_settings.DEFAULTS['reopen_deadline']))
+                                   form_deadline=task.get('form_deadline', purchase_settings.DEFAULTS['reopen_deadline']),
+                                   settings=task.get('watch_settings'))
     except Exception as exc:
         task["phase"] = "done"
         task["result"] = f"停止：{exc}"
@@ -1027,7 +1028,8 @@ def redemption_fire(task, start):
         result = fast_buy_uia2.run(
             task["code"], task["amount"], at=None, dry_run=task.get("dry_run", False),
             form_deadline=window, form_wait=REDEEM_WAIT, form_gap=REDEEM_GAP,
-            before_submit=None if task.get("dry_run") else before_submit, tick=tick)
+            before_submit=None if task.get("dry_run") else before_submit, tick=tick,
+            settings=task.get('watch_settings'))
     except Exception as exc:
         task["phase"] = "done"
         if task.get("fired_at"):
@@ -1125,6 +1127,7 @@ def gated_fire(task):
                                       risk_page=lambda: found.get('page'),
                                       before_submit=None if task.get('dry_run') else before_submit,
                                       password=payment.pop('password', None), warm_up=False,
+                                      settings=task.get('watch_settings'),
                                       mark=marks.setdefault)
         finally:
             log_timings(ready, marks)

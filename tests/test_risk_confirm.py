@@ -31,7 +31,7 @@ class RiskConfirmTest(unittest.TestCase):
              patch.object(fu.risk_confirm,'run',side_effect=lambda *a,**k:events.append('risk')) as confirm, \
              patch.object(fu,'wait_for',return_value=password), \
              patch.object(fu,'enter_password',side_effect=lambda *a,**k:events.append('submit' if k.get('submit',True) else 'typed')) as enter, \
-             patch.object(fu,'close_password_panel',side_effect=lambda:events.append('close')), \
+             patch.object(fu,'close_password_panel',side_effect=lambda *a,**k:events.append('close')), \
              patch.object(fu,'wait_result',return_value='提交成功') as result,patch.object(fu.time,'sleep'),patch('builtins.print'):
             fu.run('TEST01','0.01',dry_run=dry,before_submit=lambda:events.append('marker'))
             self.assertEqual(confirm.call_count,1)
