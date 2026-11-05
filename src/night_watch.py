@@ -390,7 +390,7 @@ def _arm(args):
         task['end_at'] = query_end.isoformat()
     save_task(task)
     spawn_watch(task)
-    action = "演练（只到密码页，不提交）" if args.dry_run else "真实提交一次"
+    action = "演练（输完密码，不点确定、不提交）" if args.dry_run else "真实提交一次"
     if mode == "redemption":
         print(f"已布防不定时抢购：{args.code} {amount} 元，{when:%m-%d %H:%M:%S} 起 "
               f"{window} 分钟窗口内反复打开购买页，有额度就{action}。招行 App 已关闭。")
@@ -924,7 +924,7 @@ def fire(task, when):
         task["result"] = "演练完成"
         persist(task)
         fast_buy_uia2.close_password_panel()
-        alert("演练完成：已到密码页，未输入密码、未提交")
+        alert("演练完成：已输完密码，未点确定、未提交")
         return
     task["result"] = result or "结果未知"
     persist(task)
@@ -984,7 +984,7 @@ def redemption_fire(task, start):
         task["result"] = "演练完成"
         persist(task)
         fast_buy_uia2.close_password_panel()
-        alert("演练完成：已到密码页，未输入密码、未提交")
+        alert("演练完成：已输完密码，未点确定、未提交")
         return
     task["result"] = result or "结果未知"
     persist(task)
@@ -994,19 +994,47 @@ def redemption_fire(task, start):
         alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。")
 
 
+QUERY_OUTCOMES = {'E': '售罄', 'ready': '有额度', 'rejected': '被拒绝', 'failed': '失败或超时'}
+TIMING_STEPS = (('verified', '表单复核'), ('fee_ready', '等手续费查询'), ('confirm', '风险确认'), ('password', '密码页'),
+                ('typed', '输完密码（演练，未点确定）'), ('submit', '提交'), ('result', '结果页'))
+
+
+def log_timings(ready, marks):
+    """One line of ms offsets from the moment quota was seen; no secrets."""
+    parts = [f"{name} +{(marks[key] - ready) * 1000:.0f}"
+             for key, name in TIMING_STEPS if key in marks]
+    if parts:
+        log("耗时（毫秒，从有额度起）：" + "，".join(parts))
+
+
 def gated_fire(task):
     """Open once before release; persist the firing marker only after checks."""
     import fast_buy_uia2
 
-    def heartbeat(attempts):
+    logged = [0]
+
+    def heartbeat(attempts, results=None):
         previous = task.get('probes', 0)
         task['last_tick'] = datetime.now().isoformat()
         task['probes'] = attempts
         persist(task)
-        if previous != attempts:
+        if results:
+            # One line per finished query, with the page-measured round trip.
+            for attempt, ms, outcome in results[logged[0]:]:
+                log(f"queryBuy 第 {attempt} 次：{QUERY_OUTCOMES.get(outcome, outcome)}，往返 {ms} ms")
+            logged[0] = len(results)
+        elif previous != attempts:
             log(f"queryBuy 累计查询 {attempts} 次")
 
+    payment = {}
+
     def prepared():
+        # Everything the purchase needs that does not depend on quota happens
+        # now, while queryBuy is still held: a keychain or uia2 failure stops
+        # the watch here instead of costing a second once quota shows up.
+        # The drill types the password too (stopping before 确定).
+        payment['password'] = fast_buy_uia2.load_payment_password()
+        fast_buy_uia2.warm()
         task['phase'] = 'waiting'
         persist(task)
         # SMTP can block for 20 seconds; never let it expire the page lease.
@@ -1020,26 +1048,39 @@ def gated_fire(task):
         persist(task)
         log('本次购买表单已校验，进入单次购买流程')
 
+    marks = {}
     try:
         root, quota = query_gate.run(task, heartbeat, prepared)
-        result = fast_buy_uia2.run(task['code'], task['amount'],
-                                  dry_run=task.get('dry_run', False),
-                                  prepared_form=root, product_quota=quota,
-                                  verify_form=lambda: query_gate.verify_prepared(task),
-                                  before_submit=None if task.get('dry_run') else before_submit)
+        ready = time.monotonic()
+        log(f"queryBuy 有额度，表单已就绪（{datetime.now():%H:%M:%S.%f}"[:-3] + "）")
+        found = {}
+        try:
+            # The verify step reuses the tree watch() just read and hands the
+            # verified page to risk_confirm, so neither rescans the WebViews.
+            result = fast_buy_uia2.run(task['code'], task['amount'],
+                                      dry_run=task.get('dry_run', False),
+                                      prepared_form=root, product_quota=quota,
+                                      verify_form=lambda: query_gate.verify_prepared(task, root=root, found=found),
+                                      risk_page=lambda: found.get('page'),
+                                      before_submit=None if task.get('dry_run') else before_submit,
+                                      password=payment.pop('password', None), warm_up=False,
+                                      mark=marks.setdefault)
+        finally:
+            log_timings(ready, marks)
         task['phase'] = 'done'
         task['result'] = '演练完成' if task.get('dry_run') else (result or '结果未知')
         persist(task)
         if task.get('dry_run'):
             fast_buy_uia2.close_password_panel()
         alert(task['result'], '以银行交易记录为准；不要重复提交。' if task.get('fired_at')
-              else '未输入密码、未提交。')
+              else '未点确定、未提交。')
     except Exception as exc:
         task['phase'] = 'done'
         task['result'] = (f'结果未知：{exc}' if task.get('fired_at') else f'未提交：{exc}')
         persist(task)
         alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'])
     finally:
+        payment.clear()
         query_gate.finish(task)
 
 
@@ -1160,7 +1201,7 @@ def main():
                                   "YYYY-MM-DDTHH:MM:SS（本机时间）")
     when.add_argument("--now", action="store_true",
                       help=f"排练：立即冷启动登录，{NOW_LEAD.seconds // 60} 分钟后开售/开始窗口")
-    p.add_argument("--dry-run", action="store_true", help="演练：只到密码页，不输密码、不提交")
+    p.add_argument("--dry-run", action="store_true", help="演练：输完密码，不点确定、不提交")
     p.add_argument("--settings-revision", help=argparse.SUPPRESS)
     p.add_argument("--prep-minutes", type=int,
                    help="开始前几分钟冷启动登录（0–60，默认使用设置，初始 7 分钟）。"

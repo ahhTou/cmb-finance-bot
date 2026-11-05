@@ -33,7 +33,7 @@ test('drill arm goes through confirm and switches to the live view', async ({ pa
   await dialog.getByRole('switch').first().click() // 演练
   await dialog.getByRole('switch').nth(1).click() // 立即排练
   await dialog.getByRole('button', { name: '下一步' }).click()
-  await expect(dialog.getByText(/约三分钟后 演练到密码页 0\.01 元/)).toBeVisible()
+  await expect(dialog.getByText(/约三分钟后 演练到输完密码 0\.01 元/)).toBeVisible()
   await dialog.getByRole('button', { name: '开始演练' }).click()
   await expect(page.getByTestId('live')).toBeVisible()
   await expect(page.getByTestId('countdown')).toHaveAttribute('aria-label', /^0[23]:\d\d$/)
@@ -121,7 +121,7 @@ test('drill buy shows command output', async ({ page }) => {
   await open(page, '/drill')
   await page.getByPlaceholder('如 JX040229').first().fill('JX040229')
   await page.getByRole('button', { name: '单笔购买演练' }).click()
-  await expect(page.getByRole('dialog', { name: '命令输出' })).toContainText('到密码页，演练结束')
+  await expect(page.getByRole('dialog', { name: '命令输出' })).toContainText('输完密码，未点确定，演练结束')
 })
 
 test('pages fit the minimum window without horizontal overflow', async ({ page }) => {

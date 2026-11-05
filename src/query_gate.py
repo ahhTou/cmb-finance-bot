@@ -23,6 +23,11 @@ LEASE_MS = 15000
 # already passed (emergency arming). Without it the loop below never runs.
 MIN_INSTALL_SECONDS = 10
 STAGING_URL = 'https://mobile.cmbchina.com/IEntrustFinance/subsidiaryfinancing/sfoveramount.html'
+# The page calls this CDP binding when queryBuy returns quota, so the watcher
+# wakes at once instead of on its next poll.
+READY_BINDING = '__cmbGateReady'
+POLL_WAITING = .08   # after start, nothing signalled yet
+POLL_READY = .02     # quota returned, waiting for the page to render the form
 
 
 def schedule(when, mode, settings):
@@ -56,20 +61,42 @@ class Client:
     def __init__(self, ws):
         self.ws = ws
         self.sequence = 0
+        self.bindings = set()   # names of Runtime.bindingCalled seen but not yet consumed
+
+    async def _receive(self, timeout):
+        message = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=timeout))
+        if message.get('method') == 'Fetch.requestPaused':
+            # During bootstrap this guard catches changed bank code that
+            # bypasses our wrapper. Fail the request before it is sent.
+            self.sequence += 1
+            await self.ws.send(json.dumps(dict(id=self.sequence, method='Fetch.failRequest',
+                params={'requestId': message['params']['requestId'], 'errorReason': 'Aborted'})))
+            raise fast_buy.Stop('购买页拦截未就绪，已阻止提前 queryBuy，未提交。')
+        if message.get('method') == 'Runtime.bindingCalled':
+            self.bindings.add(message['params'].get('name'))
+        return message
+
+    async def wait_binding(self, name, timeout):
+        """True as soon as the page calls binding `name`; False after `timeout` s."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        while name not in self.bindings:
+            left = end - loop.time()
+            if left <= 0:
+                return False
+            try:
+                await self._receive(left)
+            except asyncio.TimeoutError:
+                return False
+        self.bindings.discard(name)
+        return True
 
     async def call(self, method, params=None):
         self.sequence += 1
         call_id = self.sequence
         await self.ws.send(json.dumps(dict(id=call_id, method=method, params=params or {})))
         while True:
-            message = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=3))
-            if message.get('method') == 'Fetch.requestPaused':
-                # During bootstrap this guard catches changed bank code that
-                # bypasses our wrapper. Fail the request before it is sent.
-                self.sequence += 1
-                await self.ws.send(json.dumps(dict(id=self.sequence, method='Fetch.failRequest',
-                    params={'requestId': message['params']['requestId'], 'errorReason': 'Aborted'})))
-                raise fast_buy.Stop('购买页拦截未就绪，已阻止提前 queryBuy，未提交。')
+            message = await self._receive(3)
             if message.get('id') == call_id:
                 if message.get('error'):
                     raise fast_buy.Stop('CDP 操作失败，停止购买页等待。')
@@ -113,7 +140,7 @@ READ_STATE = r"""(()=>{
    (v.$children||[]).forEach(c=>walk(c,d+1));})(el&&el.__vue__,0);
  const text=document.body?document.body.innerText:'';
  return {token:s.token,code:s.code,installed:s.installed,heldCalls:s.heldCalls,
-   attempts:s.attempts,status:s.status,reason:s.reason,quota:s.quota,
+   attempts:s.attempts,status:s.status,reason:s.reason,quota:s.quota,results:s.results,
    origin:performance.timeOrigin,url:location.href,hidden:document.hidden,
    form:!!view&&view.viewType==='A'&&text.includes('可用余额')&&text.includes('同意协议下一步')};
 })()"""
@@ -145,6 +172,8 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                       requestTimeoutMs=REQUEST_TIMEOUT_MS, leaseMs=LEASE_MS)
         script = SCRIPT.read_text().replace('__CONFIG__', json.dumps(config))
         await client.call('Page.enable')
+        # No Runtime.enable needed: bindingCalled is delivered without it.
+        await client.call('Runtime.addBinding', {'name': READY_BINDING})
         await client.call('Fetch.enable', {'patterns': [
             {'urlPattern': '*querybuy*', 'requestStage': 'Request'},
             {'urlPattern': '*queryBuy*', 'requestStage': 'Request'}]})
@@ -191,7 +220,7 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                 state = await client.evaluate(READ_STATE)
                 if not alive or not state or state['token'] != token or state['origin'] != origin:
                     raise fast_buy.Stop('购买页状态丢失或已换页，未提交。')
-                heartbeat(state['attempts'])
+                heartbeat(state['attempts'], state.get('results'))
                 if state['status'] == 'stopped':
                     reasons = {'attempts_exhausted':'首发查询次数已用完', 'window_expired':'查询窗口已结束',
                                'query_rejected':'银行查询拒绝，停止自动重试', 'query_failed':'查询失败或超时',
@@ -210,14 +239,19 @@ async def watch(task, heartbeat, prepared=None, *, stop_after_held=False):
                     if '可用余额' in text and '同意协议下一步' in text:
                         succeeded = True
                         return root, state['quota']
-                delay = .5 if datetime.now() < start - timedelta(seconds=1) else .08
-                await asyncio.sleep(delay)
+                if datetime.now() < start - timedelta(seconds=1):
+                    await asyncio.sleep(.5)
+                elif state['status'] == 'ready':
+                    await asyncio.sleep(POLL_READY)
+                else:
+                    await client.wait_binding(READY_BINDING, POLL_WAITING)
             raise fast_buy.Stop('查询窗口已结束，未提交。')
         finally:
             try:
                 if not succeeded:
                     await client.evaluate(f'window.__cmbQueryGate?.cancel({json.dumps(token)})')
                 await client.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': preload['identifier']})
+                await client.call('Runtime.removeBinding', {'name': READY_BINDING})
             except Exception:
                 pass  # lease expiry still prevents background polling
 
@@ -226,8 +260,13 @@ def run(task, heartbeat, prepared=None):
     return asyncio.run(watch(task, heartbeat, prepared))
 
 
-def verify_prepared(task):
-    """Recheck the same front document immediately before the submit boundary."""
+def verify_prepared(task, root=None, found=None):
+    """Recheck the same front document immediately before the submit boundary.
+
+    `root` is the native tree watch() just read for the same form; passing it
+    skips a second read of an unchanged screen. The CDP state is always read
+    fresh. `found` (a dict) receives the verified page for risk_confirm.
+    """
     import fast_buy_uia2 as fu
     matches = [p for p in pages() if p['id'] == task.get('query_gate_target')]
     if len(matches) != 1:
@@ -253,10 +292,13 @@ def verify_prepared(task):
         raise fast_buy.Stop('原购买页校验已失效，停止购买。')
     if task['mode'] == 'redemption' and datetime.now() >= datetime.fromisoformat(task['end_at']):
         raise fast_buy.Stop('查询窗口已结束，停止购买。')
-    root = fu.dump()
+    if root is None:
+        root = fu.dump()
     text = ' '.join(fast_buy.label(n) for n in root.iter('node'))
     if '可用余额' not in text or '同意协议下一步' not in text:
         raise fast_buy.Stop('原购买表单已变化，停止购买。')
+    if found is not None:
+        found['page'] = matches[0]
     return root
 
 

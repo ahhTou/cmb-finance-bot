@@ -23,7 +23,7 @@ def panel(enabled=False,keyboard=True,covered=False,done=True):
 
 
 class PasswordPanelTest(unittest.TestCase):
-    def run_input(self,screens,stable=None,settle=False):
+    def run_input(self,screens,stable=None,settle=False,submit=True):
         stable=stable if stable is not None else panel()
         keys=fu.raw_digit_buttons(stable)
         calls=[]
@@ -34,7 +34,7 @@ class PasswordPanelTest(unittest.TestCase):
              patch.object(fu,'send_commands',side_effect=lambda c:calls.append(c)), \
              patch.object(fu.time,'sleep',side_effect=clock.sleep),patch.object(fu,'close_password_panel') as close:
             error=None
-            try:fu.enter_password('111111')
+            try:fu.enter_password('111111',submit=submit)
             except fb.Stop as exc:error=exc
         return calls,wait,close,error
 
@@ -44,6 +44,17 @@ class PasswordPanelTest(unittest.TestCase):
         self.assertEqual(calls[-1],['input tap 160 220'])
         self.assertEqual(len(calls),2)  # six digits and delay, then exactly one submit
         self.assertNotIn('input tap 260 375',[c for batch in calls for c in batch])
+
+    def test_drill_types_but_never_taps_confirm(self):
+        calls,_,close,error=self.run_input([panel(enabled=True)],submit=False)
+        self.assertIsNone(error);close.assert_not_called()
+        self.assertEqual(len(calls),1)  # the six digits only
+        self.assertNotIn('input tap 160 220',[c for batch in calls for c in batch])
+
+    def test_drill_uses_done_fallback_but_still_never_taps_confirm(self):
+        calls,_,_,error=self.run_input([panel(),panel(enabled=True,keyboard=False)],submit=False)
+        self.assertIsNone(error);self.assertEqual(calls[-1],['input tap 260 375'])
+        self.assertNotIn('input tap 160 220',[c for batch in calls for c in batch])
 
     def test_done_not_required_to_exist(self):
         calls,_,_,error=self.run_input([panel(enabled=True,done=False)],panel(done=False))

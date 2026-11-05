@@ -144,7 +144,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
   const when = now
     ? '约三分钟后'
     : date.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const verb = dry ? '演练到密码页' : '提交一次'
+  const verb = dry ? '演练到输完密码' : '提交一次'
   const summary =
     mode === 'redemption'
       ? `产品 ${code.trim()}，${when} 起 ${window} 分钟窗口内在同一购买页查询，有额度就${verb} ${amount} 元。`
@@ -339,13 +339,13 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
                 <Switch label="实际付款：输入交易密码并提交" checked={!dry} onChange={(v) => setDry(!v)} />
                 <Hint tone={dry ? 'muted' : 'warn'} className="text-xs">
                   {dry
-                    ? '默认只到密码页，不输入密码、不提交。'
+                    ? '默认输完交易密码后停在「确定」前，不点确定、不提交。'
                     : '将按填写金额实际购买一笔，下一步需再次输入金额确认。'}
                 </Hint>
               </>
             ) : (
               <Switch
-                label="演练：只到密码页，不输入密码、不提交"
+                label="演练：输完密码，不点确定、不提交"
                 checked={dry}
                 onChange={(v) => {
                   setDry(v)

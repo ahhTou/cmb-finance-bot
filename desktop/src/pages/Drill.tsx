@@ -69,7 +69,9 @@ export function DrillPage() {
     <div className="grid auto-rows-min grid-cols-2 gap-3.5 overflow-y-auto px-[26px] pb-2">
       <Card title="演练布防" subtitle="走完整冷启动、登录、购买流程">
         <div className="flex flex-col gap-3">
-          <Hint>默认到密码页停止，也可选择实际付款并确认金额；支持立即开始或指定开售时间。</Hint>
+          <Hint>
+            默认输完交易密码后停在「确定」前，也可选择实际付款并确认金额；支持立即开始或指定开售时间。
+          </Hint>
           <Button
             variant="primary"
             className="self-start"
@@ -98,7 +100,7 @@ export function DrillPage() {
           <Hint tone={realBuy ? 'warn' : 'muted'}>
             {realBuy
               ? '立即购买一笔，不创建值守任务；下一步需确认金额。'
-              : '只到密码页停止，不输入密码、不提交。'}
+              : '输完交易密码后停在「确定」前，不点确定、不提交。'}
           </Hint>
           <div className="flex gap-2">
             <Button

@@ -15,6 +15,9 @@ import fast_buy
 from query_gate import Client, pages
 
 SCRIPT = Path(__file__).with_suffix('.js')
+# The bank page will not go past 下一步 while its fee estimate is loading;
+# wait this long for it before giving up (nothing has been sent yet).
+FEE_WAIT_MS = 3000
 
 
 def candidate(page, code, amount):
@@ -39,22 +42,34 @@ VISIBLE_FORM = """(()=>{
 })()"""
 
 
-async def confirm(code, amount, timeout=10):
+async def confirm(code, amount, timeout=10, page=None):
+    """`page` is the target query_gate.verify_prepared() just verified; with it
+    the form is rechecked on the same connection the script runs on, instead
+    of scanning and connecting to every WebView."""
     import websockets
-    matches = []
-    for page in pages():
+    if page is not None:
         if not candidate(page, code, amount):
-            continue
-        async with websockets.connect(page['webSocketDebuggerUrl'], open_timeout=1) as ws:
-            if await Client(ws).evaluate(VISIBLE_FORM):
-                matches.append(page)
-    if len(matches) != 1:
-        raise fast_buy.Stop('无法唯一确认前台目标购买表单，未启动风险确认。')
+            raise fast_buy.Stop('无法唯一确认前台目标购买表单，未启动风险确认。')
+        target = page
+    else:
+        matches = []
+        for item in pages():
+            if not candidate(item, code, amount):
+                continue
+            async with websockets.connect(item['webSocketDebuggerUrl'], open_timeout=1) as ws:
+                if await Client(ws).evaluate(VISIBLE_FORM):
+                    matches.append(item)
+        if len(matches) != 1:
+            raise fast_buy.Stop('无法唯一确认前台目标购买表单，未启动风险确认。')
+        target = matches[0]
     token = uuid.uuid4().hex
-    config = dict(code=code, amount=amount, token=token, timeoutMs=int(timeout*1000))
+    config = dict(code=code, amount=amount, token=token, timeoutMs=int(timeout*1000),
+                  feeWaitMs=FEE_WAIT_MS)
     source = SCRIPT.read_text().replace('__CONFIG__', json.dumps(config))
-    async with websockets.connect(matches[0]['webSocketDebuggerUrl'], open_timeout=1) as ws:
+    async with websockets.connect(target['webSocketDebuggerUrl'], open_timeout=1) as ws:
         client = Client(ws)
+        if page is not None and not await client.evaluate(VISIBLE_FORM):
+            raise fast_buy.Stop('无法唯一确认前台目标购买表单，未启动风险确认。')
         began = time.monotonic()
         try:
             started = await client.evaluate(source)
@@ -77,7 +92,8 @@ async def confirm(code, amount, timeout=10):
                                 'additional_protocol_confirmation':'页面需要额外协议确认',
                                 'additional_funding_confirmation':'页面需要额外资金确认',
                                 'risk_text_mismatch':'原组件风险文本校验未通过',
-                                'document_hidden':'购买页已切到后台'}
+                                'document_hidden':'购买页已切到后台',
+                                'timeout_buy_fee':'手续费查询 3 秒内没有返回'}
                     raise fast_buy.Stop(messages.get(state.get('reason'), '风险组件确认未完成') + '，已停止，不重试。')
                 await asyncio.sleep(.04)
             raise fast_buy.Stop('JS 风险确认超时，已停止，不重试。')
@@ -88,9 +104,10 @@ async def confirm(code, amount, timeout=10):
                 pass
 
 
-def run(code, amount, timeout=10, mark=None):
-    state, began = asyncio.run(confirm(code, amount, timeout))
-    names = {'next_handler':'next', 'risk_ready':'risk', 'quick_input':'fill', 'risk_confirm':'confirm'}
+def run(code, amount, timeout=10, mark=None, page=None):
+    state, began = asyncio.run(confirm(code, amount, timeout, page=page))
+    names = {'fee_wait':'fee_wait', 'fee_ready':'fee_ready', 'next_handler':'next',
+             'risk_ready':'risk', 'quick_input':'fill', 'risk_confirm':'confirm'}
     for event in state['events']:
         if mark is not None and event['name'] in names:
             mark(names[event['name']], began+event['ms']/1000)

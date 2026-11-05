@@ -155,6 +155,46 @@ class RedemptionTest(unittest.TestCase):
         self.assertEqual(nw.load_task()['result'], '提交成功')
         self.assertEqual(nw.load_task()['probes'], 6)
 
+    def test_gated_flow_preloads_before_quota_and_logs_timings(self):
+        task = self.task(purchase_flow=nw.query_gate.FLOW)
+        events = []
+        fake = self.fake(None)
+        fake.load_payment_password = lambda: events.append('keychain') or '111111'
+        fake.warm = lambda: events.append('warm')
+        def waiting(task, heartbeat, prepared):
+            prepared()
+            events.append('quota')
+            return object(), None
+        def purchase(*args, **kwargs):
+            self.assertEqual(kwargs['password'], '111111')
+            self.assertFalse(kwargs['warm_up'])
+            kwargs['before_submit']()
+            kwargs['mark']('submit', nw.time.monotonic())
+            return '提交成功'
+        fake.run = purchase
+        with patch.object(nw.query_gate, 'run', side_effect=waiting), \
+             patch.object(nw.query_gate, 'finish'), patch.object(nw, 'log') as log, \
+             patch.dict(sys.modules, {'fast_buy_uia2': fake}):
+            nw.gated_fire(task)
+        self.assertEqual(events, ['keychain', 'warm', 'quota'])
+        lines = [c.args[0] for c in log.call_args_list]
+        self.assertTrue(any(l.startswith('耗时（毫秒，从有额度起）：提交 +') for l in lines), lines)
+        self.assertFalse(any('111111' in l for l in lines))
+
+    def test_gated_heartbeat_logs_each_query_round_trip_once(self):
+        task = self.task(purchase_flow=nw.query_gate.FLOW)
+        def waiting(task, heartbeat, prepared):
+            heartbeat(1, [[1, 180, 'E']])
+            heartbeat(2, [[1, 180, 'E'], [2, 95, 'ready']])
+            heartbeat(2, [[1, 180, 'E'], [2, 95, 'ready']])
+            raise RuntimeError('stop here')
+        with patch.object(nw.query_gate, 'run', side_effect=waiting), \
+             patch.object(nw.query_gate, 'finish'), patch.object(nw, 'log') as log, \
+             patch.dict(sys.modules, {'fast_buy_uia2': self.fake(MagicMock())}):
+            nw.gated_fire(task)
+        lines = [c.args[0] for c in log.call_args_list if c.args[0].startswith('queryBuy')]
+        self.assertEqual(lines, ['queryBuy 第 1 次：售罄，往返 180 ms', 'queryBuy 第 2 次：有额度，往返 95 ms'])
+
     def test_gated_query_failure_never_enters_purchase(self):
         task = self.task(purchase_flow=nw.query_gate.FLOW)
         purchase = MagicMock()
@@ -169,7 +209,8 @@ class RedemptionTest(unittest.TestCase):
     # ---- firing
 
     def fake(self, behaviour):
-        return types.SimpleNamespace(run=behaviour, close_password_panel=lambda: None)
+        return types.SimpleNamespace(run=behaviour, close_password_panel=lambda: None,
+                                     load_payment_password=lambda: '111111', warm=lambda: None)
 
     def fire(self, behaviour):
         task = self.task(at=iso(self.now),

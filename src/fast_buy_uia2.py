@@ -360,11 +360,15 @@ def wait_password_confirm(root, timeout=0.6):
     return root
 
 
-def enter_password(password, confirm_wait=0.15):
+def enter_password(password, confirm_wait=0.15, submit=True):
     """Type once on a stable keypad; prefer 确定 without closing the keypad.
 
     完成 is only a fallback when 确定 is disabled or covered by the keypad.
     Incomplete input may be cleared and retyped once; submission is never retried.
+    With submit=False (drill) everything runs the same up to the moment 确定 is
+    enabled and uncovered, then returns without tapping it; the caller closes
+    the panel. Six digits alone never submit: the order is only sent from the
+    panel's 确定 (onConfirm → doBuy).
     """
     root, keys = wait_keypad_stable()
     field = find_node(root, "点击谈出密码键盘")
@@ -384,6 +388,10 @@ def enter_password(password, confirm_wait=0.15):
                 time.sleep(0.15)
                 root = wait_password_confirm(dump())
         if confirm_unobscured(root):
+            if not submit:
+                print("演练：密码已输入，确定可点" + ("（已用完成兜底）" if used_done else "")
+                      + "；未点确定。", flush=True)
+                return
             print("密码确认：已使用完成兜底" if used_done else "密码确认：直接点确定，未点完成", flush=True)
             x, y = center_of(find_node(root, "确定", exact=True))
             send_commands([f"input tap {x} {y}"])
@@ -490,9 +498,26 @@ def open_form(code, amount, deadline=REOPEN_DEADLINE, wait=REOPEN_AFTER, gap=REO
     raise fast_buy.Stop(f"打开 {opens} 次，购买表单都没有出现；{last_reason}。")
 
 
+def load_payment_password():
+    """Read the payment password in-process; never print or return it elsewhere."""
+    password = keychain_store.load().get("payment_password")
+    if not isinstance(password, str) or not re.fullmatch(r"[0-9]{6}", password):
+        raise fast_buy.Stop("钥匙串中没有有效的交易密码。")
+    return password
+
+
+def warm():
+    """Connect and warm the persistent UiAutomator2 server."""
+    t = time.monotonic()
+    device()
+    dump()
+    print(f"uia2 已连接并预热 {time.monotonic() - t:.2f}s", flush=True)
+
+
 def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, direct=True,
         form_deadline=None, form_wait=None, form_gap=None, before_submit=None, tick=None,
-        prepared_form=None, product_quota=None, verify_form=None):
+        prepared_form=None, product_quota=None, verify_form=None,
+        password=None, warm_up=True, risk_page=None):
     """One purchase. `mark(name, monotonic_time)` is an optional read-only
     timing hook; it never changes the flow.
 
@@ -500,26 +525,24 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     purchase page is retried until quota shows up. `before_submit()` runs after
     the form is verified and before anything that can create an order, so the
     caller can persist its "submitting" marker at the last safe moment.
+
+    The gated watch passes `password` and `warm_up=False` after doing both
+    while the page waits, so neither costs time once quota shows up.
     """
     def note(name, when):
         if mark is not None:
             mark(name, when)
 
-    password = None
-    if not dry_run:
-        credentials = keychain_store.load()
-        password = credentials.get("payment_password")
-        if not isinstance(password, str) or not re.fullmatch(r"[0-9]{6}", password):
-            raise fast_buy.Stop("钥匙串中没有有效的交易密码。")
+    # The drill also types the password (it stops before 确定), so both paths
+    # need it; it stays in this process only.
+    if password is None:
+        password = load_payment_password()
 
-    # Connect and warm the persistent server before the timed core.
-    t = time.monotonic()
     # No button check: before the sale time the detail page may show no buy
     # button at all. js_prefill_and_buy() only accepts the page whose XRIPINN
     # matches `code`, which is the product check.
-    device()
-    dump()
-    print(f"uia2 已连接并预热 {time.monotonic() - t:.2f}s", flush=True)
+    if warm_up:
+        warm()
 
     if at is not None:
         fast_buy.wait_until(at)
@@ -574,7 +597,8 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
     if before_submit is not None:
         before_submit()
     try:
-        risk_confirm.run(code, amount, timeout=STEP_WAIT, mark=note)
+        risk_confirm.run(code, amount, timeout=STEP_WAIT, mark=note,
+                         page=risk_page() if risk_page is not None else None)
     except Exception:
         close_password_panel()
         raise
@@ -589,8 +613,15 @@ def run(code, amount, at=None, dry_run=False, confirm_wait=0.15, mark=None, dire
         raise fast_buy.Stop(f"密码页金额不是 ￥{amount}（页面显示 {sorted(shown)}），已停止。")
 
     if dry_run:
-        print(f"dry run：到密码页约 {time.monotonic() - began:.2f} 秒；"
-              "未输入密码、未提交。", flush=True)
+        # Same input as a real purchase, stopping before 确定; then close the
+        # panel, which discards the typed digits.
+        try:
+            enter_password(password, confirm_wait=confirm_wait, submit=False)
+            typed = time.monotonic()
+            note("typed", typed)
+        finally:
+            close_password_panel()
+        print(f"演练：输完密码约 {typed - began:.2f} 秒；未点确定、未提交，已关闭密码框。", flush=True)
         return
 
     # Six paced digits (longer gap only between repeated digits), then a short

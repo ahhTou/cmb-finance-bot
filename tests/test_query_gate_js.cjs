@@ -125,3 +125,18 @@ test('redemption backoff: burst tier, linear ramp, slow tier, then idle tier',as
  assert.ok(ramp>0&&slow>0&&idle>0);
  assert.ok(h.calls.length<120,`total ${h.calls.length}`);
 });
+test('every finished query records its round trip and outcome; quota wakes the watcher once',async()=>{
+ const woken=[];
+ const h=setup({},[()=>new Promise(r=>h.context.setTimeout(()=>r(sold),40)),good]);
+ h.context.__cmbGateReady=token=>woken.push(token);
+ await h.to(1100);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.state().results)),[[1,40,'E'],[2,0,'ready']]);
+ assert.deepEqual(woken,['test']);
+});
+test('a rejected query is recorded and never wakes the watcher',async()=>{
+ const woken=[];
+ const h=setup({},[{code:500,data:{hasAccount:true}}]);
+ h.context.__cmbGateReady=token=>woken.push(token);
+ await h.to(1000);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.state().results)),[[1,0,'rejected']]);assert.deepEqual(woken,[]);
+});

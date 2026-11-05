@@ -7,6 +7,7 @@
 1. 读 `README.md`（模式、能力、架构）。
 2. 读 `AGENT_WORKFLOW.md` §0、§1（谁来执行、当前状态），再按任务跳到对应章节。
 3. 读 `docs/memory/README.md` 的索引，打开相关的记忆。
+4. 涉及购买、值守、提速或排查交易结果时，读 `docs/purchase-chain.md`（购买链路 P1–P12、耗时、可优化点）。
 
 ## 记忆
 

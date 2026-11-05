@@ -142,7 +142,7 @@ export const handlers = [
       output: [
         `打开 ${body.code} 购买页`,
         `填写金额 ${body.amount}`,
-        body.real ? '已提交一次' : '到密码页，演练结束',
+        body.real ? '已提交一次' : '输完密码，未点确定，演练结束',
       ],
       ok: true,
     })

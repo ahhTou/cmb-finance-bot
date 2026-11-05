@@ -9,7 +9,10 @@
  if(!view||!popup||view.fndInn!==config.code||Number(String(view.amount).replace(/,/g,''))!==Number(config.amount))
   return {started:false,reason:'product_or_amount_mismatch'};
  if(view.isZzyAccount||view.isNewProtocolCard)return {started:false,reason:'additional_confirmation_required'};
- if(view.viewType!=='A'||view.buyButtonDisabled||view.buyFeeLoading||view.copyInputShow)
+ // buyFeeLoading is not checked here: the bank's own preAmountExam refuses
+ // (toast "预估购买费用查询中") while the fee estimate is loading, so the flow
+ // below waits for it to finish instead of giving up on a form that has quota.
+ if(view.viewType!=='A'||view.buyButtonDisabled||view.copyInputShow)
   return {started:false,reason:'form_not_ready'};
  const state=window.__cmbRiskConfirm={token:config.token,status:'starting',events:[],passwordCalls:0};
  const began=performance.now(),saved=[];
@@ -64,7 +67,12 @@
  }
  (async()=>{
   try{
-   note('next_handler');view.preAmountExam();
+   if(view.buyFeeLoading){
+    note('fee_wait');
+    await wait(()=>!view.buyFeeLoading,'buy_fee',Math.min(config.feeWaitMs||3000,config.timeoutMs));
+    note('fee_ready');
+   }
+   check();note('next_handler');view.preAmountExam();
    await wait(()=>view.copyInputShow&&state.precheck&&state.riskData&&state.riskRendered
      &&(!state.suitabilityStarted||state.suitabilityDone),'risk_ready');
    await view.$nextTick();

@@ -10,10 +10,11 @@ DEFAULTS = {
     'irregular_advance_ms': 200, 'irregular_window_minutes': 2,
     # Redemption backoff, measured from the planned first query: a burst tier,
     # a linear ramp, a slow tier, then an idle tier until the window ends.
-    'irregular_retry_min_ms': 250, 'irregular_retry_max_ms': 400,
-    'irregular_burst_seconds': 15, 'irregular_ramp_seconds': 20,
+    # 11-05: quota reappeared ~18 s after 09:00, just past the old 15 s burst.
+    'irregular_retry_min_ms': 300, 'irregular_retry_max_ms': 500,
+    'irregular_burst_seconds': 60, 'irregular_ramp_seconds': 65,
     'irregular_slow_min_ms': 1000, 'irregular_slow_max_ms': 2000,
-    'irregular_idle_after_seconds': 60,
+    'irregular_idle_after_seconds': 90,
     'irregular_idle_min_ms': 2500, 'irregular_idle_max_ms': 4000,
 }
 LIMITS = {

@@ -10,6 +10,7 @@ async function run(options={}){
   async getSellFeeInfo(){calls.push('risk_data');return success;},
   async querysuitableextern(){calls.push('suitability');return success;}};
  const view={fndInn:'TEST01',amount:'0.01',viewType:'A',isZzyAccount:!!options.funding,
+  get buyFeeLoading(){return options.feeLoading!==undefined&&time<options.feeLoading;},
   isNewProtocolCard:!!options.protocol,copyInputShow:false,$apis:api,
   $options:{name:'App'},$children:[],ordInfo:{},
   async $nextTick(){},
@@ -31,7 +32,7 @@ async function run(options={}){
  context.window=context;vm.createContext(context);
  const config={code:options.wrong?'OTHER':'TEST01',amount:'0.01',token:'test',timeoutMs:1000};
  const started=vm.runInContext(source.replace('__CONFIG__',JSON.stringify(config)),context);
- for(let i=0;i<100;i++){
+ for(let i=0;i<300;i++){
   await new Promise(r=>setTimeout(r,1));
   const s=context.__cmbRiskConfirm;
   if(!started.started||s?.status==='password_requested'||s?.status==='stopped')break;
@@ -58,4 +59,18 @@ test('unsupported protocol or funding path stops before next',async()=>{
 });
 test('wrong product stops without starting any bank precheck',async()=>{
  const h=await run({wrong:true});assert.equal(h.started.started,false);assert.equal(h.calls.length,0);
+});
+test('waits for the bank fee estimate before next, then runs the normal flow',async()=>{
+ const h=await run({feeLoading:100});const s=h.context.__cmbRiskConfirm;
+ assert.equal(s.status,'password_requested');
+ const names=s.events.map(e=>e.name);
+ assert.ok(names.indexOf('fee_wait')<names.indexOf('fee_ready'));
+ assert.ok(names.indexOf('fee_ready')<names.indexOf('next_handler'));
+ const ready=s.events.find(e=>e.name==='fee_ready');assert.ok(ready.ms>=100);
+ assert.equal(h.calls[0],'next');
+});
+test('a fee estimate that never returns stops before next, without any bank precheck',async()=>{
+ const h=await run({feeLoading:Infinity});const s=h.context.__cmbRiskConfirm;
+ assert.equal(s.status,'stopped');assert.equal(s.reason,'timeout_buy_fee');
+ assert.deepEqual(h.calls,[]);
 });

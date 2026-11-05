@@ -37,17 +37,17 @@ class GateTest(unittest.TestCase):
                       {'irregular_advance_ms': -1}, {'unknown': 1},
                       {'irregular_slow_min_ms': 2001},
                       {'irregular_idle_min_ms': 5000, 'irregular_idle_max_ms': 4000},
-                      {'irregular_burst_seconds': 21},
-                      {'irregular_ramp_seconds': 61}):
+                      {'irregular_burst_seconds': 66},
+                      {'irregular_ramp_seconds': 91}):
             with self.subTest(value=value), self.assertRaises(RuntimeError):
                 settings.validate(value)
 
     def test_backoff_defaults_and_config(self):
         values = settings.validate({})
-        self.assertEqual((values['irregular_retry_min_ms'], values['irregular_retry_max_ms']), (250, 400))
+        self.assertEqual((values['irregular_retry_min_ms'], values['irregular_retry_max_ms']), (300, 500))
         self.assertEqual(gate.backoff(values), dict(
-            burstMs=15000, rampMs=20000, idleMs=60000,
-            burst=[250, 400], slow=[1000, 2000], idle=[2500, 4000]))
+            burstMs=60000, rampMs=65000, idleMs=90000,
+            burst=[300, 500], slow=[1000, 2000], idle=[2500, 4000]))
 
     def test_prepared_form_uses_raw_quota_and_never_reopens_or_marks_over_quota(self):
         import fast_buy_uia2 as fu
@@ -64,6 +64,53 @@ class GateTest(unittest.TestCase):
         verify.assert_called_once()
         opener.assert_not_called()
         marker.assert_not_called()
+
+    def test_wait_binding_wakes_on_page_signal_and_times_out_otherwise(self):
+        ws = MagicMock()
+        ws.send = AsyncMock()
+        ws.recv = AsyncMock(side_effect=[
+            json.dumps({'method': 'Runtime.consoleAPICalled', 'params': {}}),
+            json.dumps({'method': 'Runtime.bindingCalled', 'params': {'name': gate.READY_BINDING}})])
+        client = gate.Client(ws)
+        self.assertTrue(asyncio.run(client.wait_binding(gate.READY_BINDING, 1)))
+        self.assertEqual(client.bindings, set())
+
+        async def silent():
+            await asyncio.sleep(10)
+        ws.recv = AsyncMock(side_effect=silent)
+        self.assertFalse(asyncio.run(gate.Client(ws).wait_binding(gate.READY_BINDING, .05)))
+
+    def test_binding_seen_during_a_call_is_kept_for_the_next_wait(self):
+        ws = MagicMock()
+        ws.send = AsyncMock()
+        ws.recv = AsyncMock(side_effect=[
+            json.dumps({'method': 'Runtime.bindingCalled', 'params': {'name': gate.READY_BINDING}}),
+            json.dumps({'id': 1, 'result': {}})])
+        client = gate.Client(ws)
+
+        async def flow():
+            await client.call('Runtime.evaluate')
+            return await client.wait_binding(gate.READY_BINDING, .01)
+        self.assertTrue(asyncio.run(flow()))
+
+    def test_verify_prepared_reuses_tree_and_reports_page(self):
+        import fast_buy_uia2 as fu
+        from tests.test_open_form import tree
+        task = {'code': 'TEST01', 'amount': '3000', 'mode': 'first_launch',
+                'query_gate_target': 'T', 'query_gate_token': 'tok', 'query_gate_origin': 1.0}
+        url = fast_buy.BUY_URL.format(code='TEST01', amount='3000')
+        page = {'id': 'T', 'url': url, 'webSocketDebuggerUrl': 'ws://x',
+                'description': json.dumps({'visible': True, 'screenY': 68})}
+        state = {'token': 'tok', 'origin': 1.0, 'form': True, 'hidden': False,
+                 'status': 'ready', 'url': url}
+        root = tree('可用余额', '同意协议下一步')
+        found = {}
+        with patch.object(gate, 'pages', return_value=[page]), \
+             patch('asyncio.run', side_effect=lambda coro: (coro.close(), state)[1]), \
+             patch.object(fu, 'dump') as dump:
+            self.assertIs(gate.verify_prepared(task, root=root, found=found), root)
+        dump.assert_not_called()
+        self.assertIs(found['page'], page)
 
     def test_paused_unexpected_request_is_failed_before_send(self):
         ws = MagicMock()

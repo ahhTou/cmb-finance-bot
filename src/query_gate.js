@@ -5,8 +5,13 @@
     const state = window.__cmbQueryGate = {
         token: config.token, code: config.code, attempts: 0, heldCalls: 0,
         installed: false, status: 'installing', origin: performance.timeOrigin,
-        reason: '', quota: null
+        reason: '', quota: null,
+        // [attempt, round-trip ms, outcome] for every finished queryBuy: E = sold out.
+        results: []
     };
+    function record(ms, outcome) {
+        state.results.push([state.attempts, Math.round(ms), outcome]);
+    }
     const clockStart = performance.now();
     const wallStart = Date.now();
     const now = () => wallStart + performance.now() - clockStart;
@@ -119,6 +124,7 @@
                     state.attempts++; state.status='querying'; render();
                     let timer;
                     let response;
+                    const sentAt = now();
                     try {
                         const remaining = config.mode === 'redemption'
                             ? Math.min(config.requestTimeoutMs, config.endAt - now())
@@ -128,10 +134,12 @@
                             new Promise((_,reject) => {timer=setTimeout(() => reject(Error('query_timeout')),remaining);})
                         ]);
                     } catch (_) {
+                        record(now() - sentAt, 'failed');
                         stop(config.mode === 'redemption' && now() >= config.endAt
                             ? 'window_expired' : 'query_failed');
                         throw Error('queryBuy failed or timed out');
                     } finally { clearTimeout(timer); }
+                    const roundTrip = now() - sentAt;
                     check();
                     if (config.mode === 'redemption' && now() >= config.endAt) {
                         stop('window_expired'); throw Error('late query response');
@@ -142,6 +150,7 @@
                     const noQuota = response && response.code === 200 && data
                         && data.queryCode !== 'A' && data.hasAccount === true && data.ppsTag === 'E';
                     if (noQuota) {
+                        record(roundTrip, 'E');
                         state.status='retrying'; render();
                         if (config.mode === 'redemption') {
                             const [min, max] = retryRange(now() - config.startAt);
@@ -152,6 +161,7 @@
                     }
                     if (!response || response.code !== 200 || !data || data.queryCode === 'A'
                             || data.hasAccount !== true) {
+                        record(roundTrip, 'rejected');
                         stop('query_rejected'); throw Error('queryBuy rejected; inspect bank page');
                     }
                     // Preserve the real response unchanged. The original page
@@ -159,7 +169,13 @@
                     const quota = data.posQty;
                     state.quota = quota === undefined || quota === null || quota === ''
                         ? null : String(quota);
+                    record(roundTrip, 'ready');
                     state.status='ready'; resolved=true; render();
+                    // Wake the watcher now (CDP Runtime.addBinding); it still
+                    // verifies everything itself, this only saves a poll.
+                    try {
+                        if (typeof window.__cmbGateReady === 'function') window.__cmbGateReady(config.token);
+                    } catch (_) {}
                     return response;
                 }
             })().catch(error => {
