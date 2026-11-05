@@ -5,18 +5,24 @@ import { cn, type Tone, toneBg, toneText } from '../../lib/utils'
 export function Card({
   title,
   subtitle,
+  badge,
   children,
   className,
 }: {
   title: string
   subtitle?: string
+  /** Right-aligned mark in the title row; says how the card's numbers behave. */
+  badge?: ReactNode
   children: ReactNode
   className?: string
 }) {
   return (
     <section className={cn('flex flex-col gap-4 rounded-[14px] bg-card p-[18px]', className)}>
       <header className="flex flex-col gap-[5px]">
-        <h2 className="font-semibold text-sm">{title}</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-semibold text-sm">{title}</h2>
+          {badge}
+        </div>
         {subtitle && <p className="text-muted text-xs">{subtitle}</p>}
       </header>
       {children}

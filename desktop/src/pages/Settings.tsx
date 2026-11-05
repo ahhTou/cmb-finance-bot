@@ -5,6 +5,7 @@ import { type UseFormRegisterReturn, useForm } from 'react-hook-form'
 import { api, isTauri, resetBackend } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import type { PurchaseSettings } from '../api/types'
+import { PurchaseFlow } from '../components/PurchaseFlow'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint } from '../components/ui/card'
 import { Field, Input, Segmented } from '../components/ui/form'
@@ -52,6 +53,18 @@ const DEFAULTS = {
   irregular_idle_max_ms: 4000,
   reopen_deadline: 60,
   drill_form_deadline: 10,
+  password_page_timeout_s: 10,
+  keypad_timeout_ms: 1200,
+  keypad_stable_ms: 200,
+  password_same_digit_gap_ms: 50,
+  password_different_digit_gap_ms: 10,
+  password_confirm_gap_ms: 150,
+  password_confirm_timeout_ms: 600,
+  password_retry_gap_ms: 100,
+  password_done_gap_ms: 150,
+  password_close_wait_ms: 500,
+  result_first_wait_ms: 1000,
+  result_timeout_s: 20,
 }
 type Key = keyof typeof DEFAULTS
 type Values = Record<Key, string>
@@ -72,6 +85,18 @@ const LIMITS: Record<Key, [number, number]> = {
   irregular_idle_max_ms: [1, 60000],
   reopen_deadline: [1, 300],
   drill_form_deadline: [1, 300],
+  password_page_timeout_s: [1, 120],
+  keypad_timeout_ms: [100, 30000],
+  keypad_stable_ms: [0, 5000],
+  password_same_digit_gap_ms: [0, 3000],
+  password_different_digit_gap_ms: [0, 3000],
+  password_confirm_gap_ms: [0, 5000],
+  password_confirm_timeout_ms: [0, 30000],
+  password_retry_gap_ms: [0, 5000],
+  password_done_gap_ms: [0, 5000],
+  password_close_wait_ms: [0, 10000],
+  result_first_wait_ms: [0, 60000],
+  result_timeout_s: [1, 120],
 }
 
 function validate(v: Values) {
@@ -96,6 +121,12 @@ function validate(v: Values) {
     num('irregular_ramp_seconds') > num('irregular_idle_after_seconds')
   )
     errors.irregular_idle_after_seconds = '降频结束不能早于过渡结束'
+  if (
+    !errors.keypad_timeout_ms &&
+    !errors.keypad_stable_ms &&
+    num('keypad_stable_ms') >= num('keypad_timeout_ms')
+  )
+    errors.keypad_stable_ms = '稳定时长必须小于等键盘上限，否则永远等不到就绪'
   return errors
 }
 
@@ -140,6 +171,19 @@ function WatchSettings() {
     />
   )
 
+  // Same binding as `num`, 26px tall so it fits inside a flow node.
+  const field = (key: string, unit: string, label: string) => (
+    <NumberInput
+      compact
+      label={label}
+      unit={unit}
+      error={errors[key as Key]}
+      disabled={disabled}
+      placeholder={String(DEFAULTS[key as Key])}
+      {...form.register(key as Key, { onChange: () => setSaved(false) })}
+    />
+  )
+
   return (
     <form className="flex flex-col gap-4" onSubmit={save}>
       <Card title="首发模式" subtitle="开售时间一到就查询；没有额度时立即重试，次数用完就停。">
@@ -174,6 +218,14 @@ function WatchSettings() {
             {num('drill_form_deadline', '秒', '演练总时限')}
           </Setting>
         </div>
+      </Card>
+
+      <Card
+        title="购买时序配置"
+        badge={<Badge>限度 5 · 固定 7</Badge>}
+        subtitle="从有额度到结果页的真实执行顺序。竖线是主干，向右分叉的是另一条走向，末端写明是汇回某一步还是终止；每个值都落在它生效的那一步，并标明「等不到才生效」还是「固定停顿」。"
+      >
+        <PurchaseFlow field={field} errors={errors} limits={LIMITS} />
       </Card>
 
       <div className="sticky bottom-0 flex items-center gap-3 rounded-[14px] bg-card/95 px-[18px] py-3 shadow-[0_-8px_24px_rgb(0_0_0/0.35)] ring-[0.6px] ring-white/10 backdrop-blur">
@@ -417,6 +469,7 @@ function Timeline({ spans, window }: { spans: { start: number; stop: number }[];
   )
 }
 
+/** A "?" that explains one value on hover or keyboard focus. */
 function Setting({
   label,
   help,
@@ -437,12 +490,15 @@ function Setting({
   )
 }
 
+/** One stage of the password flow: a caption line over a two-column grid. */
+
 function NumberInput({
   unit,
   label,
   error,
   disabled,
   placeholder,
+  compact,
   ...register
 }: UseFormRegisterReturn & {
   unit: string
@@ -450,11 +506,14 @@ function NumberInput({
   error?: string
   disabled?: boolean
   placeholder?: string
+  /** 26px variant for the flow diagram, where vertical space is fixed. */
+  compact?: boolean
 }) {
   return (
     <div
       className={cn(
-        'flex h-[34px] items-center rounded-lg bg-field pr-2.5 focus-within:ring-2 focus-within:ring-accent/50',
+        'flex items-center rounded-lg bg-field pr-2.5 focus-within:ring-2 focus-within:ring-accent/50',
+        compact ? 'h-[26px] rounded-md pr-2' : 'h-[34px]',
         error && 'ring-1 ring-accent',
         disabled && 'opacity-50',
       )}
@@ -466,10 +525,13 @@ function NumberInput({
         autoComplete="off"
         disabled={disabled}
         placeholder={placeholder}
-        className="h-full w-full min-w-0 bg-transparent pl-3 text-[13px] text-fg tabular-nums outline-none placeholder:text-muted/60"
+        className={cn(
+          'h-full w-full min-w-0 bg-transparent text-fg tabular-nums outline-none placeholder:text-muted/60',
+          compact ? 'pl-2 text-[11px]' : 'pl-3 text-[13px]',
+        )}
         {...register}
       />
-      <span className="shrink-0 text-[11px] text-muted">{unit}</span>
+      <span className={cn('shrink-0 text-muted', compact ? 'text-[10px]' : 'text-[11px]')}>{unit}</span>
     </div>
   )
 }
