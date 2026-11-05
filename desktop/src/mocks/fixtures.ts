@@ -213,6 +213,8 @@ export const SETTINGS = {
   password_page_timeout_s: 10,
   keypad_timeout_ms: 1200,
   keypad_stable_ms: 200,
+  keypad_stable_samples: 3,
+  keypad_sample_gap_ms: 0,
   password_same_digit_gap_ms: 50,
   password_different_digit_gap_ms: 10,
   password_confirm_gap_ms: 150,

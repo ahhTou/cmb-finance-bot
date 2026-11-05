@@ -18,11 +18,13 @@ const KIND: Record<Kind, { label: string; tone: 'warn' | 'blue' }> = {
   fixed: { label: '固定', tone: 'blue' },
 }
 
-/** The twelve values that live on the P8 → P12 flow. */
+/** The values that live on the P8 → P12 flow. */
 export type FlowKey =
   | 'password_page_timeout_s'
   | 'keypad_timeout_ms'
   | 'keypad_stable_ms'
+  | 'keypad_stable_samples'
+  | 'keypad_sample_gap_ms'
   | 'password_same_digit_gap_ms'
   | 'password_different_digit_gap_ms'
   | 'password_confirm_gap_ms'
@@ -33,7 +35,7 @@ export type FlowKey =
   | 'result_first_wait_ms'
   | 'result_timeout_s'
 
-const META: Record<FlowKey, { name: string; unit: '毫秒' | '秒'; kind: Kind; detail: string }> = {
+const META: Record<FlowKey, { name: string; unit: '毫秒' | '秒' | '次'; kind: Kind; detail: string }> = {
   password_page_timeout_s: {
     name: '等密码面板',
     unit: '秒',
@@ -54,6 +56,20 @@ const META: Record<FlowKey, { name: string; unit: '毫秒' | '秒'; kind: Kind; 
     kind: 'limit',
     detail:
       '判定下限：键盘位置连续不动达到这么久才认为就绪（不是固定等待，就绪即输入）。调小可能点到动画中的坐标，调大只多等一会儿。',
+  },
+  keypad_stable_samples: {
+    name: '稳定采样次数',
+    unit: '次',
+    kind: 'limit',
+    detail:
+      '判定下限：除了稳定时长，还要连续这么多次读到相同的键盘位置才算就绪。每读一次控件树约 0.1 秒，所以 3 次大约在 200ms 处凑齐；调大会推迟就绪。',
+  },
+  keypad_sample_gap_ms: {
+    name: '采样间隔',
+    unit: '毫秒',
+    kind: 'fixed',
+    detail:
+      '两次读控件树之间额外 sleep 多久。读一次本身约 0.1 秒，已经是天然节拍，所以默认 0；原来是 40ms，会让第 3 次采样拖到约 280ms，每次都多等这一截。',
   },
   password_same_digit_gap_ms: {
     name: '相同数字间隔',
@@ -137,7 +153,7 @@ const MAIN: Step[] = [
     id: 'p11-2',
     tag: 'P11.2',
     title: '键盘就绪',
-    values: ['keypad_timeout_ms', 'keypad_stable_ms'],
+    values: ['keypad_timeout_ms', 'keypad_stable_ms', 'keypad_stable_samples', 'keypad_sample_gap_ms'],
   },
   {
     id: 'p11-3',

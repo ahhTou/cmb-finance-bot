@@ -107,7 +107,7 @@ class PasswordPanelTest(unittest.TestCase):
         clock=Clock()
         index=[0]
         def moving():
-            index[0]+=1
+            index[0]+=1;clock.sleep(.1)
             root=panel()
             digit=next(n for n in root.iter('node') if n.get('text')=='0')
             digit.set('bounds',f'[{10+2*index[0]},400][70,430]')
@@ -143,18 +143,44 @@ class PasswordPanelTest(unittest.TestCase):
         root=panel();root.append(ET.fromstring('<node text="0" class="android.widget.Button" enabled="true" clickable="true" bounds="[1,1][10,10]"/>'))
         self.assertIsNone(fu.keypad_ready(root))
 
+    def slow_dump(self,clock,cost=.1):
+        def read():
+            clock.sleep(cost);return panel()
+        return read
+
     def test_keypad_needs_stability_duration_not_just_two_samples(self):
         clock=Clock()
         with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
-             patch.object(fu.time,'sleep',side_effect=clock.sleep),patch.object(fu,'dump',return_value=panel())as read:
+             patch.object(fu.time,'sleep',side_effect=clock.sleep) as sleep, \
+             patch.object(fu,'dump',side_effect=self.slow_dump(clock,.01))as read:
             fu.wait_keypad_stable()
         self.assertGreaterEqual(clock.now,fu.KEYPAD_STABLE_SECONDS)
         self.assertGreaterEqual(read.call_count,fu.KEYPAD_STABLE_SAMPLES)
+        self.assertEqual(sleep.call_count,0)  # no extra gap by default
+
+    def test_keypad_with_100ms_dump_is_ready_on_the_third_sample(self):
+        # 11-05: dump ~0.1 s + 40 ms sleep put the third sample at ~280 ms.
+        clock=Clock()
+        with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
+             patch.object(fu.time,'sleep',side_effect=clock.sleep), \
+             patch.object(fu,'dump',side_effect=self.slow_dump(clock))as read:
+            fu.wait_keypad_stable()
+        self.assertEqual(read.call_count,3)
+        self.assertAlmostEqual(clock.now,.3)
+
+    def test_keypad_sample_count_and_gap_are_honoured(self):
+        clock=Clock()
+        with patch.object(fu.time,'monotonic',side_effect=clock.monotonic), \
+             patch.object(fu.time,'sleep',side_effect=clock.sleep), \
+             patch.object(fu,'dump',side_effect=self.slow_dump(clock))as read:
+            fu.wait_keypad_stable(stable_seconds=0,samples_needed=5,gap=.04)
+        self.assertEqual(read.call_count,5)
+        self.assertAlmostEqual(clock.now,.5+.04*4)
 
     def test_keypad_motion_with_same_rounded_center_resets_stability(self):
         clock=Clock();index=[0]
         def moving():
-            index[0]+=1;root=panel()
+            index[0]+=1;clock.sleep(.1);root=panel()
             digit=next(n for n in root.iter('node')if n.get('text')=='0')
             # Both rectangles have the same center, but the layout is moving.
             digit.set('bounds','[10,400][70,430]'if index[0]%2 else'[11,400][69,430]')
@@ -192,6 +218,7 @@ class PasswordPaceTest(unittest.TestCase):
     """Every pause in the password flow is a saved setting, not a constant."""
 
     PACE = dict(password_page_timeout_s=7,keypad_timeout_ms=900,keypad_stable_ms=120,
+                keypad_stable_samples=4,keypad_sample_gap_ms=30,
                 password_same_digit_gap_ms=80,password_different_digit_gap_ms=20,
                 password_confirm_gap_ms=250,password_confirm_timeout_ms=800,
                 password_retry_gap_ms=40,password_done_gap_ms=60,
@@ -202,6 +229,8 @@ class PasswordPaceTest(unittest.TestCase):
         self.assertEqual(pace['page_timeout'],7)
         self.assertAlmostEqual(pace['keypad_timeout'],.9)
         self.assertAlmostEqual(pace['keypad_stable'],.12)
+        self.assertEqual(pace['keypad_samples'],4)
+        self.assertAlmostEqual(pace['keypad_gap'],.03)
         self.assertAlmostEqual(pace['same_gap'],.08)
         self.assertAlmostEqual(pace['different_gap'],.02)
         self.assertAlmostEqual(pace['confirm_gap'],.25)
@@ -234,7 +263,8 @@ class PasswordPaceTest(unittest.TestCase):
              patch.object(fu,'send_commands',side_effect=lambda c:calls.append(c)), \
              patch.object(fu.time,'sleep'):
             fu.enter_password('111111',pace=pace)
-        self.assertEqual(wait.call_args.kwargs,{'timeout':2.5,'stable_seconds':1.5})
+        self.assertEqual(wait.call_args.kwargs,{'timeout':2.5,'stable_seconds':1.5,
+                                                'samples_needed':3,'gap':0.0})
         self.assertEqual(confirm.call_args.kwargs,{'timeout':1.1})
         self.assertEqual(calls[0].count('sleep 0.07'),5)
         self.assertEqual(calls[-1],['input tap 160 220'])
@@ -249,6 +279,9 @@ class PasswordPaceTest(unittest.TestCase):
         self.assertEqual(values['password_same_digit_gap_ms'],50)
         self.assertEqual(values['password_different_digit_gap_ms'],10)
         self.assertEqual(values['keypad_stable_ms'],200)
+        self.assertEqual(values['keypad_stable_samples'],fu.KEYPAD_STABLE_SAMPLES)
+        self.assertEqual(values['keypad_sample_gap_ms']/1000,fu.KEYPAD_SAMPLE_GAP)
+        self.assertEqual(values['keypad_stable_ms']/1000,fu.KEYPAD_STABLE_SECONDS)
 
     def test_impossible_keypad_stability_is_rejected_at_save_time(self):
         with self.assertRaisesRegex(RuntimeError,'键盘稳定时长必须小于'):

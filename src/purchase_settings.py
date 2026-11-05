@@ -28,6 +28,10 @@ DEFAULTS = {
     'password_page_timeout_s': 10,        # 风险确认 → 密码面板出现
     'keypad_timeout_ms': 1200,            # 等焦点 + 10 键可用 + 位置稳定
     'keypad_stable_ms': 200,              # 连续不动多久才认为键盘就绪
+    'keypad_stable_samples': 3,           # 至少连续几次采样不动
+    # 两次采样之间额外 sleep。读一次控件树本身约 0.1 秒，已经是节拍；原来再
+    # 加 40ms 时第 3 次采样要到约 280ms 才到，实测稳定 227–314ms（11-05）。
+    'keypad_sample_gap_ms': 0,
     'password_same_digit_gap_ms': 50,     # 相邻两位相同，如 11、22
     'password_different_digit_gap_ms': 10,  # 相邻两位不同
     'password_confirm_gap_ms': 150,       # 最后一位输完 → 点确定
@@ -51,6 +55,8 @@ LIMITS = {
     'password_page_timeout_s': (1, 120),
     'keypad_timeout_ms': (100, 30000),
     'keypad_stable_ms': (0, 5000),
+    'keypad_stable_samples': (2, 20),
+    'keypad_sample_gap_ms': (0, 1000),
     'password_same_digit_gap_ms': (0, 3000),
     'password_different_digit_gap_ms': (0, 3000),
     'password_confirm_gap_ms': (0, 5000),

@@ -229,8 +229,10 @@ def raw_digit_buttons(root):
     return keys
 
 
+# Defaults only; must equal purchase_settings.DEFAULTS (the pace overrides them).
 KEYPAD_STABLE_SECONDS = 0.20
 KEYPAD_STABLE_SAMPLES = 3
+KEYPAD_SAMPLE_GAP = 0.0
 PASSWORD_SAME_DIGIT_GAP = 0.05      # repeated coordinate: merged below this
 PASSWORD_DIFFERENT_DIGIT_GAP = 0.01  # distinct coordinates need no long gap
 
@@ -248,6 +250,8 @@ def password_pace(settings=None):
         'page_timeout': saved['password_page_timeout_s'],
         'keypad_timeout': saved['keypad_timeout_ms'] / 1000,
         'keypad_stable': saved['keypad_stable_ms'] / 1000,
+        'keypad_samples': saved['keypad_stable_samples'],
+        'keypad_gap': saved['keypad_sample_gap_ms'] / 1000,
         'same_gap': saved['password_same_digit_gap_ms'] / 1000,
         'different_gap': saved['password_different_digit_gap_ms'] / 1000,
         'confirm_gap': saved['password_confirm_gap_ms'] / 1000,
@@ -290,10 +294,13 @@ def keypad_ready(root):
     return tuple(sorted(signature)), keys
 
 
-def wait_keypad_stable(timeout=1.2, stable_seconds=KEYPAD_STABLE_SECONDS):
+def wait_keypad_stable(timeout=1.2, stable_seconds=KEYPAD_STABLE_SECONDS,
+                       samples_needed=KEYPAD_STABLE_SAMPLES, gap=KEYPAD_SAMPLE_GAP):
     """Require focus + actionable keys + unchanged full bounds for `stable_seconds`.
 
-    Three coherent samples are also required; never type on timeout.
+    `samples_needed` coherent samples are also required; never type on timeout.
+    Each dump() already takes ~0.1 s, so `gap` (an extra sleep between samples)
+    defaults to 0: any gap only delays the sample that proves stability.
     """
     prev, stable_since, samples = None, None, 0
     end = time.monotonic() + timeout
@@ -307,14 +314,20 @@ def wait_keypad_stable(timeout=1.2, stable_seconds=KEYPAD_STABLE_SECONDS):
                 samples += 1
             else:
                 prev, stable_since, samples = signature, now, 1
-            if (now < end and samples >= KEYPAD_STABLE_SAMPLES
+            if (now < end and samples >= samples_needed
                     and now - stable_since >= stable_seconds):
                 print(f"数字键盘就绪：焦点与10键可用，布局连续稳定 {(now - stable_since) * 1000:.0f}ms。", flush=True)
                 return root, keys
         else:
             prev, stable_since, samples = None, None, 0
-        time.sleep(0.04)
+        if gap > 0:
+            time.sleep(gap)
     raise fast_buy.Stop("数字键盘焦点或布局未稳定，已停止，未继续输入或提交。")
+
+
+def keypad_pace(pace):
+    return {'timeout': pace['keypad_timeout'], 'stable_seconds': pace['keypad_stable'],
+            'samples_needed': pace['keypad_samples'], 'gap': pace['keypad_gap']}
 
 
 def password_taps(password, keys, confirm_wait=None, same_gap=None, different_gap=None):
@@ -406,8 +419,7 @@ def enter_password(password, confirm_wait=None, submit=True, pace=None):
     pace = dict(DEFAULT_PACE, **(pace or {}))
     if confirm_wait is None:
         confirm_wait = pace['confirm_gap']
-    root, keys = wait_keypad_stable(timeout=pace['keypad_timeout'],
-                                    stable_seconds=pace['keypad_stable'])
+    root, keys = wait_keypad_stable(**keypad_pace(pace))
     field = find_node(root, "点击谈出密码键盘")
     field_xy = center_of(field) if field is not None else None
     for attempt in range(2):
@@ -441,8 +453,7 @@ def enter_password(password, confirm_wait=None, submit=True, pace=None):
             print("等待状态刷新后确定仍不可用：清空输入后重输一次，尚未提交。", flush=True)
             send_commands([f"input tap {field_xy[0]} {field_xy[1]}"])
             time.sleep(pace['retry_gap'])
-            root, keys = wait_keypad_stable(timeout=pace['keypad_timeout'],
-                                            stable_seconds=pace['keypad_stable'])
+            root, keys = wait_keypad_stable(**keypad_pace(pace))
             continue
         break
     close_password_panel(pace['close_wait'])
