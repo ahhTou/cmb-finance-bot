@@ -1,8 +1,27 @@
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page, test } from '@playwright/test'
 
 /** Opens a page of the app on a mock scenario (see src/mocks/fixtures.ts). */
 async function open(page: Page, path: string, scenario = 'idle') {
   await page.goto(`/?scenario=${scenario}#${path}`)
+}
+
+/** Every scrollable region under `root` that would draw a scrollbar. */
+async function scrollbarsIn(root: Locator) {
+  return root.evaluate((node) => {
+    const found: string[] = []
+    const walk = (el: Element) => {
+      const style = getComputedStyle(el)
+      const vertical =
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight - el.clientHeight > 1
+      const horizontal =
+        (style.overflowX === 'auto' || style.overflowX === 'scroll') && el.scrollWidth - el.clientWidth > 1
+      if (vertical || horizontal)
+        found.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 80)}`)
+      for (const child of el.children) walk(child)
+    }
+    walk(node)
+    return found
+  })
 }
 
 test('sidebar switches pages and remembers the last one', async ({ page }) => {
@@ -230,6 +249,33 @@ test('history lists records and shows details', async ({ page }) => {
   await page.getByRole('button', { name: /JX040229/ }).click()
   await expect(page.getByText('窗口内无额度')).toBeVisible()
   await expect(page.getByText('模拟器重启后恢复', { exact: false })).toBeVisible()
+})
+
+test('inline log areas never scroll; the full log opens in a dialog', async ({ page }) => {
+  await page.setViewportSize({ width: 940, height: 680 })
+
+  // 状态 → 最近日志 card (screenshot 1): newest whole lines, no scrollbar.
+  await open(page, '/status')
+  const logCard = page.getByTestId('card-log')
+  const recent = logCard.getByTestId('recent-log')
+  await expect(recent).toBeVisible()
+  await expect(recent).toContainText('查询门控已挂起')
+  expect(await recent.locator('div').count()).toBe(6)
+  expect(await scrollbarsIn(logCard)).toEqual([])
+
+  // 历史 → 值守日志 detail panel (screenshot 2): newest whole lines, no scrollbar.
+  await open(page, '/history')
+  await page.getByRole('button', { name: /JX040229/ }).click()
+  const detail = page.getByTestId('history-detail')
+  const historyLog = detail.getByTestId('history-log')
+  await expect(historyLog).toBeVisible()
+  await expect(historyLog).toContainText('查询门控已挂起')
+  expect(await historyLog.locator('div').count()).toBeGreaterThan(1)
+  expect(await scrollbarsIn(detail)).toEqual([])
+
+  // Full log is still reachable through the dialog.
+  await detail.getByRole('button', { name: '查看全部' }).click()
+  await expect(page.getByRole('dialog')).toContainText('全局 watch.log')
 })
 
 test('drill buy shows command output', async ({ page }) => {

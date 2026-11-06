@@ -30,19 +30,22 @@ export function Card({
   )
 }
 
-/** Status-page card: scrolling body, footer pinned to the bottom. */
+/** Status-page card: scrolling body (opt-out), footer pinned to the bottom. */
 export function DashboardCard({
   title,
   icon: Icon,
   children,
   footer,
   testId,
+  scrollBody = true,
 }: {
   title: string
   icon: LucideIcon
   children: ReactNode
   footer: ReactNode
   testId?: string
+  /** false clips the body instead of scrolling: the 最近日志 preview never scrolls. */
+  scrollBody?: boolean
 }) {
   return (
     <section data-testid={testId} className="flex min-h-0 flex-col gap-[9px] rounded-[14px] bg-card p-3">
@@ -50,7 +53,14 @@ export function DashboardCard({
         <Icon className="size-3 text-muted" strokeWidth={2.5} />
         <h2 className="font-semibold text-[13px]">{title}</h2>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-[9px] overflow-y-auto">{children}</div>
+      <div
+        className={cn(
+          'flex min-h-0 flex-1 flex-col gap-[9px]',
+          scrollBody ? 'overflow-y-auto' : 'overflow-hidden',
+        )}
+      >
+        {children}
+      </div>
       <footer className="flex items-center gap-2">{footer}</footer>
     </section>
   )

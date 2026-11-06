@@ -112,3 +112,35 @@ test('plan page fits the minimum window', async ({ page }) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)
   expect(overflow).toBeLessThanOrEqual(0)
 })
+
+test('favorite chips fill the product code in a plan row', async ({ page }) => {
+  await open(page, '/plan', 'idle')
+  await page.getByTestId('plan-add').click()
+  const row = page.getByTestId('plan-row-0')
+  await expect(row.getByTestId('favorite-JX040229')).toBeVisible()
+  await row.getByTestId('favorite-JX040229').click()
+  await expect(page.getByTestId('plan-item-code-0')).toHaveValue('JX040229')
+  // A plain favourite has no amount, so the amount field stays untouched.
+  await expect(page.getByTestId('plan-item-amount-0')).toHaveValue('')
+})
+
+test('the test favourite fills code and amount in a plan row', async ({ page }) => {
+  // Create one favourite and mark it as the drill test item first.
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByTestId('set-test-AB1234').click()
+  const config = page.getByRole('dialog')
+  await config.getByTestId('test-amount-input').fill('0.02')
+  await config.getByRole('button', { name: '保存测试项' }).click()
+
+  await page.getByRole('link', { name: '计划' }).click()
+  await page.getByTestId('plan-add').click()
+  const row = page.getByTestId('plan-row-0')
+  const chip = row.getByTestId('favorite-AB1234')
+  await expect(chip).toContainText('测试 ¥0.02')
+  await chip.click()
+  await expect(page.getByTestId('plan-item-code-0')).toHaveValue('AB1234')
+  await expect(page.getByTestId('plan-item-amount-0')).toHaveValue('0.02')
+})

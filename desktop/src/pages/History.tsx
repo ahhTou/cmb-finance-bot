@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction } from '../api/hooks'
 import type { HistoryRecord } from '../api/types'
-import { LogDialog, LogText } from '../components/shared'
+import { LogDialog, LogPreview } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Detail } from '../components/ui/card'
 import { cn, copyText, phaseName, phaseTone, shortTime, type Tone, toneBg, toneText } from '../lib/utils'
@@ -75,7 +75,10 @@ export function HistoryPage() {
             </ul>
           )}
         </section>
-        <section className="flex min-w-0 flex-1 flex-col overflow-y-auto rounded-[14px] bg-card p-[18px]">
+        <section
+          data-testid="history-detail"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] bg-card p-[18px]"
+        >
           {record ? (
             <AnimatePresence mode="wait">
               <motion.div
@@ -84,11 +87,13 @@ export function HistoryPage() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.16 }}
-                className="flex flex-col gap-4"
+                className="flex min-h-0 flex-1 flex-col gap-4"
               >
-                <RecordDetail record={record} />
-                <div className="h-px bg-white/5" />
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 flex-col gap-4">
+                  <RecordDetail record={record} />
+                </div>
+                <div className="h-px shrink-0 bg-white/5" />
+                <div className="flex shrink-0 items-center gap-2">
                   <h3 className="flex-1 font-semibold text-xs">值守日志</h3>
                   <Button
                     disabled={busy}
@@ -100,8 +105,17 @@ export function HistoryPage() {
                   </Button>
                   <Button onClick={() => setShowLog(true)}>查看全部</Button>
                 </div>
-                <LogText lines={lines.slice(-200)} className="h-[210px] rounded-lg bg-field p-2.5" />
-                <div className="flex items-center gap-2">
+                {/* No scrollbar in this area: the newest lines fill the space and
+                    the rest is read in the 查看全部 dialog. */}
+                <LogPreview
+                  lines={lines}
+                  maxLines={40}
+                  align="bottom"
+                  fitLines
+                  testId="history-log"
+                  className="min-h-0 flex-1 rounded-lg bg-field px-2.5 py-2"
+                />
+                <div className="flex shrink-0 items-center gap-2">
                   <Button disabled={!lines.length} onClick={() => copyText(lines.join('\n'))}>
                     复制日志
                   </Button>

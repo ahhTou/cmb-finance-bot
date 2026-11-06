@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { api, blobUrl } from '../api/client'
 import { q, useAction, useRefreshPage, useWatch } from '../api/hooks'
 import type { Device } from '../api/types'
-import { LogDialog, LogText } from '../components/shared'
+import { LogDialog, LogPreview, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, DashboardCard, Detail, Hint, Metric, MetricGrid, StatusDot } from '../components/ui/card'
 import { Dialog } from '../components/ui/dialog'
@@ -295,6 +295,7 @@ export function DashboardPage() {
         testId="card-log"
         title="最近日志"
         icon={FileText}
+        scrollBody={false}
         footer={
           <>
             <Button disabled={busy} onClick={() => setSheet('log')}>
@@ -305,7 +306,7 @@ export function DashboardPage() {
           </>
         }
       >
-        <LogText lines={logs.slice(-6)} className="text-[9px]" />
+        <LogPreview lines={logs} maxLines={6} testId="recent-log" className="text-[9px] leading-[1.5]" />
       </DashboardCard>
 
       <Dialog open={sheet === 'sleep'} onOpenChange={close} title="休眠设置" width={760} height={460}>

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction } from '../api/hooks'
 import type { Mode, PlanRequest, PlanStartRequest, PlanView } from '../api/types'
-import { LogText } from '../components/shared'
+import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint, Metric, MetricGrid } from '../components/ui/card'
 import { Dialog } from '../components/ui/dialog'
@@ -451,6 +451,19 @@ function PlanRow({
           </Button>
         )}
       </div>
+      {!readOnly && (
+        <div data-testid={`plan-item-favorites-${index}`}>
+          <FavoritePicker
+            onPick={(favorite) => {
+              const changes: Partial<PlanDraftItem> = { code: favorite.code }
+              // The test favourite also carries the drill amount; a plain one only
+              // carries the product code, so never invent an amount for it.
+              if (favorite.test_amount) changes.amount = favorite.test_amount
+              onPatch(index, changes)
+            }}
+          />
+        </div>
+      )}
       {(saved || problem) && (
         <div className="flex flex-wrap items-center gap-2">
           {saved && (

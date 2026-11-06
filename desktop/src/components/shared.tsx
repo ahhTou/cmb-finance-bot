@@ -1,5 +1,6 @@
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, Star } from 'lucide-react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
@@ -24,6 +25,71 @@ export function LogText({ lines, className }: { lines: string[]; className?: str
     >
       {lines.length ? lines.join('\n') : '暂无日志'}
     </pre>
+  )
+}
+
+/**
+ * Inline log preview with no scrollbar: the newest `maxLines` lines, one
+ * truncated row each. Full logs are only read in LogDialog (2026-11-06
+ * requirement: areas like 最近日志 / 值守日志 must not scroll).
+ */
+export function LogPreview({
+  lines,
+  maxLines = 8,
+  align = 'top',
+  fitLines = false,
+  testId,
+  className,
+}: {
+  lines: string[]
+  maxLines?: number
+  /** bottom keeps the newest line against the bottom edge, like a terminal. */
+  align?: 'top' | 'bottom'
+  /** measure the box and show only whole lines that fit (flex-sized previews). */
+  fitLines?: boolean
+  testId?: string
+  className?: string
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const [fit, setFit] = useState(maxLines)
+  useEffect(() => {
+    const el = box.current
+    if (!el || !fitLines) return
+    const measure = () => {
+      const style = getComputedStyle(el)
+      const lineHeight = Number.parseFloat(style.lineHeight) || 16
+      const padding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+      setFit(Math.max(1, Math.min(maxLines, Math.floor((el.clientHeight - padding) / lineHeight))))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [fitLines, maxLines])
+  const limit = fitLines ? fit : maxLines
+  const shown = lines.slice(-limit)
+  const first = lines.length - shown.length
+  return (
+    <div
+      ref={box}
+      data-testid={testId}
+      className={cn(
+        'flex min-h-0 min-w-0 flex-col overflow-hidden font-mono text-[#b8b8b8] text-[10px] leading-[1.6]',
+        align === 'bottom' && 'justify-end',
+        className,
+      )}
+    >
+      {shown.length ? (
+        shown.map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: offset + index is the absolute line number
+          <div key={first + index} title={line} className="min-w-0 shrink-0 truncate">
+            {line || ' '}
+          </div>
+        ))
+      ) : (
+        <span className="text-muted">暂无日志</span>
+      )}
+    </div>
   )
 }
 
