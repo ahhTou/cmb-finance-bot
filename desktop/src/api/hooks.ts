@@ -4,7 +4,7 @@ import { ACTIVE_PHASES, clockTime, phaseName } from '../lib/utils'
 import { notify } from '../platform'
 import { useUI } from '../store'
 import { api, subscribe } from './client'
-import type { Device, History, Info, Log, PurchaseSettings, Status, SystemInfo } from './types'
+import type { Device, History, Info, Log, PlanView, PurchaseSettings, Status, SystemInfo } from './types'
 
 export const q = {
   status: queryOptions({
@@ -22,6 +22,13 @@ export const q = {
     queryFn: () => api<PurchaseSettings>('GET', '/api/settings'),
   }),
   info: queryOptions({ queryKey: ['info'], queryFn: () => api<Info>('GET', '/api/info') }),
+  // Plan mode: poll every 2 s only while the plan process is running, so item
+  // states, last_tick and logs follow along. When it is not running one read is enough.
+  plan: queryOptions({
+    queryKey: ['plan'],
+    queryFn: () => api<PlanView>('GET', '/api/plan'),
+    refetchInterval: (query) => (query.state.data?.running ? 2000 : false),
+  }),
 }
 
 /** The current watch task and what it allows, derived from the status query. */
@@ -91,6 +98,7 @@ export function useRefreshPage() {
       const device = () => qc.fetchQuery({ ...q.device, ...fresh })
       const sets: Record<string, (() => Promise<unknown>)[]> = {
         '/status': [status, device, () => qc.fetchQuery({ ...q.system, ...fresh })],
+        '/plan': [() => qc.fetchQuery({ ...q.plan, ...fresh }), status],
         '/drill': [status, device],
         '/history': [
           () => qc.fetchQuery({ ...q.history, ...fresh }),

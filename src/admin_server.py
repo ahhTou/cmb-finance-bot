@@ -46,6 +46,10 @@ class Failure(Exception):
 def timeout(args):
     if args[0] == 'emulator':
         return 60 if 'start' in args else 30
+    # plan-disarm may wait ~10 s for the plan worker plus ~10 s for the current
+    # watch plus adb close time; 30 s could 504 halfway through.
+    if args[0] == 'plan-disarm':
+        return 60
     return {'cancel': 300, 'buy': 420}.get(args[0], 30)
 
 
@@ -132,6 +136,22 @@ class PasswordRequest(BaseModel):
     new: str
 
 
+class PlanItemRequest(BaseModel):
+    code: str
+    amount: str
+    at: str
+    mode: Literal['first_launch', 'redemption'] = 'first_launch'
+
+
+class PlanRequest(BaseModel):
+    dry_run: bool = False
+    items: List[PlanItemRequest]
+
+
+class PlanStartRequest(BaseModel):
+    confirm_real_payment: bool = False
+
+
 @app.get('/api/health')
 def health():
     return {'ok': True}
@@ -192,6 +212,35 @@ def arm(body: ArmRequest):
     if body.dry_run: args.append('--dry-run')
     if body.confirm_real_payment: args.append('--confirm-real-payment')
     return run(args)
+
+
+@app.get('/api/plan')
+def plan():
+    return run(['plan'])
+
+
+@app.put('/api/plan')
+def save_plan(body: PlanRequest):
+    return run(['plan-save'], {'dry_run': body.dry_run,
+                               'items': [item.model_dump() for item in body.items]})
+
+
+@app.post('/api/plan/start')
+def start_plan(body: Optional[PlanStartRequest] = None):
+    args = ['plan-start']
+    if body and body.confirm_real_payment:
+        args.append('--confirm-real-payment')
+    return run(args)
+
+
+@app.post('/api/plan/disarm')
+def disarm_plan():
+    return run(['plan-disarm'])
+
+
+@app.delete('/api/plan')
+def clear_plan():
+    return run(['plan-clear'])
 
 
 @app.post('/api/disarm')

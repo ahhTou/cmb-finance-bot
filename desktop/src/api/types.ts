@@ -4,6 +4,9 @@ import type { components } from './schema'
 export type ArmRequest = components['schemas']['ArmRequest']
 export type BuyRequest = components['schemas']['BuyRequest']
 export type CancelRequest = components['schemas']['CancelRequest']
+export type PlanItemRequest = components['schemas']['PlanItemRequest']
+export type PlanRequest = components['schemas']['PlanRequest']
+export type PlanStartRequest = components['schemas']['PlanStartRequest']
 
 // Responses are whatever admin_cli.py prints; these describe the fields the app reads.
 export type Mode = 'first_launch' | 'redemption'
@@ -109,4 +112,57 @@ export interface Info {
 
 export interface CommandResult {
   output?: string[]
+}
+
+// Plan mode responses come from watch_plan.view() via admin_cli.py `plan`.
+// Handwritten per var/team/plan-mode-contract.md §4.5; `schema.d.ts` is
+// regenerated separately and only covers request bodies.
+
+export type PlanPhase = 'idle' | 'running' | 'done' | 'aborted' | 'disarmed'
+export type PlanItemState = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+
+export interface PlanItem {
+  item_id?: string
+  code: string
+  amount: string
+  /** Purchase time, naive local ISO seconds ("2026-11-07T09:00:00"). */
+  at: string
+  mode: Mode
+  state?: PlanItemState
+  task_id?: string | null
+  result?: string | null
+  armed_at?: string | null
+  ended_at?: string | null
+  /** Computed by the backend view; absent on the request/save payload. */
+  prep_at?: string
+  end_at?: string
+}
+
+export interface Plan {
+  version?: number
+  plan_id?: string
+  generation?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  dry_run: boolean
+  phase?: PlanPhase
+  pid?: number | null
+  last_tick?: string | null
+  settings_revision?: string | null
+  result?: string | null
+  items: PlanItem[]
+}
+
+export interface PlanView {
+  plan: Plan | null
+  running: boolean
+  stale: boolean
+  problems: string[]
+  warnings: string[]
+  task: Task | null
+  log_path?: string
+  logs?: string[]
+  settings_revision?: string
+  now?: string
 }

@@ -48,19 +48,22 @@ class Stop(Exception):
     pass
 
 
-MAX_AMOUNT = Decimal("50000")   # guard against a mistyped amount
-
-
 def parse_amount(value):
-    """Validate a purchase amount and return it as 'N.NN'."""
+    """Validate a purchase amount and return it as 'N.NN'.
+
+    There is no upper limit: the account owner is responsible for the amount.
+    """
     try:
         amount = Decimal(str(value).replace(",", ""))
     except InvalidOperation:
         raise Stop("金额格式不正确。")
     if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
         raise Stop("金额必须是正数，最多两位小数。")
-    if amount > MAX_AMOUNT:
-        raise Stop(f"金额超过上限 {MAX_AMOUNT} 元；确需更大金额请先改 MAX_AMOUNT。")
+    # Not an upper limit: this only rejects exponent notation such as
+    # "1e10000000", which would otherwise expand into gigabytes of digits in
+    # the f-string below. Normal amounts (even 12345678.99) stay far below it.
+    if amount.adjusted() > 1000:
+        raise Stop("金额格式不正确。")
     return f"{amount:.2f}"
 
 

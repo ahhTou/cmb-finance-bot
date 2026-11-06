@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import admin_cli as admin
 import night_watch as nw
+import watch_plan
 
 
 class AdminTest(unittest.TestCase):
@@ -304,6 +305,88 @@ class AdminTest(unittest.TestCase):
         with patch.dict(sys.modules, {'fast_buy_uia2': types.ModuleType('fast_buy_uia2')}):
             code, _ = self.call('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run')
         self.assertEqual(code, 1)
+
+    def plan_payload(self, dry_run=True, minutes=90):
+        when = (datetime.now() + timedelta(minutes=minutes)).replace(microsecond=0)
+        return json.dumps({'dry_run': dry_run, 'items': [
+            {'code': 'JX040229', 'amount': '1000', 'at': when.isoformat(),
+             'mode': 'first_launch'}]})
+
+    def test_plan_view_and_save(self):
+        code, data = self.call('plan')
+        self.assertEqual(code, 0)
+        self.assertIsNone(data['plan'])
+        self.assertEqual(data['problems'], [])
+        code, data = self.call('plan-save', stdin=self.plan_payload())
+        self.assertEqual(code, 0)
+        item = data['plan']['items'][0]
+        self.assertEqual((item['code'], item['amount']), ('JX040229', '1000.00'))
+        self.assertEqual(data['plan']['phase'], 'idle')
+        self.assertIn('prep_at', item)
+        self.assertIn('end_at', item)
+        code, data = self.call('plan-save', stdin='{"items": [')
+        self.assertEqual(code, 1)
+        self.assertIn('格式', data['error'])
+        self.assertNotIn('Traceback', json.dumps(data))
+
+    def test_plan_start_requires_real_payment_confirmation(self):
+        self.assertEqual(self.call('plan-save', stdin=self.plan_payload(dry_run=False))[0], 0)
+        with patch.object(nw.subprocess, 'Popen') as popen:
+            code, data = self.call('plan-start')
+        self.assertEqual(code, 1)
+        self.assertIn('真实计划必须明确确认实际付款', data['error'])
+        popen.assert_not_called()
+
+    def test_plan_start_spawns_worker_and_rejects_second_start(self):
+        self.assertEqual(self.call('plan-save', stdin=self.plan_payload())[0], 0)
+        fake = types.SimpleNamespace(pid=4321)
+        with patch.object(nw.subprocess, 'Popen', return_value=fake) as popen:
+            code, data = self.call('plan-start')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['plan']['phase'], 'running')
+        argv = popen.call_args.args[0]
+        self.assertIn('watch_plan.py', ' '.join(argv))
+        self.assertIn('--generation', argv)
+        self.assertTrue(popen.call_args.kwargs['start_new_session'])
+        with patch.object(nw, 'alive', return_value=True):
+            code, data = self.call('plan-start')
+        self.assertEqual(code, 1)
+        self.assertIn('正在运行', data['error'])
+
+    def running_plan(self):
+        when = (datetime.now() + timedelta(minutes=90)).replace(microsecond=0)
+        import watch_plan as wp
+        plan = wp.save({'dry_run': True, 'items': [
+            {'code': 'JX040229', 'amount': '1000', 'at': when.isoformat(),
+             'mode': 'first_launch'}]})
+        plan.update(phase='running', pid=4321, generation='gen-plan',
+                    settings_revision=wp._settings_revision())
+        wp.save_plan(plan)
+        return plan
+
+    def test_plan_running_blocks_other_actions(self):
+        self.running_plan()
+        commands = [
+            ('buy', '--code', 'TEST01', '--amount', '0.01', '--dry-run'),
+            ('cancel', '--list'),
+            ('emulator', 'stop'),
+            ('resume', '--reason', 'test'),
+        ]
+        for argv in commands:
+            with self.subTest(argv=argv), patch.object(nw, 'alive', return_value=True):
+                code, data = self.call(*argv)
+                self.assertEqual(code, 1)
+                self.assertIn('计划正在运行', data['error'])
+
+    def test_plan_disarm_and_clear(self):
+        self.assertEqual(self.call('plan-save', stdin=self.plan_payload())[0], 0)
+        code, data = self.call('plan-disarm')
+        self.assertEqual(code, 1)
+        self.assertIn('没有在运行', data['error'])
+        code, data = self.call('plan-clear')
+        self.assertEqual(code, 0)
+        self.assertIsNone(data['plan'])
+        self.assertFalse((Path(nw.STATE) / 'plan.json').exists())
 
 class SystemParsingTest(unittest.TestCase):
     def test_caffeinate_child_details_match_only_the_task_pid(self):

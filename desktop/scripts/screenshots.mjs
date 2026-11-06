@@ -9,6 +9,7 @@ const out = resolve(import.meta.dirname, '../../docs/images')
 const shots = [
   ['app-tasks', 'idle', '/tasks'],
   ['app-armed', 'armed', '/tasks'],
+  ['app-plan', 'plan', '/plan'],
   ['app-status', 'idle', '/status'],
   ['app-drill', 'idle', '/drill'],
   ['app-settings', 'idle', '/settings'],

@@ -139,7 +139,7 @@ def record_history(task):
     record = {k: task.get(k) for k in ("task_id", "armed_at", "code", "amount", "at",
               "mode", "window_minutes", "probes", "dry_run", "phase", "result",
               "fired_at", "resumes", "purchase_flow", "fire_at", "end_at",
-              "prep_minutes", "watch_settings")}
+              "prep_minutes", "watch_settings", "plan_id", "plan_item")}
     record["ended_at"] = datetime.now().isoformat()
     with (STATE / "history.jsonl").open("a", encoding="utf-8") as out:
         out.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -306,14 +306,25 @@ def arm(args):
 
 
 def arm_task(code, amount, at=None, dry_run=False, prep_minutes=None, now=False,
-             mode="first_launch", window_minutes=None, until=None, settings_revision=None):
+             mode="first_launch", window_minutes=None, until=None, settings_revision=None,
+             plan_id=None, plan_item=None):
     return arm(argparse.Namespace(code=code, amount=amount, at=at, dry_run=dry_run,
                                   prep_minutes=prep_minutes, now=now, mode=mode,
                                   window_minutes=window_minutes, until=until,
-                                  settings_revision=settings_revision))
+                                  settings_revision=settings_revision,
+                                  plan_id=plan_id, plan_item=plan_item))
 
 
 def _arm(args):
+    # A plan owns the only emulator; a manual arm would collide with the item
+    # the plan worker is about to run. The worker itself also arms through this
+    # function, so allow only the current plan's own items through.
+    plan_id = getattr(args, "plan_id", None)
+    plan_item = getattr(args, "plan_item", None)
+    import watch_plan
+    if watch_plan.running():
+        if not plan_id or not plan_item or not watch_plan.accepts(plan_id):
+            raise Abort("计划正在运行；先取消计划再单独布防。")
     task = load_task()
     if task and (alive(task.get("pid")) or task.get("phase") == "firing"):
         raise Abort("已有值守在运行；先 status 查看或 disarm 取消。")
@@ -382,7 +393,9 @@ def _arm(args):
             "task_id": uuid.uuid4().hex, "generation": uuid.uuid4().hex,
             "armed_at": datetime.now().isoformat(timespec="microseconds"),
             "last_tick": datetime.now().isoformat(), "resumes": [],
-            "phase": "armed", "patterns_sent": 0}
+            "phase": "armed", "patterns_sent": 0,
+            "plan_id": getattr(args, "plan_id", None),
+            "plan_item": getattr(args, "plan_item", None)}
     if mode == "redemption":
         task.update(end_at=end.isoformat(), window_minutes=window)
     else:

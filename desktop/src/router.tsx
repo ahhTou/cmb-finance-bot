@@ -8,7 +8,7 @@ import {
   redirect,
   useRouterState,
 } from '@tanstack/react-router'
-import { FlaskConical, Gauge, History, Layers, RotateCw, Settings, Star } from 'lucide-react'
+import { CalendarClock, FlaskConical, Gauge, History, Layers, RotateCw, Settings, Star } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect } from 'react'
 import { q, useRefreshPage, useStatusEvents, useWatch } from './api/hooks'
@@ -21,12 +21,20 @@ import { DrillPage } from './pages/Drill'
 import { FavoritesPage } from './pages/Favorites'
 import { HistoryPage } from './pages/History'
 import { LivePage, WatchBubble } from './pages/Live'
+import { PlanPage } from './pages/Plan'
 import { SettingsPage } from './pages/Settings'
 import { TasksPage } from './pages/Tasks'
 import { useUI } from './store'
 
 const PAGES = [
   { path: '/tasks', title: '任务', icon: Layers, subtitle: '三种购买模式', component: TasksPage },
+  {
+    path: '/plan',
+    title: '计划',
+    icon: CalendarClock,
+    subtitle: '计划模式 · 多个布防自动排程',
+    component: PlanPage,
+  },
   { path: '/status', title: '状态', icon: Gauge, subtitle: '运行环境与设备', component: DashboardPage },
   { path: '/drill', title: '演练', icon: FlaskConical, subtitle: '测试命令与撤单', component: DrillPage },
   { path: '/favorites', title: '收藏', icon: Star, subtitle: '常用产品代码', component: FavoritesPage },

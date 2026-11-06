@@ -13,21 +13,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / 'var/favorites.json'
 MAX_ITEMS = 100
-MAX_AMOUNT = 50_000
 CODE = re.compile(r'[A-Za-z0-9]{4,20}')
 TITLE_MAX = 40
 
 
 def amount_text(value):
-    """Validate a test amount and normalize it to 'N.NN'."""
+    """Validate a test amount and normalize it to 'N.NN'.
+
+    There is no upper limit: the account owner is responsible for the amount.
+    """
     try:
         amount = Decimal(str(value).replace(',', '').strip())
     except InvalidOperation:
         raise RuntimeError('测试金额格式不正确。')
     if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
         raise RuntimeError('测试金额必须是正数，最多两位小数。')
-    if amount > MAX_AMOUNT:
-        raise RuntimeError(f'测试金额超过上限 {MAX_AMOUNT} 元。')
     return f'{amount:.2f}'
 
 

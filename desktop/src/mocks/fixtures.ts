@@ -1,17 +1,28 @@
-import type { Device, Favorite, HistoryRecord, Status, SystemInfo, Task } from '../api/types'
+import type {
+  Device,
+  Favorite,
+  HistoryRecord,
+  Mode,
+  Plan,
+  PlanItem,
+  Status,
+  SystemInfo,
+  Task,
+} from '../api/types'
 import { localISO } from '../lib/utils'
 
 /**
  * Mock scenarios, picked with `?scenario=` in the page URL (before the `#`):
- * idle (default), armed, redemption, firing, progress, empty, error.
+ * idle (default), armed, redemption, firing, progress, empty, error, plan.
  * `progress` replays the real 11-05 11:06 drill log step by step.
+ * `plan` presets one idle two-item plan for the plan page demo and screenshots.
  */
-export type Scenario = 'idle' | 'armed' | 'redemption' | 'firing' | 'progress' | 'empty' | 'error'
+export type Scenario = 'idle' | 'armed' | 'redemption' | 'firing' | 'progress' | 'empty' | 'error' | 'plan'
 
 export function scenario(): Scenario {
   const value = new URLSearchParams(location.search).get('scenario')
   return (
-    (['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error'] as const).find(
+    (['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error', 'plan'] as const).find(
       (s) => s === value,
     ) ?? 'idle'
   )
@@ -115,6 +126,44 @@ export function makeTask(kind: Scenario): Task | null {
       armed_at: '2026-11-04T19:54:15',
     }
   return null
+}
+
+function planItem(item_id: string, code: string, amount: string, minutes: number, mode: Mode): PlanItem {
+  return {
+    item_id,
+    code,
+    amount,
+    at: inMinutes(minutes),
+    mode,
+    state: 'pending',
+    task_id: null,
+    result: null,
+    armed_at: null,
+    ended_at: null,
+  }
+}
+
+/** The `plan` scenario: an idle, drill-mode two-item plan with times in the future. */
+export function makePlan(kind: Scenario): Plan | null {
+  if (kind !== 'plan') return null
+  return {
+    version: 1,
+    plan_id: 'mock-plan-0001',
+    generation: null,
+    created_at: localISO(new Date()),
+    started_at: null,
+    ended_at: null,
+    dry_run: true,
+    phase: 'idle',
+    pid: null,
+    last_tick: null,
+    settings_revision: 'mock-revision',
+    result: null,
+    items: [
+      planItem('mock-item-1', 'JX040229', '5000', 40, 'first_launch'),
+      planItem('mock-item-2', '133045A', '20000', 130, 'redemption'),
+    ],
+  }
 }
 
 export function makeStatus(task: Task | null, favorites: Favorite[], logs: string[]): Status {

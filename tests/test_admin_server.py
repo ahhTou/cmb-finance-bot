@@ -107,6 +107,46 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(run.call_args.kwargs['input']), {'current': '111111', 'new': '222222'})
 
     @patch('admin_server.subprocess.run')
+    def test_plan_routes(self, run):
+        run.return_value = done({'ok': True, 'plan': None})
+        r = self.call('GET', '/api/plan')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['plan'])
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+        item = {'code': 'JX040229', 'amount': '1000',
+                'at': '2026-11-07T09:00:00', 'mode': 'redemption'}
+        r = self.call('PUT', '/api/plan', json={'dry_run': True, 'items': [item]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['plan-save'])
+        self.assertEqual(json.loads(run.call_args.kwargs['input']),
+                         {'dry_run': True, 'items': [item]})
+        # mode 缺省为 first_launch。
+        r = self.call('PUT', '/api/plan', json={'items': [
+            {'code': 'JX040229', 'amount': '1', 'at': '2026-11-07T09:00:00'}]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(json.loads(run.call_args.kwargs['input'])['items'][0]['mode'],
+                         'first_launch')
+        self.call('POST', '/api/plan/start')
+        self.assertEqual(run.call_args.args[0][3:], ['plan-start'])
+        self.call('POST', '/api/plan/start', json={'confirm_real_payment': True})
+        self.assertEqual(run.call_args.args[0][3:],
+                         ['plan-start', '--confirm-real-payment'])
+        self.call('POST', '/api/plan/disarm')
+        self.assertEqual(run.call_args.args[0][3:], ['plan-disarm'])
+        # 停计划进程 + 停当前 watch + 关 App 最坏约 34s，30s 会 504。
+        self.assertEqual(run.call_args.kwargs['timeout'], 60)
+        self.call('DELETE', '/api/plan')
+        self.assertEqual(run.call_args.args[0][3:], ['plan-clear'])
+
+    @patch('admin_server.subprocess.run')
+    def test_plan_rejects_unknown_mode(self, run):
+        r = self.call('PUT', '/api/plan', json={'items': [
+            {'code': 'JX040229', 'amount': '1', 'at': '2026-11-07T09:00:00',
+             'mode': 'leech'}]})
+        self.assertEqual(r.status_code, 422)
+        run.assert_not_called()
+
+    @patch('admin_server.subprocess.run')
     def test_settings_rejects_odd_keys(self, run):
         run.return_value = done({'ok': True, 'settings': {}})
         self.assertEqual(self.call('PUT', '/api/settings', json={'--yes': 1}).status_code, 400)

@@ -68,10 +68,16 @@ class FavoritesTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             favorites.set_test("JX040229", "0.01")
         favorites.add("JX040229", "标题")
-        for amount in ("", "0", "-1", "1.234", "50000.01", "abc"):
+        for amount in ("", "0", "-1", "1.234", "abc"):
             with self.subTest(amount=amount), self.assertRaises(RuntimeError):
                 favorites.set_test("JX040229", amount)
         self.assertIsNone(favorites.test_item())
+        # No upper limit: above the old 50000 cap is accepted.
+        favorites.set_test("JX040229", "60000")
+        self.assertEqual(favorites.test_item(),
+                         {"code": "JX040229", "amount": "60000.00", "title": "标题"})
+        favorites.set_test("JX040229", "50000.01")
+        self.assertEqual(favorites.test_item()["amount"], "50000.01")
 
     def test_clear_and_remove_clear_the_test_item(self):
         favorites.add("JX040229", "标题")

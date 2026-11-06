@@ -12,9 +12,17 @@ class AmountTest(unittest.TestCase):
         self.assertEqual(fb.parse_amount("5000"), "5000.00")
         self.assertEqual(fb.parse_amount("0.01"), "0.01")
         self.assertEqual(fb.parse_amount("5,000"), "5000.00")
-        for bad in ("0", "-1", "0.001", "abc", "nan", "60000"):
+        # No upper limit: the account owner decides the amount.
+        self.assertEqual(fb.parse_amount("60000"), "60000.00")
+        self.assertEqual(fb.parse_amount("50000.01"), "50000.01")
+        self.assertEqual(fb.parse_amount("12345678.99"), "12345678.99")
+        for bad in ("0", "-1", "0.001", "abc", "nan", "inf"):
             with self.assertRaises(fb.Stop):
                 fb.parse_amount(bad)
+        # 指数防爆护栏：不是金额上限，只拒绝会展开成超长字符串的写法。
+        with self.assertRaises(fb.Stop):
+            fb.parse_amount("1e10000000")
+        self.assertEqual(fb.parse_amount("1e3"), "1000.00")
 
     def test_password_page_formats(self):
         # 2026-11-02 dry run: 5000 shows as ￥5,000.00; 0.01 as ￥0.01

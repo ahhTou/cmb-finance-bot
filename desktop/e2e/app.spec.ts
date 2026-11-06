@@ -41,7 +41,7 @@ test('drill arm goes through confirm and switches to the live view', async ({ pa
   await page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByPlaceholder('如 JX040229').fill('JX040229')
-  await dialog.getByPlaceholder('上限 50000 元').fill('0.01')
+  await dialog.getByPlaceholder('如 5000').fill('0.01')
   await dialog.getByRole('switch').first().click() // 演练
   await dialog.getByRole('switch').nth(1).click() // 立即排练
   await dialog.getByRole('button', { name: '下一步' }).click()
@@ -57,7 +57,7 @@ test('real arm needs the amount checkbox', async ({ page }) => {
   await page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByPlaceholder('如 JX040229').fill('JX040229')
-  await dialog.getByPlaceholder('上限 50000 元').fill('100')
+  await dialog.getByPlaceholder('如 5000').fill('100')
   await dialog.getByRole('button', { name: '下一步' }).click()
   const confirm = dialog.getByRole('button', { name: '确认真实布防' })
   await expect(dialog.getByTestId('confirm-price')).toContainText('100.00')
@@ -66,6 +66,18 @@ test('real arm needs the amount checkbox', async ({ page }) => {
   await expect(confirm).toBeEnabled()
   await dialog.getByTestId('confirm-check').uncheck()
   await expect(confirm).toBeDisabled()
+})
+
+test('real arm accepts an amount above 60000', async ({ page }) => {
+  await open(page, '/tasks', 'empty')
+  await page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByPlaceholder('如 JX040229').fill('JX040229')
+  await dialog.getByPlaceholder('如 5000').fill('60000')
+  await dialog.getByRole('button', { name: '下一步' }).click()
+  // No upper limit any more: the amount goes straight to the real-payment confirm page.
+  await expect(dialog.getByTestId('confirm-price')).toContainText('60,000.00')
+  await expect(dialog.getByTestId('confirm-check')).toBeVisible()
 })
 
 test('favourites test item fills drills', async ({ page }) => {
@@ -87,7 +99,7 @@ test('favourites test item fills drills', async ({ page }) => {
   await page.getByRole('button', { name: '打开演练布防' }).click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByPlaceholder('如 JX040229')).toHaveValue('AB1234')
-  await expect(dialog.getByPlaceholder('上限 50000 元')).toHaveValue('0.02')
+  await expect(dialog.getByPlaceholder('如 5000')).toHaveValue('0.02')
 })
 
 test('test favourite chip fills code and amount in the arm form', async ({ page }) => {
@@ -108,7 +120,7 @@ test('test favourite chip fills code and amount in the arm form', async ({ page 
   await expect(chip).toContainText('测试 ¥0.02')
   await chip.click()
   await expect(dialog.getByPlaceholder('如 JX040229')).toHaveValue('AB1234')
-  await expect(dialog.getByPlaceholder('上限 50000 元')).toHaveValue('0.02')
+  await expect(dialog.getByPlaceholder('如 5000')).toHaveValue('0.02')
 })
 
 test('favourites test item can be cleared from the dialog', async ({ page }) => {

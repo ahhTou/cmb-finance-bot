@@ -37,13 +37,16 @@ describe('validation', () => {
     expect(validCode('JX-0402')).toBe(false)
   })
 
-  it('accepts amounts above 0 up to 50000 with at most two decimals', () => {
+  it('accepts positive amounts with at most two decimals, without an upper limit', () => {
     expect(validAmount('0.01')).toBe(true)
     expect(validAmount('50000')).toBe(true)
+    expect(validAmount('50000.01')).toBe(true)
+    expect(validAmount('60000')).toBe(true)
+    expect(validAmount('12345678.99')).toBe(true)
     expect(validAmount('0')).toBe(false)
-    expect(validAmount('50000.01')).toBe(false)
     expect(validAmount('1.234')).toBe(false)
     expect(validAmount('-1')).toBe(false)
+    expect(validAmount('abc')).toBe(false)
   })
 
   it('formats the confirmation amount with grouping and two decimals', () => {

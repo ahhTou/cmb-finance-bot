@@ -251,6 +251,129 @@
     }
    }
   },
+  "/api/plan": {
+   "get": {
+    "summary": "Plan",
+    "operationId": "plan_api_plan_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "summary": "Save Plan",
+    "operationId": "save_plan_api_plan_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PlanRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Clear Plan",
+    "operationId": "clear_plan_api_plan_delete",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plan/start": {
+   "post": {
+    "summary": "Start Plan",
+    "operationId": "start_plan_api_plan_start_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/PlanStartRequest"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plan/disarm": {
+   "post": {
+    "summary": "Disarm Plan",
+    "operationId": "disarm_plan_api_plan_disarm_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/disarm": {
    "post": {
     "summary": "Disarm",
@@ -876,6 +999,70 @@
      "new"
     ],
     "title": "PatternRequest"
+   },
+   "PlanItemRequest": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "amount": {
+      "type": "string",
+      "title": "Amount"
+     },
+     "at": {
+      "type": "string",
+      "title": "At"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "first_launch",
+       "redemption"
+      ],
+      "title": "Mode",
+      "default": "first_launch"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "amount",
+     "at"
+    ],
+    "title": "PlanItemRequest"
+   },
+   "PlanRequest": {
+    "properties": {
+     "dry_run": {
+      "type": "boolean",
+      "title": "Dry Run",
+      "default": false
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/PlanItemRequest"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "items"
+    ],
+    "title": "PlanRequest"
+   },
+   "PlanStartRequest": {
+    "properties": {
+     "confirm_real_payment": {
+      "type": "boolean",
+      "title": "Confirm Real Payment",
+      "default": false
+     }
+    },
+    "type": "object",
+    "title": "PlanStartRequest"
    },
    "ValidationError": {
     "properties": {

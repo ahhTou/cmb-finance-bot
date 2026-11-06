@@ -292,7 +292,7 @@ function ArmForm({ onClose, mode, drill }: { onClose: () => void; mode: Mode; dr
                 <Input placeholder="如 JX040229" autoFocus {...form.register('code')} />
               </Field>
               <Field label="购买金额">
-                <Input placeholder="上限 50000 元" inputMode="decimal" {...form.register('amount')} />
+                <Input placeholder="如 5000" inputMode="decimal" {...form.register('amount')} />
               </Field>
             </div>
             <FavoritePicker

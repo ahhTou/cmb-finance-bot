@@ -89,6 +89,7 @@ export function TasksPage() {
   return (
     <div className="grid h-full grid-rows-[repeat(3,minmax(180px,1fr))] gap-3.5 overflow-y-auto px-[26px]">
       {modeCard('first_launch')}
+      {modeCard('redemption')}
       <ModeCard
         testId="mode-pickup"
         icon={Repeat}
@@ -105,7 +106,6 @@ export function TasksPage() {
           </Feature>
         ))}
       </ModeCard>
-      {modeCard('redemption')}
       <ArmDialog
         open={armMode !== null}
         onOpenChange={() => setArmMode(null)}

@@ -18,6 +18,7 @@ import night_watch as nw
 import keychain_store
 import purchase_settings
 import favorites
+import watch_plan
 
 import manage
 import notify
@@ -124,8 +125,11 @@ def parser():
     p = Parser(description=__doc__)
     sub = p.add_subparsers(dest='cmd', required=True)
     for name in ('status', 'device', 'system', 'disarm', 'keep-awake', 'screenshot',
-                 'set-login-pattern', 'set-payment-password', 'agent-release'):
+                 'set-login-pattern', 'set-payment-password', 'agent-release',
+                 'plan', 'plan-save', 'plan-disarm', 'plan-clear'):
         sub.add_parser(name)
+    plan_start = sub.add_parser('plan-start')
+    plan_start.add_argument('--confirm-real-payment', action='store_true')
     history = sub.add_parser('history')
     history.add_argument('--limit', type=int, default=0)
     log = sub.add_parser('log')
@@ -190,6 +194,19 @@ def dispatch(a):
                 values = purchase_settings.save(dict(values, **updates))
         return {'settings': values, 'settings_revision': purchase_settings.revision(values)}
     if a.cmd == 'status': return status()
+    if a.cmd == 'plan': return watch_plan.view()
+    if a.cmd == 'plan-save':
+        try:
+            data = json.loads(sys.stdin.read(4097))
+            if not isinstance(data, dict):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise nw.Abort('计划输入格式无效。')
+        watch_plan.save(data)
+        return watch_plan.view()
+    if a.cmd == 'plan-start': return watch_plan.start(a.confirm_real_payment)
+    if a.cmd == 'plan-disarm': return watch_plan.disarm()
+    if a.cmd == 'plan-clear': return watch_plan.clear()
     if a.cmd == 'favorites':
         if a.add is not None:
             return {'favorites': favorites.add(a.add, a.title or ''),
@@ -236,6 +253,8 @@ def dispatch(a):
                                     settings_revision=a.settings_revision)}
     if a.cmd == 'disarm': return {'task': nw.disarm_task()}
     if a.cmd == 'resume':
+        if watch_plan.running():
+            raise nw.Abort('计划正在运行；先取消计划。')
         return {'task': nw.resume_task(a.reason, 'agent:' + a.session if a.session else 'user',
                                       a.kill_stale, a.after_manual_login)}
     if a.cmd == 'keep-awake':
@@ -254,6 +273,8 @@ def dispatch(a):
             task = nw.load_task()
             if task and (task.get('phase') in ('armed', 'preparing', 'waiting', 'firing') or nw.alive(task.get('pid'))):
                 raise nw.Abort('值守任务活动期间不能撤单；先取消防守。')
+            if watch_plan.running():
+                raise nw.Abort('计划正在运行；先取消计划。')
             args = [sys.executable, '-B', str(nw.ROOT / 'src/cancel_orders.py'), '--amount', amount]
             if a.limit:
                 args += ['--limit', str(a.limit)]
@@ -281,6 +302,8 @@ def dispatch(a):
             task = nw.load_task()
             if task and (task.get('phase') in ('armed', 'preparing', 'waiting', 'firing') or nw.alive(task.get('pid'))):
                 raise nw.Abort('值守任务活动期间不能单笔购买或演练。')
+            if watch_plan.running():
+                raise nw.Abort('计划正在运行；先取消计划。')
             import fast_buy_uia2
             settings = purchase_settings.load()
             buffer = io.StringIO()
@@ -308,6 +331,8 @@ def dispatch(a):
         return {}
     if a.cmd == 'emulator':
         with nw.task_lock(False):
+            if watch_plan.running():
+                raise nw.Abort('计划正在运行；先取消计划。')
             task = nw.load_task()
             if a.action == 'stop':
                 if task and task.get('phase') in ('armed', 'preparing', 'waiting', 'firing'):

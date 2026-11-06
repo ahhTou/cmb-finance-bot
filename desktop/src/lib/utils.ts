@@ -102,8 +102,8 @@ export const codeSchema = z
 
 export const amountSchema = z
   .string()
-  .regex(/^[0-9]+(\.[0-9]{1,2})?$/, '金额须为 0–50000 元，最多两位小数。')
-  .refine((v) => Number(v) > 0 && Number(v) <= 50_000, '金额须为 0–50000 元，最多两位小数。')
+  .regex(/^[0-9]+(\.[0-9]{1,2})?$/, '金额须为大于 0 的数字，最多两位小数。')
+  .refine((v) => Number(v) > 0, '金额须为大于 0 的数字，最多两位小数。')
 
 export const validCode = (text: string) => codeSchema.safeParse(text).success
 export const validAmount = (text: string) => amountSchema.safeParse(text).success
