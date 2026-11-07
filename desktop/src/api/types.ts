@@ -6,7 +6,13 @@ export type BuyRequest = components['schemas']['BuyRequest']
 export type CancelRequest = components['schemas']['CancelRequest']
 export type PlanItemRequest = components['schemas']['PlanItemRequest']
 export type PlanRequest = components['schemas']['PlanRequest']
-export type PlanStartRequest = components['schemas']['PlanStartRequest']
+// Kept explicit until the shared OpenAPI generation catches up with this contract.
+export interface PlanStartRequest {
+  plan_id: string
+  content_revision: string
+  settings_revision: string
+  confirm_real_payment: boolean
+}
 export type PushRequest = components['schemas']['PushRequest']
 
 // Responses are whatever admin_cli.py prints; these describe the fields the app reads.
@@ -112,6 +118,15 @@ export interface PushConfig {
   token_set: boolean
 }
 
+export interface PushPreferences {
+  enabled: boolean
+  events: Record<string, boolean>
+}
+
+export interface PushPreferencesView extends PushPreferences {
+  catalog: { key: string; label: string; description: string; group: string }[]
+}
+
 /** POST /api/push/test: delivered, or why the server refused it. */
 export interface PushTestResult {
   sent: boolean
@@ -144,6 +159,7 @@ export interface PlanItem {
   at: string
   mode: Mode
   state?: PlanItemState
+  outcome?: 'success' | 'failed' | 'dry_run' | 'unknown' | null
   task_id?: string | null
   result?: string | null
   armed_at?: string | null
@@ -156,6 +172,7 @@ export interface PlanItem {
 export interface Plan {
   version?: number
   plan_id?: string
+  content_revision?: string
   generation?: string | null
   created_at?: string | null
   started_at?: string | null

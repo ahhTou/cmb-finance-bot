@@ -22,6 +22,7 @@ import watch_plan
 
 import manage
 import push
+import push_settings
 
 
 def atomic_json(path, data):
@@ -127,10 +128,14 @@ def parser():
     for name in ('status', 'device', 'system', 'disarm', 'keep-awake', 'screenshot',
                  'set-login-pattern', 'set-payment-password', 'agent-release',
                  'plan', 'plan-save', 'plan-disarm', 'plan-clear',
-                 'push', 'push-save', 'push-test', 'push-clear'):
+                 'push', 'push-save', 'push-test', 'push-clear',
+                 'push-preferences', 'push-preferences-save'):
         sub.add_parser(name)
     plan_start = sub.add_parser('plan-start')
     plan_start.add_argument('--confirm-real-payment', action='store_true')
+    plan_start.add_argument('--plan-id')
+    plan_start.add_argument('--content-revision')
+    plan_start.add_argument('--settings-revision')
     history = sub.add_parser('history')
     history.add_argument('--limit', type=int, default=0)
     log = sub.add_parser('log')
@@ -186,6 +191,14 @@ def parser():
 
 
 def dispatch(a):
+    if a.cmd == 'push-preferences': return push_settings.view()
+    if a.cmd == 'push-preferences-save':
+        try:
+            data = json.loads(sys.stdin.read(16385))
+        except (ValueError, TypeError):
+            raise nw.Abort('推送选项输入格式无效。')
+        push_settings.save(data)
+        return push_settings.view()
     if a.cmd == 'push': return push.config_info()
     if a.cmd == 'push-save':
         try:
@@ -227,7 +240,10 @@ def dispatch(a):
             raise nw.Abort('计划输入格式无效。')
         watch_plan.save(data)
         return watch_plan.view()
-    if a.cmd == 'plan-start': return watch_plan.start(a.confirm_real_payment)
+    if a.cmd == 'plan-start':
+        return watch_plan.start(a.confirm_real_payment, plan_id=a.plan_id,
+                                content_revision=a.content_revision,
+                                settings_revision=a.settings_revision)
     if a.cmd == 'plan-disarm': return watch_plan.disarm()
     if a.cmd == 'plan-clear': return watch_plan.clear()
     if a.cmd == 'favorites':

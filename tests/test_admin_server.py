@@ -107,6 +107,20 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(run.call_args.kwargs['input']), {'current': '111111', 'new': '222222'})
 
     @patch('admin_server.subprocess.run')
+    def test_push_preferences_routes_validate_boolean_options(self, run):
+        run.return_value = done({'ok': True, 'enabled': True, 'events': {}, 'catalog': []})
+        self.assertEqual(self.call('GET', '/api/push/preferences').status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['push-preferences'])
+        body = {'enabled': False, 'events': {'purchase_success': False, 'purchase_unknown': True}}
+        self.assertEqual(self.call('PUT', '/api/push/preferences', json=body).status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['push-preferences-save'])
+        self.assertEqual(json.loads(run.call_args.kwargs['input']), body)
+        run.reset_mock()
+        for body in ({'enabled': 'false'}, {'events': {'purchase_success': 1}}, {'unknown': True}):
+            self.assertEqual(self.call('PUT', '/api/push/preferences', json=body).status_code, 422)
+        run.assert_not_called()
+
+    @patch('admin_server.subprocess.run')
     def test_push_routes_keep_the_token_out_of_argv(self, run):
         run.return_value = done({'ok': True, 'configured': True,
                                  'server': 'https://ntfy.example.com/',
@@ -162,11 +176,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(json.loads(run.call_args.kwargs['input'])['items'][0]['mode'],
                          'first_launch')
-        self.call('POST', '/api/plan/start')
-        self.assertEqual(run.call_args.args[0][3:], ['plan-start'])
-        self.call('POST', '/api/plan/start', json={'confirm_real_payment': True})
-        self.assertEqual(run.call_args.args[0][3:],
-                         ['plan-start', '--confirm-real-payment'])
+        run.reset_mock()
+        self.assertEqual(self.call('POST', '/api/plan/start').status_code, 422)
+        self.assertEqual(self.call('POST', '/api/plan/start', json={
+            'confirm_real_payment': True}).status_code, 422)
+        run.assert_not_called()
+        versions = {'plan_id': 'plan-1', 'content_revision': 'content-1',
+                    'settings_revision': 'settings-1'}
+        self.call('POST', '/api/plan/start', json=versions)
+        expected = ['plan-start', '--plan-id', 'plan-1', '--content-revision', 'content-1',
+                    '--settings-revision', 'settings-1']
+        self.assertEqual(run.call_args.args[0][3:], expected)
+        self.call('POST', '/api/plan/start', json=dict(versions, confirm_real_payment=True))
+        self.assertEqual(run.call_args.args[0][3:], expected + ['--confirm-real-payment'])
         self.call('POST', '/api/plan/disarm')
         self.assertEqual(run.call_args.args[0][3:], ['plan-disarm'])
         # 停计划进程 + 停当前 watch + 关 App 最坏约 34s，30s 会 504。

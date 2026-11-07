@@ -69,6 +69,13 @@ class PlanTestBase(unittest.TestCase):
     def plan_path(self):
         return self.state / "plan.json"
 
+    def start(self, **kwargs):
+        view = watch_plan.view()
+        plan = view['plan'] or {}
+        return watch_plan.start(plan_id=plan.get('plan_id'),
+                                content_revision=plan.get('content_revision'),
+                                settings_revision=view['settings_revision'], **kwargs)
+
     @contextlib.contextmanager
     def arm_world(self):
         """真实 _arm() 路径的外部世界：全部 mock，不碰 adb/模拟器/网络/钥匙串。"""
@@ -89,6 +96,33 @@ class PlanTestBase(unittest.TestCase):
             for patcher in patches:
                 stack.enter_context(patcher)
             yield
+
+
+class OutcomeContractTest(PlanTestBase):
+    def test_legacy_outcomes_are_conservative(self):
+        cases = [
+            ({'phase': 'done', 'result': '提交成功'}, 'success'),
+            ({'phase': 'done', 'result': '购买失败：额度不足', 'fired_at': 'yes'}, 'failed'),
+            ({'phase': 'done', 'result': '未提交：查询窗口结束'}, 'failed'),
+            ({'phase': 'done', 'result': '演练完成', 'dry_run': True}, 'dry_run'),
+            ({'phase': 'done', 'result': '结果未知：超时', 'fired_at': 'yes'}, 'unknown'),
+            ({'phase': 'done', 'result': '未识别的新文案'}, 'unknown'),
+            ({'phase': 'aborted', 'fired_at': 'yes'}, 'unknown'),
+            ({'phase': 'firing', 'outcome': 'success'}, 'unknown'),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(nw.task_outcome(value), expected)
+
+    def test_persist_records_structured_outcome_and_history(self):
+        current = task(phase='firing')
+        current['fired_at'] = 'marker'
+        nw.save_task(current)
+        finished = dict(current, phase='done', result='购买失败：额度不足')
+        nw.persist(finished)
+        self.assertEqual(nw.load_task()['outcome'], 'failed')
+        record = json.loads((self.state / 'history.jsonl').read_text())
+        self.assertEqual(record['outcome'], 'failed')
 
 
 class SaveTest(PlanTestBase):
@@ -275,13 +309,13 @@ class ViewTest(PlanTestBase):
 class StartTest(PlanTestBase):
     def test_start_without_plan_aborts(self):
         with self.assertRaises(nw.Abort):
-            watch_plan.start()
+            self.start()
 
     def test_real_plan_requires_payment_confirmation(self):
         self.save([self.item(at=self.at())], dry_run=False)
         with patch.object(watch_plan.subprocess, "Popen") as popen:
             with self.assertRaises(nw.Abort) as ctx:
-                watch_plan.start()
+                self.start()
         self.assertIn("真实计划必须明确确认实际付款", str(ctx.exception))
         popen.assert_not_called()
 
@@ -289,7 +323,7 @@ class StartTest(PlanTestBase):
         self.save([self.item(code="AAAA", at=self.now - timedelta(minutes=5))])
         with patch.object(watch_plan.subprocess, "Popen") as popen:
             with self.assertRaises(nw.Abort) as ctx:
-                watch_plan.start(confirm_real_payment=True)
+                self.start(confirm_real_payment=True)
         self.assertIn("已过", str(ctx.exception))
         popen.assert_not_called()
 
@@ -299,7 +333,7 @@ class StartTest(PlanTestBase):
              patch.object(nw, "alive", return_value=True), \
              patch.object(watch_plan.subprocess, "Popen") as popen:
             with self.assertRaises(nw.Abort) as ctx:
-                watch_plan.start(confirm_real_payment=True)
+                self.start(confirm_real_payment=True)
         self.assertIn("已有值守任务", str(ctx.exception))
         popen.assert_not_called()
 
@@ -307,7 +341,7 @@ class StartTest(PlanTestBase):
         plan = self.save([self.item(at=self.at())])
         fake = types.SimpleNamespace(pid=4321)
         with patch.object(watch_plan.subprocess, "Popen", return_value=fake) as popen:
-            data = watch_plan.start()
+            data = self.start()
         argv = popen.call_args.args[0]
         self.assertEqual(argv[0], "/usr/bin/caffeinate")
         self.assertEqual(argv[1:3], ["-ims", sys.executable])
@@ -334,10 +368,10 @@ class StartTest(PlanTestBase):
         self.save([self.item(at=self.at())])
         fake = types.SimpleNamespace(pid=4321)
         with patch.object(watch_plan.subprocess, "Popen", return_value=fake):
-            watch_plan.start()
+            self.start()
         with patch.object(nw, "alive", return_value=True):
             with self.assertRaises(nw.Abort) as ctx:
-                watch_plan.start()
+                self.start()
         self.assertIn("正在运行", str(ctx.exception))
 
     def test_start_after_finished_aborts(self):
@@ -345,19 +379,91 @@ class StartTest(PlanTestBase):
         plan["phase"] = "done"
         watch_plan.save_plan(plan)
         with self.assertRaises(nw.Abort) as ctx:
-            watch_plan.start()
+            self.start()
         self.assertIn("已结束", str(ctx.exception))
 
     def test_real_plan_starts_with_confirmation(self):
         self.save([self.item(at=self.at())], dry_run=False)
         fake = types.SimpleNamespace(pid=4321)
         with patch.object(watch_plan.subprocess, "Popen", return_value=fake):
-            data = watch_plan.start(confirm_real_payment=True)
+            data = self.start(confirm_real_payment=True)
         self.assertEqual(data["plan"]["phase"], "running")
         self.assertEqual(data["plan"]["dry_run"], False)
 
 
+class ConfirmationVersionTest(PlanTestBase):
+    def test_missing_or_mismatched_versions_never_spawn(self):
+        self.save([self.item(at=self.at())], dry_run=False)
+        view = watch_plan.view()
+        valid = dict(plan_id=view['plan']['plan_id'],
+                     content_revision=view['plan']['content_revision'],
+                     settings_revision=view['settings_revision'])
+        with patch.object(watch_plan, '_spawn') as spawn:
+            for key in valid:
+                for value in (None, 'outdated'):
+                    with self.subTest(key=key, value=value), self.assertRaises(nw.Abort):
+                        watch_plan.start(True, **dict(valid, **{key: value}))
+            self.assertEqual(watch_plan.load_plan()['phase'], 'idle')
+            spawn.assert_not_called()
+
+    def test_replaced_plan_and_changed_content_are_rejected(self):
+        self.save([self.item(at=self.at())], dry_run=False)
+        view = watch_plan.view()
+        versions = dict(plan_id=view['plan']['plan_id'],
+                        content_revision=view['plan']['content_revision'],
+                        settings_revision=view['settings_revision'])
+        for replace_identity in (False, True):
+            plan = watch_plan.load_plan()
+            plan['items'][0]['amount'] = '2000.00'
+            if replace_identity:
+                plan['plan_id'] = 'another-plan'
+            watch_plan.save_plan(plan)
+            with patch.object(watch_plan, '_spawn') as spawn, self.assertRaises(nw.Abort):
+                watch_plan.start(True, **versions)
+            spawn.assert_not_called()
+
+    def test_settings_checked_again_under_task_lock(self):
+        self.save([self.item(at=self.at())], dry_run=False)
+        view = watch_plan.view()
+        old = purchase_settings.load()
+        changed = dict(old, first_offset_ms=old['first_offset_ms'] + 1)
+        with patch.object(purchase_settings, 'load', side_effect=[old, changed]), \
+             patch.object(watch_plan, '_spawn') as spawn, self.assertRaises(nw.Abort):
+            watch_plan.start(True, plan_id=view['plan']['plan_id'],
+                             content_revision=view['plan']['content_revision'],
+                             settings_revision=view['settings_revision'])
+        spawn.assert_not_called()
+
+
 class DisarmTest(PlanTestBase):
+    def test_cleanup_does_not_cancel_new_independent_task(self):
+        plan = self.running_plan([self.item(at=self.at())])
+        plan['items'][0].update(state='running', task_id='old-task')
+        watch_plan.save_plan(plan)
+        old = dict(task('old-task', 'waiting'), plan_id=plan['plan_id'])
+        nw.save_task(old)
+        replacement = dict(task('manual-new', 'armed'), plan_id=None)
+        def replace_during_stop(_plan):
+            nw.save_task(replacement)
+        with patch.object(watch_plan, '_stop_plan_process', side_effect=replace_during_stop), \
+             patch.object(nw, 'stop_watch') as stop, patch.object(nw, 'alive', return_value=False):
+            watch_plan.disarm()
+        stop.assert_not_called()
+        self.assertEqual(nw.load_task()['task_id'], 'manual-new')
+        self.assertEqual(nw.load_task()['phase'], 'armed')
+
+    def test_conditional_disarm_checks_ownership_inside_task_lock(self):
+        owned = dict(task('owned', 'waiting'), plan_id='plan-old')
+        nw.save_task(owned)
+        @contextlib.contextmanager
+        def replace_at_lock(*args, **kwargs):
+            nw.save_task(dict(task('new', 'armed'), plan_id=None))
+            yield
+        with patch.object(nw, 'task_lock', replace_at_lock), patch.object(nw, 'stop_watch') as stop:
+            nw.disarm_task(expected_plan_id='plan-old', expected_task_id='owned')
+        stop.assert_not_called()
+        self.assertEqual(nw.load_task()['task_id'], 'new')
+
     def test_disarm_without_running_plan_aborts(self):
         with self.assertRaises(nw.Abort) as ctx:
             watch_plan.disarm()
@@ -413,7 +519,7 @@ class DisarmTest(PlanTestBase):
              patch.object(nw, "disarm_task") as disarm_task:
             data = watch_plan.disarm()
         self.assertEqual(phases_at_kill, ["disarmed"])   # 先写 phase 再杀进程
-        disarm_task.assert_called_once_with()
+        disarm_task.assert_called_once_with(expected_plan_id=plan['plan_id'], expected_task_id='t1')
         saved = watch_plan.load_plan()
         self.assertEqual(saved["phase"], "disarmed")
         self.assertEqual([row["state"] for row in saved["items"]],
@@ -425,7 +531,7 @@ class DisarmTest(PlanTestBase):
         plan = self.running_plan([self.item(at=self.at(90))])
         plan["items"][0].update(state="running", task_id="t1")
         watch_plan.save_plan(plan)
-        nw.save_task(task(task_id="t1", phase="waiting", pid=999))
+        nw.save_task(dict(task(task_id="t1", phase="waiting", pid=999), plan_id=plan['plan_id']))
         with patch.object(nw, "alive", return_value=False), \
              patch.object(nw, "stop_watch") as stop, \
              patch.object(nw, "close_bank_app") as close, \
@@ -463,7 +569,7 @@ class DisarmTest(PlanTestBase):
         self.assertIn("任务未能取消", log_text)
 
     def test_disarm_unknown_plan_process_still_cancels_watch(self):
-        self.running_plan([self.item(at=self.at())])
+        plan = self.running_plan([self.item(at=self.at())])
         task_data = task(task_id="t1", phase="preparing", pid=999)
         with patch.object(nw, "load_task", return_value=task_data), \
              patch.object(nw, "alive", return_value=True), \
@@ -472,7 +578,7 @@ class DisarmTest(PlanTestBase):
              patch.object(nw, "disarm_task") as disarm_task:
             data = watch_plan.disarm()
         kill.assert_not_called()                  # 计划进程身份不明：不盲杀
-        disarm_task.assert_called_once_with()     # 但当前 watch 必须继续取消
+        disarm_task.assert_called_once_with(expected_plan_id=plan['plan_id'], expected_task_id=None)
         saved = watch_plan.load_plan()
         self.assertEqual(saved["phase"], "disarmed")
         self.assertIn("计划进程未能确认停止", saved["result"])
@@ -547,6 +653,44 @@ class RunnerTest(PlanTestBase):
     def two_items(self):
         return [self.item(code="AAAA", at=self.at(60)),
                 self.item(code="BBBB", at=self.at(120))]
+
+    def test_result_classification_and_unknown_stop(self):
+        for result, outcome, arm_count in [
+                ('提交成功', 'success', 2), ('购买失败：额度不足', 'failed', 2),
+                ('未提交：查询窗口结束', 'failed', 2),
+                ('结果未知：结果页超时', 'unknown', 1), ('陌生结果', 'unknown', 1)]:
+            with self.subTest(result=result):
+                self.prepare(self.two_items(), dry_run=False)
+                first = task('t1', 'done', result)
+                if not result.startswith('未提交'):
+                    first['fired_at'] = 'marker'
+                with patch.object(nw, 'arm_task', side_effect=[task('t1'), task('t2')]) as arm, \
+                     patch.object(nw, 'load_task', side_effect=[first, task('t2', 'done', '提交成功')]), \
+                     patch.object(nw, 'alive', return_value=False):
+                    watch_plan.run('gen-run')
+                saved = watch_plan.load_plan()
+                self.assertEqual(arm.call_count, arm_count)
+                self.assertEqual(saved['items'][0]['outcome'], outcome)
+                self.assertEqual(saved['items'][0]['state'], 'done' if outcome == 'success' else 'failed')
+                self.assertEqual(saved['phase'], 'aborted' if outcome == 'unknown' else 'done')
+                if outcome == 'unknown':
+                    self.assertIn('请查交易记录', saved['result'])
+
+    def test_dead_firing_stops_plan_without_killing_or_next_arm(self):
+        self.prepare(self.two_items(), dry_run=False)
+        firing = dict(task('t1', 'firing'), fired_at='marker')
+        with patch.object(nw, 'arm_task', return_value=task('t1')) as arm, \
+             patch.object(nw, 'load_task', return_value=firing), \
+             patch.object(nw, 'alive', return_value=False), \
+             patch.object(watch_plan, 'GRACE_SECONDS', -1), \
+             patch.object(nw, 'disarm_task') as disarm:
+            watch_plan.run('gen-run')
+        saved = watch_plan.load_plan()
+        arm.assert_called_once()
+        disarm.assert_not_called()
+        self.assertEqual(saved['phase'], 'aborted')
+        self.assertEqual(saved['items'][0]['outcome'], 'unknown')
+        self.assertIn('请查交易记录', saved['result'])
 
     def test_runs_items_in_order_then_done(self):
         plan = self.prepare(self.two_items())
@@ -684,7 +828,7 @@ class RunnerTest(PlanTestBase):
         self.assertEqual(saved["phase"], "done")
 
     def test_item_timeout_disarms_watch_and_continues(self):
-        self.prepare(self.two_items())
+        plan = self.prepare(self.two_items())
         armed = task("t1", "armed")
         with patch.object(nw, "arm_task",
                           side_effect=[armed, task("t2", "armed")]), \
@@ -696,7 +840,7 @@ class RunnerTest(PlanTestBase):
             watch_plan.run("gen-run")
         saved = watch_plan.load_plan()
         # 超时杀 watch 必须走 disarm_task（task_lock 内复查 firing + 写终态/历史）。
-        disarm_task.assert_called_once_with()
+        disarm_task.assert_called_once_with(expected_plan_id=plan['plan_id'], expected_task_id='t1')
         self.assertEqual([row["state"] for row in saved["items"]],
                          ["failed", "failed"])
         self.assertIn("超过预计结束时间", saved["items"][0]["result"])
@@ -783,8 +927,8 @@ class RunnerTest(PlanTestBase):
 
     def test_abort_cancels_live_watch(self):
         # P1：计划因未捕获异常中止时，不能留下一个还会到点提交的 watch。
-        self.prepare([self.item(at=self.at(60))])
-        armed = task("t1", "armed")
+        plan = self.prepare([self.item(at=self.at(60))])
+        armed = dict(task("t1", "armed"), plan_id=plan['plan_id'])
         with patch.object(nw, "arm_task", return_value=armed), \
              patch.object(nw, "load_task",
                           side_effect=[armed, RuntimeError("task.json 坏了"), armed, armed]), \
@@ -805,9 +949,9 @@ class RunnerTest(PlanTestBase):
         self.assertEqual(nw.load_task()["phase"], "disarmed")
 
     def test_abort_marks_firing_watch_unknown_without_killing(self):
-        self.prepare([self.item(at=self.at(60))])
-        armed = task("t1", "armed")
-        firing = task("t1", "firing")
+        plan = self.prepare([self.item(at=self.at(60))])
+        armed = dict(task("t1", "armed"), plan_id=plan['plan_id'])
+        firing = dict(task("t1", "firing"), plan_id=plan['plan_id'])
         with patch.object(nw, "arm_task", return_value=armed), \
              patch.object(nw, "load_task",
                           side_effect=[armed, RuntimeError("读任务失败"), firing]), \

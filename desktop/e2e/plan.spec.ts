@@ -75,6 +75,56 @@ test('empty plan: add two items, save, start a drill, then cancel', async ({ pag
   await expect(page.getByTestId('plan-clear')).toBeVisible()
 })
 
+test('real confirmation lists every item and sends the reviewed versions', async ({ page }) => {
+  await open(page, '/plan', 'empty')
+  const firstAt = at(40)
+  const secondAt = at(130)
+  await addItem(page, 0, { code: 'AAAA01', amount: '123.45', at: firstAt })
+  await addItem(page, 1, { code: 'BBBB02', amount: '678.90', at: secondAt, mode: 'redemption' })
+  await page.getByTestId('plan-save').click()
+  await page.getByTestId('plan-start').click()
+  const confirm = page.getByTestId('plan-confirm')
+  const items = confirm.getByTestId('plan-confirm-items').getByRole('listitem')
+  await expect(items).toHaveCount(2)
+  await expect(items.nth(0)).toContainText('AAAA01 · ¥ 123.45')
+  await expect(items.nth(0)).toContainText(`${firstAt.replace('T', ' ')}:00`)
+  await expect(items.nth(1)).toContainText('BBBB02 · ¥ 678.90')
+  await expect(items.nth(1)).toContainText(`${secondAt.replace('T', ' ')}:00`)
+  await expect(confirm.getByRole('button', { name: '确认真实支付' })).toBeDisabled()
+  await confirm.getByTestId('plan-confirm-check').click()
+  const sent = page.waitForRequest((request) => request.url().endsWith('/api/plan/start'))
+  await confirm.getByRole('button', { name: '确认真实支付' }).click()
+  expect((await sent).postDataJSON()).toMatchObject({
+    plan_id: expect.any(String),
+    content_revision: expect.any(String),
+    settings_revision: 'mock-revision',
+    confirm_real_payment: true,
+  })
+  await expect(page.getByTestId('plan-status')).toContainText('运行中')
+})
+
+test('confirmation of an older plan cannot start its replacement', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  await page.getByTestId('plan-start').click()
+  const confirm = page.getByTestId('plan-confirm')
+  await expect(confirm.getByTestId('plan-confirm-items')).toContainText('JX040229')
+  const replacementAt = at(60)
+  await page.evaluate(async (purchaseAt) => {
+    await fetch('/api/plan', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dry_run: true,
+        items: [{ code: 'NEW001', amount: '10', at: `${purchaseAt}:00`, mode: 'first_launch' }],
+      }),
+    })
+  }, replacementAt)
+  await expect(confirm.getByTestId('plan-confirm-items')).not.toContainText('NEW001')
+  await confirm.getByRole('button', { name: '开始演练' }).click()
+  await expect(page.getByText('计划内容或值守配置已变化', { exact: false })).toBeVisible()
+  await expect(page.getByTestId('plan-status')).toContainText('待开始')
+})
+
 test('backend problems disable the start button', async ({ page }) => {
   await open(page, '/plan', 'empty')
   await addItem(page, 0, { code: 'JX040229', amount: '1000', at: at(40) })

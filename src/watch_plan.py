@@ -20,6 +20,7 @@
 """
 import argparse
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -124,6 +125,16 @@ def save_plan(plan):
 
 def _settings_revision():
     return purchase_settings.revision(purchase_settings.load())
+
+
+def plan_content_revision(plan):
+    """Digest only confirmed input; runtime state and computed times are excluded."""
+    content = {"dry_run": plan.get("dry_run", False), "items": [
+        {key: item.get(key) for key in ("code", "amount", "at", "mode")}
+        for item in plan.get("items", [])]}
+    encoded = json.dumps(content, sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 # ---------------------------------------------------------------- 校验与调度
@@ -233,7 +244,7 @@ def view():
     running = stale = False
     if plan is not None:
         computed = schedule(plan, settings, now)
-        plan = dict(plan, items=computed["items"])
+        plan = dict(plan, items=computed["items"], content_revision=plan_content_revision(plan))
         problems, warnings = computed["problems"], computed["warnings"]
         running = plan.get("phase") == "running" and nw.alive(plan.get("pid"))
         stale = plan.get("phase") == "running" and not running
@@ -310,7 +321,8 @@ def _spawn(generation):
                                 cwd=str(ROOT), start_new_session=True)
 
 
-def start(confirm_real_payment=False):
+def start(confirm_real_payment=False, plan_id=None, content_revision=None,
+          settings_revision=None):
     """plan-start：严格校验后启动计划进程，pid 写进 plan.json。"""
     with plan_lock(False):
         plan = load_plan()
@@ -329,6 +341,17 @@ def start(confirm_real_payment=False):
         if not plan.get("dry_run") and not confirm_real_payment:
             raise nw.Abort("真实计划必须明确确认实际付款。")
         with nw.task_lock(False):
+            # Settings writes use task_lock too: compare and commit under that
+            # lock, so no new configuration can slip between confirmation/start.
+            settings = purchase_settings.load()
+            if (not plan_id or not content_revision or not settings_revision
+                    or plan_id != plan.get("plan_id")
+                    or content_revision != plan_content_revision(plan)
+                    or settings_revision != purchase_settings.revision(settings)):
+                raise nw.Abort("计划内容或值守配置已变化，或缺少确认版本；请重新读取计划并核对后开始。")
+            problems = schedule(plan, settings, _now())["problems"]
+            if problems:
+                raise nw.Abort(problems[0])
             task = nw.load_task()
             if _active_task(task):
                 raise nw.Abort("已有值守任务在运行；先取消防守再开始计划。")
@@ -407,7 +430,9 @@ def _disarm_current_watch(plan, item_index):
     if not task or task.get("phase") not in ACTIVE_PHASES:
         return  # 没有任务或已经是终态：无需处理
     try:
-        nw.disarm_task()
+        nw.disarm_task(expected_plan_id=plan.get("plan_id"),
+                       expected_task_id=(plan["items"][item_index].get("task_id")
+                                         if item_index is not None else None))
     except nw.Abort as exc:
         message = f"任务未能取消：{exc}"
         _note(message)
@@ -456,6 +481,8 @@ def disarm():
                                      f"{message}")
                 save_plan(current)
     _disarm_current_watch(plan, running_index)
+    nw.alert("计划已取消", "计划调度已取消；当前布防的取消结果请查看计划页。",
+             event="plan_cancelled")
     return view()
 
 
@@ -511,9 +538,10 @@ def _summary(plan):
             f"跳过 {counts['skipped']} 项")
 
 
-def _finish_item(plan, index, state, result):
+def _finish_item(plan, index, state, result, outcome=None):
     item = plan["items"][index]
-    item.update(state=state, result=result, ended_at=_now_iso())
+    item.update(state=state, result=result, outcome=outcome or ("failed" if state == "failed" else None),
+                ended_at=_now_iso())
     plan["last_tick"] = _now_iso()
     return _save_running(plan)
 
@@ -527,11 +555,11 @@ def _abort(plan, message, item_index=None, item_state="skipped", item_result=Non
     if not _save_running(plan):
         return False
     log(f"计划已中止：{message}")
-    nw.alert("计划已中止", message, 5)
+    nw.alert("计划已中止", message, 5, event='plan_aborted')
     return True
 
 
-def _abort_running_watch():
+def _abort_running_watch(plan):
     """Cancel the live watch when the plan dies unexpectedly.
 
     Returns a note for the plan/item result; "" when there is nothing left to
@@ -543,12 +571,14 @@ def _abort_running_watch():
     except Exception as exc:
         return (f"无法读取当前值守任务（{type(exc).__name__}）：结果未知，"
                 f"请查交易记录，不要重复提交")
-    if not task or task.get("phase") not in ACTIVE_PHASES:
+    if (not task or task.get("plan_id") != plan.get("plan_id")
+            or task.get("phase") not in ACTIVE_PHASES):
         return ""
     if task.get("phase") == "firing":
         return "提交阶段异常，结果未知；请查交易记录，不要重复提交"
     try:
-        nw.disarm_task()
+        nw.disarm_task(expected_plan_id=plan.get("plan_id"),
+                       expected_task_id=task.get("task_id"))
     except Exception as exc:
         return f"当前值守未能取消（{exc}）；结果未知，请查交易记录，不要重复提交"
     return ""
@@ -558,7 +588,7 @@ def _safe_abort(plan, message):
     """Exception path: never leave plan.json stuck in running, nor a live watch."""
     if _read_running(plan) is None:
         return
-    note = _abort_running_watch()
+    note = _abort_running_watch(plan)
     result = f"{message}；{note}" if note else message
     with plan_lock():
         current = load_plan()
@@ -573,7 +603,7 @@ def _safe_abort(plan, message):
                        last_tick=now)
         save_plan(current)
     log(f"计划异常中止：{result}")
-    nw.alert("计划已中止", result, 5)
+    nw.alert("计划已中止", result, 5, event='plan_aborted')
 
 
 def _wait_item(plan, index, end_at):
@@ -597,11 +627,19 @@ def _wait_item(plan, index, end_at):
         terminal = bool(task and task.get("phase") in ("done", "aborted", "disarmed"))
         live = bool(task and nw.alive(task.get("pid")))
         if terminal and not live:
-            return task.get("phase"), task.get("result")
+            if task.get("phase") == "disarmed":
+                return "disarmed", task.get("result")
+            outcome = nw.task_outcome(task)
+            result = task.get("result")
+            if outcome == "unknown":
+                result = f"结果未知：{result or '没有可确认的交易结果'}；请查交易记录，不要重复提交"
+            return outcome, result
         if not live:
             grace = grace if grace is not None else time.monotonic() + GRACE_SECONDS
             if time.monotonic() >= grace:
-                return "failed", "值守进程已退出"
+                if task is None or task.get("phase") == "firing" or task.get("fired_at"):
+                    return "unknown", "值守进程已退出，结果未知；请查交易记录，不要重复提交"
+                return "failed", "值守进程已退出（未进入提交）"
         else:
             grace = None
         if datetime.now() > end_at + END_TIMEOUT:
@@ -613,7 +651,8 @@ def _wait_item(plan, index, end_at):
                     # disarm_task re-checks `firing` under task_lock, so this can
                     # not SIGTERM a submission that started in between; it also
                     # leaves task.json terminal and appends a history record.
-                    nw.disarm_task()
+                    nw.disarm_task(expected_plan_id=plan.get("plan_id"),
+                                   expected_task_id=task_id)
             except (nw.Abort, OSError) as exc:
                 return ("firing-timeout",
                         f"布防超时且无法终止（{exc}）；结果未知，请查交易记录，不要重复提交")
@@ -630,7 +669,7 @@ def run(generation):
             return
     action = "演练" if plan.get("dry_run") else "真实"
     try:
-        nw.alert(f"计划已开始：{len(plan.get('items') or [])} 项（{action}）")
+        nw.alert(f"计划已开始：{len(plan.get('items') or [])} 项（{action}）", event='plan_started')
         log(f"计划开始：{len(plan.get('items') or [])} 项（{action}）")
         while True:
             plan = _read_running(plan)
@@ -644,7 +683,7 @@ def run(generation):
                 if not _save_running(plan):
                     return
                 log(f"计划结束：{summary}")
-                nw.alert(f"计划已结束（{action}）", summary)
+                nw.alert(f"计划已结束（{action}）", summary, event='plan_completed')
                 return
             item = plan["items"][index]
             at = _plan_at(item)
@@ -653,7 +692,7 @@ def run(generation):
                 if not _finish_item(plan, index, "skipped", "购买时间已过"):
                     return
                 log(f"第 {index + 1} 项购买时间已过，跳过。")
-                nw.alert(f"计划第 {index + 1} 项跳过", f"{item['code']} 购买时间已过")
+                nw.alert(f"计划第 {index + 1} 项跳过", f"{item['code']} 购买时间已过", event='plan_item_skipped')
                 continue
             settings = purchase_settings.load()
             if purchase_settings.revision(settings) != plan.get("settings_revision"):
@@ -683,7 +722,7 @@ def run(generation):
                 if not _finish_item(plan, index, "failed", str(exc)):
                     return
                 log(f"第 {index + 1} 项布防失败：{exc}")
-                nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{exc}", 5)
+                nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{exc}", 5, event='plan_item_failed')
                 continue
             item["task_id"] = task.get("task_id") if isinstance(task, dict) else None
             plan["last_tick"] = _now_iso()
@@ -697,23 +736,24 @@ def run(generation):
                 _abort(plan, f"第 {index + 1} 项布防被取消，计划已停止",
                        item_index=index, item_state="skipped", item_result="用户取消布防")
                 return
-            if state == "firing-timeout":
-                _finish_item(plan, index, "failed", result)
+            if state in ("unknown", "firing-timeout"):
+                if not _finish_item(plan, index, "failed", result, outcome="unknown"):
+                    return
                 _abort(plan, f"第 {index + 1} 项{result}")
                 return
-            if state == "done":
-                if not _finish_item(plan, index, "done", result):
+            if state in ("success", "dry_run"):
+                if not _finish_item(plan, index, "done", result, outcome=state):
                     return
                 log(f"第 {index + 1} 项完成：{result or '已提交'}")
                 nw.alert(f"计划第 {index + 1} 项完成",
                          f"{item['code']}：{result or '已提交'}",
-                         3 if plan.get("dry_run") else 5)
+                         3 if plan.get("dry_run") else 5, event='plan_item_completed')
             else:
                 if not _finish_item(plan, index, "failed", result):
                     return
                 log(f"第 {index + 1} 项失败：{result or '未知'}")
                 nw.alert(f"计划第 {index + 1} 项失败",
-                         f"{item['code']}：{result or '未知原因'}", 5)
+                         f"{item['code']}：{result or '未知原因'}", 5, event='plan_item_failed')
     except Exception as exc:
         _safe_abort(plan, f"{type(exc).__name__}: {exc}")
 

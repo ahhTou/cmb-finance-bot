@@ -43,6 +43,7 @@ export function PlanPage() {
   const [dryRun, setDryRun] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+  const [confirmation, setConfirmation] = useState<PlanView | null>(null)
   const [now, setNow] = useState(() => new Date())
 
   // The status card shows a countdown; a one-second tick is enough.
@@ -68,6 +69,9 @@ export function PlanPage() {
   const warnings = view?.warnings ?? []
   const totals = planTotals(plan)
   const next = nextItem(plan)
+  const confirmPlan = confirmation?.plan ?? null
+  const confirmTotals = planTotals(confirmPlan)
+  const confirmDryRun = confirmPlan?.dry_run ?? false
   const rows = readOnly ? draftFromPlan(plan) : (draft ?? [])
   const localProblems = readOnly ? [] : draftProblems(draft ?? [])
   const dirty = readOnly ? false : planDirty(draft ?? [], dryRun, plan)
@@ -118,16 +122,29 @@ export function PlanPage() {
 
   function openConfirm() {
     if (!canStart) return
+    if (!plan?.plan_id || !plan.content_revision || !view?.settings_revision) {
+      useUI.getState().setMessage('缺少计划确认版本，请刷新计划后重试。')
+      return
+    }
+    // Freeze both the displayed list and the exact versions this confirmation authorizes.
+    setConfirmation(structuredClone(view))
     setConfirmed(false)
     setConfirming(true)
   }
 
   async function startNow() {
-    const body: PlanStartRequest = { confirm_real_payment: !dryRun && confirmed }
-    const result = await run(dryRun ? '开始演练计划' : '开始真实计划', () =>
+    if (!confirmPlan?.plan_id || !confirmPlan.content_revision || !confirmation?.settings_revision) return
+    const body: PlanStartRequest = {
+      plan_id: confirmPlan.plan_id,
+      content_revision: confirmPlan.content_revision,
+      settings_revision: confirmation.settings_revision,
+      confirm_real_payment: !confirmDryRun && confirmed,
+    }
+    const result = await run(confirmDryRun ? '开始演练计划' : '开始真实计划', () =>
       api<PlanView>('POST', '/api/plan/start', body),
     )
-    if (result) setConfirming(false)
+    setConfirming(false)
+    if (!result) await qc.invalidateQueries({ queryKey: q.plan.queryKey })
   }
 
   async function disarm() {
@@ -218,6 +235,9 @@ export function PlanPage() {
         </MetricGrid>
         {stale && (
           <Hint tone="warn">计划进程已退出，但计划仍标记为运行中。请点「取消计划」止损后重新保存。</Hint>
+        )}
+        {(phase === 'aborted' || phase === 'disarmed') && plan?.result && (
+          <Hint tone="warn">{plan.result}</Hint>
         )}
         {warnings.length > 0 && (
           <div className="flex flex-col gap-1 rounded-lg bg-warn/10 px-3 py-2">
@@ -325,8 +345,8 @@ export function PlanPage() {
       <Dialog
         open={confirming}
         onOpenChange={(open) => !open && setConfirming(false)}
-        title={dryRun ? '开始演练计划' : '开始真实计划'}
-        subtitle={dryRun ? '演练只输密码，不点确定、不提交。' : '每项到点会按填写金额实际付款。'}
+        title={confirmDryRun ? '开始演练计划' : '开始真实计划'}
+        subtitle={confirmDryRun ? '演练只输密码，不点确定、不提交。' : '请逐项核对产品、金额和完整购买时间。'}
         width={480}
         dismissable={!busy}
       >
@@ -334,32 +354,45 @@ export function PlanPage() {
           <div className="flex flex-col gap-2 rounded-xl bg-field px-4 py-3">
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted">布防项</span>
-              <span className="font-semibold">{totals.count} 项</span>
+              <span className="font-semibold">{confirmTotals.count} 项</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-muted">{dryRun ? '演练合计金额' : '真实支付合计'}</span>
-              <span className="font-rounded font-semibold text-[22px]">¥ {totals.amount}</span>
+              <span className="text-[11px] text-muted">
+                {confirmDryRun ? '演练合计金额' : '真实支付合计'}
+              </span>
+              <span className="font-rounded font-semibold text-[22px]">¥ {confirmTotals.amount}</span>
             </div>
           </div>
-          {next && (
-            <p className="text-[11px] text-muted">
-              第一项 {next.code} · 购买时间 {isoClock(next.at)}；之后按时间顺序串行执行。
-            </p>
-          )}
-          {!dryRun && (
+          <ol
+            data-testid="plan-confirm-items"
+            className="flex max-h-[260px] list-decimal flex-col gap-2 overflow-y-auto pl-5 text-xs"
+          >
+            {confirmPlan?.items.map((item, index) => (
+              <li key={item.item_id ?? index}>
+                <span className="font-semibold">
+                  {item.code} · ¥ {item.amount}
+                </span>
+                <div className="text-[11px] text-muted">
+                  {item.mode === 'redemption' ? '不定时抢购' : '首发模式'} · {item.at.replace('T', ' ')}
+                </div>
+              </li>
+            ))}
+          </ol>
+          <Hint>按核对时的计划内容及值守配置版本开始；任一版本变化都需重新核对。</Hint>
+          {!confirmDryRun && (
             <Checkbox
               testId="plan-confirm-check"
               checked={confirmed}
               onChange={setConfirmed}
-              label={`我已核对产品和金额，确认真实支付 ¥${totals.amount}`}
+              label={`我已核对全部产品、金额和时间，确认真实支付 ¥${confirmTotals.amount}`}
             />
           )}
           <div className="flex justify-end gap-2.5">
             <Button disabled={busy} onClick={() => setConfirming(false)}>
               返回
             </Button>
-            <Button variant="primary" disabled={busy || (!dryRun && !confirmed)} onClick={startNow}>
-              {dryRun ? '开始演练' : '确认真实支付'}
+            <Button variant="primary" disabled={busy || (!confirmDryRun && !confirmed)} onClick={startNow}>
+              {confirmDryRun ? '开始演练' : '确认真实支付'}
             </Button>
           </div>
         </div>

@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 import uvicorn
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -136,6 +136,12 @@ class PasswordRequest(BaseModel):
     new: str
 
 
+class PushPreferencesRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: StrictBool = True
+    events: Dict[str, StrictBool] = Field(default_factory=dict)
+
+
 class PushRequest(BaseModel):
     server: str
     topic: str
@@ -156,6 +162,9 @@ class PlanRequest(BaseModel):
 
 
 class PlanStartRequest(BaseModel):
+    plan_id: str
+    content_revision: str
+    settings_revision: str
     confirm_real_payment: bool = False
 
 
@@ -221,6 +230,16 @@ def arm(body: ArmRequest):
     return run(args)
 
 
+@app.get('/api/push/preferences')
+def push_preferences():
+    return run(['push-preferences'])
+
+
+@app.put('/api/push/preferences')
+def save_push_preferences(body: PushPreferencesRequest):
+    return run(['push-preferences-save'], body.model_dump(exclude_unset=True))
+
+
 @app.get('/api/plan')
 def plan():
     return run(['plan'])
@@ -233,9 +252,11 @@ def save_plan(body: PlanRequest):
 
 
 @app.post('/api/plan/start')
-def start_plan(body: Optional[PlanStartRequest] = None):
-    args = ['plan-start']
-    if body and body.confirm_real_payment:
+def start_plan(body: PlanStartRequest):
+    args = ['plan-start', '--plan-id', body.plan_id,
+            '--content-revision', body.content_revision,
+            '--settings-revision', body.settings_revision]
+    if body.confirm_real_payment:
         args.append('--confirm-real-payment')
     return run(args)
 

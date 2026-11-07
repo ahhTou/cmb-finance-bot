@@ -1,7 +1,7 @@
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, Star } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import type { Favorite } from '../api/types'

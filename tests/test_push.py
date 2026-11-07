@@ -1,9 +1,11 @@
 import contextlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from email.message import Message
 import io
 import json
 import sys
 import threading
+import urllib.error
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,52 +14,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import push
 
 
-class Handler(BaseHTTPRequestHandler):
-    """Local fake ntfy server: records each request and answers with a set status."""
-
-    def do_POST(self):
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(length)
-            self.server.requests.append(
-                {"path": self.path, "headers": self.headers, "body": body})
-            if self.server.delay:
-                self.server.waited.set()
-                threading.Event().wait(self.server.delay)
-            self.send_response(self.server.status)
-            if self.server.location:
-                self.send_header("Location", self.server.location)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        except OSError:
-            pass    # the client already timed out and closed the socket
-
-    def log_message(self, *args):
-        pass
-
-
 class FakeNtfy:
+    """In-memory urllib boundary: no listener, real network, or elapsed timeout."""
+
     def __init__(self, status=200, delay=0.0, location=None):
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.httpd.daemon_threads = True
-        self.httpd.status = status
-        self.httpd.delay = delay
-        self.httpd.location = location
-        self.httpd.waited = threading.Event()
-        self.httpd.requests = []
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
-        self.thread = threading.Thread(target=self.httpd.serve_forever,
-                                       kwargs={"poll_interval": 0.01}, daemon=True)
-        self.thread.start()
+        self.status = status
+        self.delay = delay
+        self.location = location
+        self.url = f"https://ntfy.example.com/mock-{id(self)}/"
+        self.requests = []
+        self.httpd = SimpleNamespace(waited=threading.Event())
 
-    @property
-    def requests(self):
-        return self.httpd.requests
-
-    def close(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.thread.join(2)
+    def open(self, request, timeout):
+        headers = Message()
+        for key, value in request.header_items():
+            headers[key] = value
+        self.requests.append({"path": "/", "headers": headers, "body": request.data})
+        if self.delay:
+            self.httpd.waited.set()
+            raise TimeoutError("mock timeout")
+        if self.status >= 300:
+            raise urllib.error.HTTPError(request.full_url, self.status, "mock status", {}, None)
+        return contextlib.nullcontext(SimpleNamespace(status=self.status))
 
 
 def config(server, topic="test-topic", token="test-token"):
@@ -69,10 +47,20 @@ class PushTest(unittest.TestCase):
         self.find = patch.object(push.keychain_store, "find")
         self.mock_find = self.find.start()
         self.addCleanup(self.find.stop)
+        preferences = patch.object(push.push_settings, "load", return_value=push.push_settings.validate({}))
+        self.mock_preferences = preferences.start()
+        self.addCleanup(preferences.stop)
+        self.servers = {}
+        opener = patch.object(push._OPENER, "open", side_effect=self.open)
+        self.mock_open = opener.start()
+        self.addCleanup(opener.stop)
+
+    def open(self, request, timeout):
+        return self.servers[request.full_url].open(request, timeout)
 
     def serve(self, status=200, delay=0.0, location=None):
         fake = FakeNtfy(status=status, delay=delay, location=location)
-        self.addCleanup(fake.close)
+        self.servers[fake.url] = fake
         return fake
 
     def send(self, *args, **kwargs):
@@ -132,7 +120,7 @@ class PushTest(unittest.TestCase):
         self.assertIn("timeout", err.lower())
         self.assertNotIn("secret-token-9", err)
         self.assertEqual(len(err.splitlines()), 1)
-        # The fake did receive the request, so this is a real timeout path.
+        # The mocked transport records the attempt before raising a timeout.
         self.assertTrue(fake.httpd.waited.wait(1))
 
     def test_redirect_is_not_followed_and_reports_only_the_status(self):
@@ -188,7 +176,7 @@ class PushTest(unittest.TestCase):
              patch("builtins.input", side_effect=["https://ntfy.example.com", "topic-1"]), \
              patch.object(push.getpass, "getpass", return_value="secret-token"), \
              patch.object(push.keychain_store, "put", side_effect=put), \
-             patch.object(push, "send", return_value=True) as send, \
+             patch.object(push, "send_test", return_value={"sent": True}) as send, \
              contextlib.redirect_stdout(out):
             push.setup()
 
@@ -196,7 +184,7 @@ class PushTest(unittest.TestCase):
         self.assertEqual(json.loads(saved["payload"]),
                          {"server": "https://ntfy.example.com/",
                           "topic": "topic-1", "token": "secret-token"})
-        self.assertEqual(send.call_args.args[0], "测试推送")
+        send.assert_called_once_with()
         self.assertIn("测试推送已发送", out.getvalue())
 
     def test_setup_rejects_http_server_and_non_tty(self):
@@ -271,6 +259,88 @@ class PushTest(unittest.TestCase):
         self.mock_find.side_effect = RuntimeError("钥匙串读取失败（系统状态 -25300）。")
         with self.assertRaises(RuntimeError):
             push.send_test()
+
+    def test_disabled_global_never_reads_credentials_or_sends(self):
+        self.mock_preferences.return_value = push.push_settings.validate({"enabled": False})
+        self.assertEqual(self.send("标题", "正文", event="purchase_success"), (False, ""))
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_disabled_event_never_reads_credentials_or_sends(self):
+        self.mock_preferences.return_value = push.push_settings.validate(
+            {"events": {"purchase_success": False}})
+        self.assertEqual(self.send("标题", "正文", event="purchase_success"), (False, ""))
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_legacy_calls_use_system_status_and_explicit_event_is_independent(self):
+        fake = self.serve()
+        self.mock_find.return_value = config(fake.url)
+        self.mock_preferences.return_value = push.push_settings.validate(
+            {"events": {"system_status": False}})
+        self.assertEqual(self.send("状态", "旧调用"), (False, ""))
+        self.mock_find.assert_not_called()
+        self.assertTrue(self.send("成功", "交易委托已接受", event="purchase_success")[0])
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_every_catalog_event_can_be_filtered_before_keychain_access(self):
+        for key in push.push_settings.EVENT_KEYS:
+            with self.subTest(event=key):
+                self.mock_preferences.return_value = push.push_settings.validate(
+                    {"events": {key: False}})
+                self.assertFalse(self.send("标题", "正文", event=key)[0])
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_unknown_events_are_silent_and_do_not_fall_back(self):
+        for event in ("purchase_typo", "", 1, [], {}):
+            with self.subTest(event=event):
+                self.assertEqual(self.send("标题", "正文", event=event), (False, ""))
+        self.mock_preferences.assert_not_called()
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_unreadable_or_invalid_preferences_never_break_watch(self):
+        for failure in (OSError("file failure"), RuntimeError("bad settings"),
+                        ValueError("bad json"), Exception("unexpected")):
+            with self.subTest(failure=type(failure).__name__):
+                self.mock_preferences.side_effect = failure
+                self.assertEqual(self.send("标题", "正文", event="health_warning"), (False, ""))
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_preferences_are_checked_fresh_for_each_notification(self):
+        fake = self.serve()
+        self.mock_find.return_value = config(fake.url)
+        self.mock_preferences.side_effect = [
+            push.push_settings.validate({}),
+            push.push_settings.validate({"events": {"watch_started": False}}),
+            push.push_settings.validate({"enabled": False}),
+            push.push_settings.validate({}),
+        ]
+        results = [self.send("状态", "布防", event="watch_started")[0] for _ in range(4)]
+        self.assertEqual(results, [True, False, False, True])
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(self.mock_find.call_count, 2)
+
+    def test_test_push_bypasses_all_preferences_including_invalid_file(self):
+        fake = self.serve()
+        self.mock_find.return_value = config(fake.url)
+        self.mock_preferences.side_effect = RuntimeError("corrupt preferences")
+        self.assertEqual(push.send_test(), {"sent": True})
+        self.mock_preferences.assert_not_called()
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_unexpected_keychain_failure_is_silent(self):
+        self.mock_find.side_effect = OSError("must not leak details")
+        self.assertEqual(self.send("标题", "正文"), (False, ""))
+        self.mock_open.assert_not_called()
+
+    def test_redirect_handler_refuses_replaying_authorization(self):
+        request = push.urllib.request.Request("https://ntfy.example.com/",
+                                              headers={"Authorization": "Bearer test-token"})
+        self.assertIsNone(push._NoRedirect().redirect_request(
+            request, None, 302, "Found", {}, "https://other.example.com/"))
 
     def test_server_url_validation(self):
         self.assertEqual(push._server_url("https://ntfy.example.com"),

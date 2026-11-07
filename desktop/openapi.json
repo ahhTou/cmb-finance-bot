@@ -251,6 +251,56 @@
     }
    }
   },
+  "/api/push/preferences": {
+   "get": {
+    "summary": "Push Preferences",
+    "operationId": "push_preferences_api_push_preferences_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "summary": "Save Push Preferences",
+    "operationId": "save_push_preferences_api_push_preferences_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PushPreferencesRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plan": {
    "get": {
     "summary": "Plan",
@@ -323,18 +373,11 @@
      "content": {
       "application/json": {
        "schema": {
-        "anyOf": [
-         {
-          "$ref": "#/components/schemas/PlanStartRequest"
-         },
-         {
-          "type": "null"
-         }
-        ],
-        "title": "Body"
+        "$ref": "#/components/schemas/PlanStartRequest"
        }
       }
-     }
+     },
+     "required": true
     },
     "responses": {
      "200": {
@@ -1135,6 +1178,18 @@
    },
    "PlanStartRequest": {
     "properties": {
+     "plan_id": {
+      "type": "string",
+      "title": "Plan Id"
+     },
+     "content_revision": {
+      "type": "string",
+      "title": "Content Revision"
+     },
+     "settings_revision": {
+      "type": "string",
+      "title": "Settings Revision"
+     },
      "confirm_real_payment": {
       "type": "boolean",
       "title": "Confirm Real Payment",
@@ -1142,7 +1197,31 @@
      }
     },
     "type": "object",
+    "required": [
+     "plan_id",
+     "content_revision",
+     "settings_revision"
+    ],
     "title": "PlanStartRequest"
+   },
+   "PushPreferencesRequest": {
+    "properties": {
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "default": true
+     },
+     "events": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "type": "object",
+      "title": "Events"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "title": "PushPreferencesRequest"
    },
    "PushRequest": {
     "properties": {

@@ -28,6 +28,7 @@ class AdminTest(unittest.TestCase):
         self.stack.enter_context(patch.object(admin.manage, "status_info", return_value={"emulator": {"running": False}}))
         self.stack.enter_context(patch.object(admin.push, 'configured', return_value=False))
         self.stack.enter_context(patch.object(admin.favorites, 'PATH', state / 'favorites.json'))
+        self.stack.enter_context(patch.object(admin.push_settings, 'SETTINGS', state / 'push-settings.json'))
 
     def tearDown(self):
         self.stack.close()
@@ -74,6 +75,23 @@ class AdminTest(unittest.TestCase):
         code, data = self.call('set-payment-password', '--new', 'do-not-echo')
         self.assertEqual(code, 1)
         self.assertNotIn('do-not-echo', json.dumps(data))
+
+    def test_push_preferences_persist_independently_of_purchase_settings(self):
+        purchase_revision = admin.purchase_settings.revision(admin.purchase_settings.load())
+        code, initial = self.call('push-preferences')
+        self.assertEqual(code, 0)
+        self.assertTrue(initial['enabled'])
+        self.assertTrue(initial['events']['purchase_success'])
+        code, saved = self.call('push-preferences-save', stdin=json.dumps({
+            'events': {'purchase_success': False, 'purchase_unknown': True}}))
+        self.assertEqual(code, 0)
+        self.assertFalse(saved['events']['purchase_success'])
+        self.assertTrue(saved['events']['purchase_unknown'])
+        self.assertEqual(self.call('push-preferences')[1], saved)
+        self.assertEqual(admin.purchase_settings.revision(admin.purchase_settings.load()), purchase_revision)
+        for payload in ('not-json', '[]', '{"enabled":1}', '{"events":{"typo":false}}'):
+            self.assertEqual(self.call('push-preferences-save', stdin=payload)[0], 1)
+        self.assertEqual(self.call('push-preferences')[1], saved)
 
     def test_push_config_save_test_and_clear_never_echo_the_token(self):
         info = {'configured': True, 'server': 'https://ntfy.example.com/',
@@ -401,11 +419,22 @@ class AdminTest(unittest.TestCase):
         self.assertIn('真实计划必须明确确认实际付款', data['error'])
         popen.assert_not_called()
 
+    def test_plan_start_requires_explicit_versions_even_when_confirmed(self):
+        self.assertEqual(self.call('plan-save', stdin=self.plan_payload(dry_run=False))[0], 0)
+        with patch.object(nw.subprocess, 'Popen') as popen:
+            code, data = self.call('plan-start', '--confirm-real-payment')
+        self.assertEqual(code, 1)
+        self.assertIn('确认版本', data['error'])
+        popen.assert_not_called()
+
     def test_plan_start_spawns_worker_and_rejects_second_start(self):
-        self.assertEqual(self.call('plan-save', stdin=self.plan_payload())[0], 0)
+        code, saved = self.call('plan-save', stdin=self.plan_payload())
+        self.assertEqual(code, 0)
         fake = types.SimpleNamespace(pid=4321)
         with patch.object(nw.subprocess, 'Popen', return_value=fake) as popen:
-            code, data = self.call('plan-start')
+            code, data = self.call('plan-start', '--plan-id', saved['plan']['plan_id'],
+                                   '--content-revision', saved['plan']['content_revision'],
+                                   '--settings-revision', saved['settings_revision'])
         self.assertEqual(code, 0)
         self.assertEqual(data['plan']['phase'], 'running')
         argv = popen.call_args.args[0]

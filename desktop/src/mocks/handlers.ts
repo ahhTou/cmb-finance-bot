@@ -15,6 +15,7 @@ import {
   SYSTEM,
   scenario,
 } from './fixtures'
+import pushPreferencesDefaults from './push-preferences.json'
 
 /** In-memory backend so arming, disarming and favorites behave like the real one. */
 const kind = scenario()
@@ -25,6 +26,7 @@ const state = {
   history: kind === 'empty' ? [] : [...HISTORY],
   plan: makePlan(kind),
   push: makePush(kind),
+  pushPreferences: structuredClone(pushPreferencesDefaults),
   planLogs:
     kind === 'plan'
       ? [`${localISO(new Date()).slice(5).replace('T', ' ')} 已保存计划：2 项（演练）`]
@@ -102,11 +104,20 @@ function planWarnings(plan: Plan): string[] {
   return []
 }
 
+function planContentRevision(plan: Plan) {
+  return `mock-content:${JSON.stringify({
+    dry_run: plan.dry_run,
+    items: plan.items.map(({ code, amount, at, mode }) => ({ code, amount, at, mode })),
+  })}`
+}
+
 function planView(): PlanView {
   const plan = state.plan
   const running = plan?.phase === 'running'
   return {
-    plan: plan ? { ...plan, items: plan.items.map(planItemView) } : null,
+    plan: plan
+      ? { ...plan, content_revision: planContentRevision(plan), items: plan.items.map(planItemView) }
+      : null,
     running,
     stale: false,
     problems: plan ? planProblems(plan) : [],
@@ -352,6 +363,23 @@ export const handlers = [
     state.push = { configured: false, server: null, topic: null, token_set: false }
     return HttpResponse.json(state.push)
   }),
+  http.get('/api/push/preferences', () => HttpResponse.json(state.pushPreferences)),
+  http.put('/api/push/preferences', async ({ request }) => {
+    const body = (await request.json()) as { enabled: boolean; events: Record<string, boolean> }
+    if (typeof body.enabled !== 'boolean' || !body.events) return fail('通知偏好格式无效。')
+    if (
+      Object.entries(body.events).some(
+        ([key, value]) => !(key in state.pushPreferences.events) || typeof value !== 'boolean',
+      )
+    )
+      return fail('通知事件格式无效。')
+    state.pushPreferences = {
+      ...state.pushPreferences,
+      enabled: body.enabled,
+      events: { ...state.pushPreferences.events, ...body.events },
+    }
+    return HttpResponse.json(state.pushPreferences)
+  }),
   http.post('/api/open-log', () => HttpResponse.json({ ok: true })),
   // Plan mode: read, save (PUT), start, disarm, clear (DELETE).
   http.get('/api/plan', async () => {
@@ -389,7 +417,12 @@ export const handlers = [
     return HttpResponse.json(planView())
   }),
   http.post('/api/plan/start', async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { confirm_real_payment?: boolean }
+    const body = (await request.json().catch(() => ({}))) as {
+      confirm_real_payment?: boolean
+      plan_id?: string
+      content_revision?: string
+      settings_revision?: string
+    }
     await delay(400)
     const plan = state.plan
     if (!plan) return fail('计划里还没有布防。')
@@ -398,6 +431,12 @@ export const handlers = [
     const problems = planProblems(plan)
     if (problems.length) return fail(problems[0])
     if (!plan.dry_run && !body.confirm_real_payment) return fail('真实计划必须明确确认实际付款。')
+    if (
+      body.plan_id !== plan.plan_id ||
+      body.content_revision !== planContentRevision(plan) ||
+      body.settings_revision !== 'mock-revision'
+    )
+      return fail('计划内容或值守配置已变化，或缺少确认版本；请重新读取计划并核对后开始。')
     const now = localISO(new Date())
     plan.phase = 'running'
     plan.started_at = now

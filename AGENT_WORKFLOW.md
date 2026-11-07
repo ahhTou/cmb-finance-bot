@@ -32,6 +32,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-07 计划前三项修复与通知分类**：计划任务终态新增 `outcome=success/failed/dry_run/unknown`；明确失败记失败并继续，提交异常、结果未知、提交进程消失则整份计划中止，提示查交易记录，不重试。计划取消、超时与异常清理在任务锁内核对计划/任务归属，不误取消并发新建的独立布防。开始请求必须携带已核对的 `plan_id/content_revision/settings_revision`；确认框冻结完整清单，后端锁内校验内容与配置，旧确认不得启动新内容。设置新增独立「推送通知」Tab，连接配置和通知选项分开保存；总开关与 23 类通知场景单独可配，默认全开，实时读取偏好，测试推送绕过开关。非敏感选项在 `var/night/push-settings.json`，不参与购买配置版本，不会因开关通知中止计划。计划审查第 4–7 项和体验优化暂缓，记录在 [计划已知问题](docs/plan-known-issues.md)。本轮未执行真实布防、购买、凭据修改或真实推送。验证：Python 全量 338 项中 337 项通过，唯一错误为已知旧 `test_timed_buy.test_single_submit_success`（数字键不完整）；前端单元测试 30 项、WebKit/Chromium e2e 72 项、类型检查、lint 和 Tauri Release 构建通过；通知页截图已更新。确认无活跃值守与计划后已重启管理 App，单份托管后端健康检查通过。
+
 - **2026-11-07 提醒改为 ntfy 手机推送**：删除 QQ 邮箱 SMTP 通知（`src/notify.py`），新增 `src/push.py`：服务器、频道和访问令牌同存钥匙串 `cmb-finance-bot.push.v1`。配置改为在管理 App「设置 → 凭据 → 推送通知」完成：显示已配置/未配置、服务器和频道；表单可保存、发送测试推送、清除配置（需确认），令牌为空表示不改、首次配置必须填写，`config_info()` 只返回 `{configured, server, topic, token_set}`、永不返回令牌。后端接口 `GET/PUT/DELETE /api/push` 和 `POST /api/push/test`，token 照既有做法走 stdin payload；测试推送失败只回 HTTP 状态码或异常类型。`python3 src/push.py setup` 保留为备选并改用 `save_config()`，可覆盖已有条目。按 ntfy 标准 JSON 发布，5 秒超时，失败只在 stderr 写一行状态码或异常类型，不抛异常、不重试。成交成功、购买失败、异常中止用优先级 5；布防、开始、撤防、登录、页面就绪等状态提示用 3。管理 App 状态页「凭据与通知」仍显示「推送通知 已配置 / 未配置」，后端字段为 `push_configured`。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 不再使用，需在「钥匙串访问」手动删除。代码与隔离测试、前端 tsc / Vitest / e2e 已通过，管理 App 已重建并重启，README 截图已重拍（新增推送通知一张）；真实推送地址和手机端验收待账户持有人完成。
 
 - **2026-11-06 计划页收藏快捷选择与内嵌日志去滚动条**：① 「计划」页布防列表每行产品代码下方加收藏快捷选择，点测试项会同时填入产品和测试金额，普通收藏只填产品代码；运行中只读时隐藏。② 状态页「最近日志」卡片和历史页「值守日志」不再出现滚动条：预览只显示最新的整行、长行截断，完整日志点「查看日志」/「查看全部」在弹窗里看；历史详情面板本身也不滚动。README 截图已重拍，单测/e2e 与 Release 构建通过；真实窗口实战与手动验收待补。
@@ -414,10 +416,10 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 - 一项 = 购买时间 + 模式（首发/不定时抢购）+ 产品代码 + 金额；最多 **20 项**，购买时间须在未来 **24 小时**内，按时间排序保存。
 - 相邻两项必须满足：`下一项冷启动时间 ≥ 上一项预计结束时间 + 2 分钟`。上一项预计结束时间：首发按「开售 + 查询窗口 + 2 分钟提交余量」，不定时按「开始 + 窗口分钟数」。不满足时保存可以成功，但 `problems` 会给出至少需要的间隔、**不能开始**。
 - 程序启动计划进程后逐项执行：上一项结束（`done` 或 `aborted`）后才处理下一项；某项失败会在计划日志/推送里记录并继续下一项；**用户手动取消当前布防（任务页「取消布防」）会让整份计划停止**。
-- 计划开始后不能修改计划（只能取消/清空）；计划期间修改「值守配置」会让计划中止；计划期间手动单独布防会被拒绝（`_arm` 计划互斥）。
-- 真实计划必须显式确认：管理 App 里勾选「我已核对产品和金额，确认真实支付 ¥…」；CLI 必须带 `--confirm-real-payment`。演练计划只输交易密码、不点确定、不提交。
-- 计划项的状态机：`pending → running → done | failed | skipped`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`，心跳超时或进程退出时页面显示「进程已退出」，可用「取消计划」收口。
-- 任务进程意外消失：计划进程轮询发现当前 watch 进程消失时，等 15 秒宽限后把该项标 `failed` 并继续下一项。某项失败（布防失败、准备失败、窗口内没买到）都继续下一项；但**提交阶段异常**例外——若某项超时停止时已进入 `firing`，或计划因未捕获异常兜底中止，计划不会杀掉正在提交的进程，而是整份中止并在结果里写「结果未知，请查交易记录，不要重复提交」。
+- 计划开始后不能修改计划（只能取消/清空）；计划期间手动单独布防会被拒绝（`_arm` 计划互斥）。当前配置变化只在下一项布防前检查，当前项仍按布防快照执行；最后一项结束后不再核对，该行为与运行中时间展示仍有待完善，见 [计划已知问题](docs/plan-known-issues.md)。
+- 真实计划必须显式确认：管理 App 确认框冻结并列出全部产品、金额、模式、购买日期时间，勾选「我已核对产品和金额，确认真实支付 ¥…」；开始请求携带计划 ID、内容版本和配置版本，在计划锁与任务锁内校验。CLI 演练与真实都必须显式带 `--plan-id`、`--content-revision`、`--settings-revision`（分别来自已核对的 `plan` 响应的 `plan.plan_id`、`plan.content_revision` 与顶层 `settings_revision`），真实还必须带 `--confirm-real-payment`。缺版本或版本变化会拒绝，不能自动取最新版本来绕过重新核对。演练计划只输交易密码、不点确定、不提交。
+- 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`，读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；心跳超时尚未用于健康判定，已记为待修问题。
+- 任务终态按 `outcome=success/failed/dry_run/unknown` 判断，不以 `phase=done` 代替购买成功。明确失败（布防/准备失败、窗口内没买到、页面明确失败）记 `failed` 并继续；明确成功或演练完成记 `done`。旧记录只接受明确结果白名单，不熟悉的结果保守视为未知。watch 进程消失后等 15 秒宽限：能证明未进入提交则记失败继续，仍为 `firing`、有 `fired_at` 或任务记录丢失则记结果未知。**结果未知、提交阶段超时或未捕获异常**会整份中止，不杀提交中进程，不开始下一项，提示「请查交易记录，不要重复提交」。
 - 若计划进程自己异常退出（被 kill、崩溃），`plan.json` 会停在 `running` 且 `pid` 不存活（`stale`），页面显示「进程已退出」，需要人工点「取消计划」收口；此时当前 watch 可能仍在跑，先查是否已提交过。
 - 计划进程内部的轮询/心跳/宽限/超时（2 秒轮询、10 秒心跳、15 秒宽限、超时 5 分钟、杀进程等待 10 秒）和相邻间隔 2 分钟都是**内部稳定性常量**，与 `night_watch` 的巡检间隔、重试预算同类，不做成设置；影响购买时间的可调值仍只有设置里的「冷启动提前量」。
 
@@ -436,12 +438,15 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 ```sh
 python3 -B src/admin_cli.py plan                 # 查看计划（plan/running/stale/problems/warnings/task/logs）
 python3 -B src/admin_cli.py plan-save < plan.json  # stdin: {"dry_run":false,"items":[{"code":...,"amount":...,"at":"...","mode":"first_launch"}]}
-python3 -B src/admin_cli.py plan-start --confirm-real-payment   # 真实计划；演练计划（plan.dry_run=true）可不带该 flag
+python3 -B src/admin_cli.py plan-start --plan-id <计划ID> --content-revision <内容版本> \
+    --settings-revision <配置版本> --confirm-real-payment   # 版本来自上面已核对的 plan 响应；演练省略付款 flag
 python3 -B src/admin_cli.py plan-disarm          # 取消计划并取消当前布防
 python3 -B src/admin_cli.py plan-clear           # 未运行时清空计划
 ```
 
-HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/plan/disarm`、`DELETE /api/plan`。
+HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/plan/disarm`、`DELETE /api/plan`。开始请求必须提供 `plan_id/content_revision/settings_revision`，确认内容或配置变化会拒绝，真实计划另需 `confirm_real_payment=true`。
+
+通知偏好：`GET/PUT /api/push/preferences`，或 `admin_cli.py push-preferences` / `push-preferences-save`（stdin JSON）。返回 `{enabled, events: {事件键: bool}, catalog: [{key,label,description,group}]}`；保存支持部分更新，未知事件和非布尔值拒绝。连接凭据仍走原 `GET/PUT/DELETE /api/push`，测试仍是 `POST /api/push/test`。
 
 ### 5B.4 日志与文件
 

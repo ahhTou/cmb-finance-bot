@@ -85,7 +85,7 @@ def log(message):
     print(f"{datetime.now():%m-%d %H:%M:%S} {message}", flush=True)
 
 
-def alert(subject, body="", priority=3):
+def alert(subject, body="", priority=3, *, event="system_status"):
     """Log one alert and push it to the phone.
 
     `priority` follows ntfy: 5 for a filled order, a failed purchase or an
@@ -93,7 +93,7 @@ def alert(subject, body="", priority=3):
     """
     log(f"通知：{subject}")
     push.send(subject, f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{subject}\n\n{body}".strip(),
-              priority)
+              priority, event=event)
 
 
 def load_task():
@@ -136,6 +136,8 @@ def persist(task):
             raise Abort("不能删除或更改提交标记。")
         if task.get("patterns_sent", 0) < current.get("patterns_sent", 0):
             raise Abort("不能减少已输入图案次数。")
+        if task.get("phase") in ("done", "aborted", "disarmed"):
+            task["outcome"] = task_outcome(dict(task, outcome=None))
         save_task(task)
         if task.get("phase") in ("done", "aborted", "disarmed"):
             record_history(task)
@@ -143,7 +145,7 @@ def persist(task):
 
 def record_history(task):
     record = {k: task.get(k) for k in ("task_id", "armed_at", "code", "amount", "at",
-              "mode", "window_minutes", "probes", "dry_run", "phase", "result",
+              "mode", "window_minutes", "probes", "dry_run", "phase", "result", "outcome",
               "fired_at", "resumes", "purchase_flow", "fire_at", "end_at",
               "prep_minutes", "watch_settings", "plan_id", "plan_item")}
     record["ended_at"] = datetime.now().isoformat()
@@ -239,7 +241,7 @@ def resume_task(reason, by="user", kill_stale=False, after_manual_login=False):
                     after_manual_login=after_manual_login, last_tick=datetime.now().isoformat())
         save_task(task)
         spawn_watch(task)
-    alert(f"值守已恢复（第 {len(task['resumes'])} 次，原因：{reason}）")
+    alert(f"值守已恢复（第 {len(task['resumes'])} 次，原因：{reason}）", event='watch_resumed')
     return task
 
 
@@ -425,16 +427,23 @@ def disarm(_args):
     return disarm_task()
 
 
-def disarm_task():
+def disarm_task(expected_plan_id=None, expected_task_id=None):
     with task_lock(False):
-        return _disarm()
+        return _disarm(expected_plan_id, expected_task_id)
 
 
-def _disarm():
+def _disarm(expected_plan_id=None, expected_task_id=None):
     task = load_task()
     if not task:
         print("没有值守任务。")
         return
+    # Plan cleanup must prove ownership under the same lock as termination.
+    # A newly armed unrelated task must survive an older plan's cleanup.
+    if expected_plan_id is not None:
+        if (task.get("plan_id") != expected_plan_id
+                or (expected_task_id is not None and task.get("task_id") != expected_task_id)
+                or task.get("phase") not in ("armed", "preparing", "waiting", "firing")):
+            return
     if task.get("phase") == "firing":
         raise Abort("正在提交，不能取消；请等结果并查交易记录。")
     page_open = task.get("phase") in PAGE_PHASES
@@ -445,6 +454,7 @@ def _disarm():
     if page_open:
         close_bank_app()
     print("已取消值守。")
+    alert("值守已取消", "当前值守已停止。", event="watch_cancelled")
     return task
 
 
@@ -551,7 +561,7 @@ def ensure_emulator(strikes):
     if strikes[0] >= 3:
         restart_emulator()
         strikes[0] = 0
-        alert("模拟器已自动重启", "App 本来就是关闭状态，开售前 15 分钟照常登录。")
+        alert("模拟器已自动重启", "App 本来就是关闭状态，开售前 15 分钟照常登录。", event='emulator_restarted')
 
 
 def health_network(net):
@@ -562,7 +572,7 @@ def health_network(net):
         net[0] = 0
         if net[1]:
             net[1] = False
-            alert("模拟器网络已恢复", "夜间巡检继续，开售前照常登录。")
+            alert("模拟器网络已恢复", "夜间巡检继续，开售前照常登录。", event='network_recovered')
         return
     net[0] += 1
     log(f"夜间检查：模拟器没有网络（第 {net[0]} 次）")
@@ -575,9 +585,9 @@ def health_network(net):
         if not net[1]:
             net[1] = True
             alert("模拟器没有网络，已重启仍失败", f"{exc}\n\n夜间巡检继续重试；"
-                  "开售前若仍无网络将无法登录，请起床检查。")
+                  "开售前若仍无网络将无法登录，请起床检查。", event='network_failed')
         return
-    alert("模拟器无网络，已自动重启恢复", "夜间巡检继续，开售前照常登录。")
+    alert("模拟器无网络，已自动重启恢复", "夜间巡检继续，开售前照常登录。", event='network_recovered')
 
 
 def ensure_awake():
@@ -842,7 +852,7 @@ def login_fresh(task):
             log(f"图案输入异常：{exc}")
         time.sleep(6)
         if logged_in() and not on_login_page():
-            alert(f"登录成功（第 {task['patterns_sent']} 次图案）")
+            alert(f"登录成功（第 {task['patterns_sent']} 次图案）", event='login_success')
             return
         log("图案后仍未登录，重启 App 再试")
     raise Abort(f"冷启动 {LOGIN_CYCLES} 次仍未登录。")
@@ -982,6 +992,45 @@ def prepare(task, strikes, done):
         log(f"详情页没有打开（不影响开售时直接打开购买页）：{exc}")
 
 
+SUCCESS_RESULTS = ("提交成功", "购买成功", "交易委托已接受")
+FAILED_RESULTS = ("申请失败", "密码错误", "购买失败：额度不足", "购买失败")
+
+
+def purchase_outcome(result, dry_run=False):
+    """Only recognized bank results establish success/failure."""
+    if dry_run and result == "演练完成":
+        return "dry_run"
+    if result in SUCCESS_RESULTS:
+        return "success"
+    if result in FAILED_RESULTS:
+        return "failed"
+    return "unknown"
+
+
+def task_outcome(task):
+    """Classify new and legacy terminal tasks conservatively for plan scheduling."""
+    if task.get("phase") == "firing":
+        return "unknown"
+    outcome = task.get("outcome")
+    if outcome in ("success", "failed", "dry_run", "unknown"):
+        return outcome
+    result = task.get("result") or ""
+    known = purchase_outcome(result, task.get("dry_run", False))
+    if known != "unknown":
+        return known
+    if task.get("fired_at") or "结果未知" in result:
+        return "unknown"
+    if task.get("phase") in ("aborted", "disarmed") or result.startswith(("未提交：", "窗口内没有买到：")):
+        return "failed"
+    return "unknown"
+
+
+def purchase_event(task):
+    """Route result notifications by the same outcome used by the plan worker."""
+    return {"success": "purchase_success", "failed": "purchase_failed",
+            "dry_run": "drill_completed", "unknown": "purchase_unknown"}[task_outcome(task)]
+
+
 def fire(task, when):
     import fast_buy_uia2
     task["phase"] = "firing"
@@ -997,21 +1046,21 @@ def fire(task, when):
         task["phase"] = "done"
         task["result"] = f"停止：{exc}"
         persist(task)
-        alert("购买流程中途停止", f"{exc}\n\n若已出现提交动作，请先查交易记录，不要重试。", 5)
+        alert("购买流程中途停止", f"{exc}\n\n若已出现提交动作，请先查交易记录，不要重试。", 5, event='purchase_unknown')
         return
     task["phase"] = "done"
     if task.get("dry_run"):
         task["result"] = "演练完成"
         persist(task)
         fast_buy_uia2.close_password_panel()
-        alert("演练完成：已输完密码，未点确定、未提交")
+        alert("演练完成：已输完密码，未点确定、未提交", event='drill_completed')
         return
     task["result"] = result or "结果未知"
     persist(task)
     if result in ("提交成功", "购买成功", "交易委托已接受"):
-        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5)
+        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5, event='purchase_success')
     else:
-        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5)
+        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5, event=purchase_event(task))
 
 
 def redemption_fire(task, start):
@@ -1030,7 +1079,7 @@ def redemption_fire(task, start):
     window = max(1.0, (end - datetime.now()).total_seconds())
     log(f"不定时抢购窗口开始：最多 {window:.0f} 秒内反复打开购买页")
     alert("不定时抢购窗口开始",
-          f"{task['code']} {task['amount']} 元，最多 {window:.0f} 秒；有额度才提交。")
+          f"{task['code']} {task['amount']} 元，最多 {window:.0f} 秒；有额度才提交。", event='query_started')
 
     def tick(opens):
         task["last_tick"] = datetime.now().isoformat()
@@ -1054,25 +1103,25 @@ def redemption_fire(task, start):
         if task.get("fired_at"):
             task["result"] = f"结果未知：{exc}"
             persist(task)
-            alert("提交后异常，结果需要人工确认", "先查交易记录，不要重试。", 5)
+            alert("提交后异常，结果需要人工确认", "先查交易记录，不要重试。", 5, event='purchase_unknown')
         else:
             task["result"] = f"窗口内没有买到：{exc}"
             persist(task)
-            alert("不定时抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。", 5)
+            alert("不定时抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。", 5, event='purchase_failed')
         return
     task["phase"] = "done"
     if task.get("dry_run"):
         task["result"] = "演练完成"
         persist(task)
         fast_buy_uia2.close_password_panel()
-        alert("演练完成：已输完密码，未点确定、未提交")
+        alert("演练完成：已输完密码，未点确定、未提交", event='drill_completed')
         return
     task["result"] = result or "结果未知"
     persist(task)
     if result in ("提交成功", "购买成功", "交易委托已接受"):
-        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5)
+        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5, event='purchase_success')
     else:
-        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5)
+        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5, event=purchase_event(task))
 
 
 QUERY_OUTCOMES = {'E': '售罄', 'ready': '有额度', 'rejected': '被拒绝', 'failed': '失败或超时'}
@@ -1093,12 +1142,19 @@ def gated_fire(task):
     import fast_buy_uia2
 
     logged = [0]
+    query_notified = [False]
 
     def heartbeat(attempts, results=None):
         previous = task.get('probes', 0)
         task['last_tick'] = datetime.now().isoformat()
         task['probes'] = attempts
         persist(task)
+        if attempts > 0 and not query_notified[0]:
+            query_notified[0] = True
+            # Publishing must not block the query loop or page lease renewal.
+            threading.Thread(target=alert, args=(
+                '额度查询已开始', f"{task['code']}，计划首查时间 {task['fire_at']}。"),
+                kwargs={'event': 'query_started'}, daemon=True).start()
         if results:
             # One line per finished query, with the page-measured round trip.
             for attempt, ms, outcome in results[logged[0]:]:
@@ -1122,7 +1178,8 @@ def gated_fire(task):
         # the page lease.
         threading.Thread(target=alert, args=(
             '购买页已就绪，queryBuy 已挂起',
-            f"首个查询计划时间：{task['fire_at']}；等待期间不发查询。"), daemon=True).start()
+            f"首个查询计划时间：{task['fire_at']}；等待期间不发查询。"),
+            kwargs={'event': 'preparation_ready'}, daemon=True).start()
 
     def before_submit():
         task['phase'] = 'firing'
@@ -1157,12 +1214,12 @@ def gated_fire(task):
         if task.get('dry_run'):
             fast_buy_uia2.close_password_panel()
         note = '以银行交易记录为准；不要重复提交。' if task.get('fired_at') else '未点确定、未提交。'
-        alert(task['result'], note, 3 if task.get('dry_run') else 5)
+        alert(task['result'], note, 3 if task.get('dry_run') else 5, event=purchase_event(task))
     except Exception as exc:
         task['phase'] = 'done'
         task['result'] = (f'结果未知：{exc}' if task.get('fired_at') else f'未提交：{exc}')
         persist(task)
-        alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'], 5)
+        alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'], 5, event=purchase_event(task))
     finally:
         payment.clear()
         query_gate.finish(task)
@@ -1201,9 +1258,9 @@ def run(_args):
     if task.get("mode") == "redemption":
         alert(f"不定时抢购已开始：{task['code']} {task['amount']} 元，"
               f"{sale:%m-%d %H:%M:%S} 起 {task.get('window_minutes', DEFAULT_WINDOW_MINUTES)} "
-              f"分钟窗口（{action}）")
+              f"分钟窗口（{action}）", event='watch_started')
     else:
-        alert(f"值守已开始：{task['code']} {task['amount']} 元，开售 {sale:%m-%d %H:%M:%S}（{action}）")
+        alert(f"值守已开始：{task['code']} {task['amount']} 元，开售 {sale:%m-%d %H:%M:%S}（{action}）", event='watch_started')
     try:
         reported = None
         while not immediate and datetime.now() < sale - prep_lead:
@@ -1216,7 +1273,7 @@ def run(_args):
                 log(f"夜间检查异常：{exc}")
                 if str(exc) != reported:
                     reported = str(exc)
-                    alert("夜间检查异常，继续值守", f"{type(exc).__name__}: {exc}")
+                    alert("夜间检查异常，继续值守", f"{type(exc).__name__}: {exc}", event='health_warning')
             sleep_until(min(sale - prep_lead, datetime.now() + timedelta(seconds=HEALTH_EVERY)),
                         HEALTH_EVERY, task)
 
@@ -1247,10 +1304,10 @@ def run(_args):
             gated_fire(task)
             return
         if task.get("mode") == "redemption":
-            alert("准备完成：已登录", f"{task['code']}，{sale:%H:%M:%S} 开始反复打开购买页。")
+            alert("准备完成：已登录", f"{task['code']}，{sale:%H:%M:%S} 开始反复打开购买页。", event='preparation_ready')
         else:
             alert("准备完成：已登录",
-                  f"{task['code']}，{fire_at:%H:%M:%S.%f}"[:-3] + " 进入购买页。")
+                  f"{task['code']}，{fire_at:%H:%M:%S.%f}"[:-3] + " 进入购买页。", event='preparation_ready')
 
         sleep_until(sale - FINAL_LEAD, 5, task)
         # Look only, never login or tap: the buy step opens the form from the
@@ -1260,7 +1317,7 @@ def run(_args):
         if network_state() != "up":
             # Never abort here: the buy step may still succeed on a warm page.
             log("最后检查：模拟器没有网络，到点仍会尝试打开购买页")
-            alert("开售前检查：模拟器没有网络", "仍会按计划尝试提交；失败请查交易记录。")
+            alert("开售前检查：模拟器没有网络", "仍会按计划尝试提交；失败请查交易记录。", event='network_failed')
         if task.get("mode") == "redemption":
             redemption_fire(task, sale)
         else:
@@ -1270,7 +1327,7 @@ def run(_args):
             task["phase"] = "aborted"
             task["result"] = str(exc)
             persist(task)
-        alert("值守中止，未提交", f"{type(exc).__name__}: {exc}", 5)
+        alert("值守中止，未提交", f"{type(exc).__name__}: {exc}", 5, event='watch_aborted')
         raise
 
 

@@ -158,6 +158,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/push/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Push Preferences */
+        get: operations["push_preferences_api_push_preferences_get"];
+        /** Save Push Preferences */
+        put: operations["save_push_preferences_api_push_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plan": {
         parameters: {
             query?: never;
@@ -620,11 +638,29 @@ export interface components {
         };
         /** PlanStartRequest */
         PlanStartRequest: {
+            /** Plan Id */
+            plan_id: string;
+            /** Content Revision */
+            content_revision: string;
+            /** Settings Revision */
+            settings_revision: string;
             /**
              * Confirm Real Payment
              * @default false
              */
             confirm_real_payment: boolean;
+        };
+        /** PushPreferencesRequest */
+        PushPreferencesRequest: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Events */
+            events?: {
+                [key: string]: boolean;
+            };
         };
         /** PushRequest */
         PushRequest: {
@@ -910,6 +946,59 @@ export interface operations {
             };
         };
     };
+    push_preferences_api_push_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    save_push_preferences_api_push_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushPreferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     plan_api_plan_get: {
         parameters: {
             query?: never;
@@ -990,9 +1079,9 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["PlanStartRequest"] | null;
+                "application/json": components["schemas"]["PlanStartRequest"];
             };
         };
         responses: {

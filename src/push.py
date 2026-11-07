@@ -2,7 +2,7 @@
 """Phone push alerts through an ntfy server (standard JSON publish API).
 
 The server URL, topic and access token live together in a separate Keychain
-item. The management app configures them in 设置 → 凭据 → 推送通知; the command
+item. The management app configures them in 设置 → 推送通知; the command
 line fallback `python3 src/push.py setup` still prompts for the same values in
 the account holder's own terminal. Messages never include screenshots,
 passwords, tokens or Keychain contents.
@@ -30,6 +30,7 @@ import urllib.parse
 import urllib.request
 
 import keychain_store
+import push_settings
 
 SERVICE = b"cmb-finance-bot.push.v1"
 TIMEOUT = 5                              # seconds, per the watch's budget
@@ -158,17 +159,25 @@ def _deliver(cfg, title, body, priority=3):
         return False, type(exc).__name__
 
 
-def send(title, body, priority=3):
-    """Send one alert. Returns False instead of raising: a failed push must
-    never stop the watch loop. Without push setup this is a silent no-op.
+def send(title, body, priority=3, event=None):
+    """Send an enabled event, reading preferences anew before touching Keychain.
 
-    The only thing ever written to stderr is an HTTP status or an exception
-    type name, so the token cannot leak into the log."""
+    Legacy calls without an event use system_status. Unknown events are rejected
+    silently. Disabled events, invalid preferences and missing credentials return
+    False; no notification failure may interrupt the watch. Errors only expose
+    status codes or exception type names, never credential contents.
+    """
     try:
+        event = "system_status" if event is None else event
+        if not isinstance(event, str) or event not in push_settings.EVENT_KEYS:
+            return False
+        preferences = push_settings.load()
+        if not preferences["enabled"] or not preferences["events"][event]:
+            return False
         cfg = load()
-    except (RuntimeError, ValueError):
+        sent, reason = _deliver(cfg, title, body, priority)
+    except Exception:
         return False
-    sent, reason = _deliver(cfg, title, body, priority)
     if not sent:
         print(f"推送发送失败：{reason}", file=sys.stderr, flush=True)
     return sent
@@ -177,6 +186,7 @@ def send(title, body, priority=3):
 def send_test():
     """Send one test alert; returns {'sent': True} or {'sent': False, 'error': ...}.
 
+    Always bypasses notification preferences, including the global switch.
     A missing/invalid config raises instead, so the caller can tell "not
     configured" apart from "configured but the server rejected the push"."""
     try:
@@ -196,7 +206,7 @@ def setup():
     save_config(server, topic, token)
     token = None
     print("已保存。正在发送测试推送…")
-    print("测试推送已发送，请在手机上查看。" if send("测试推送", "推送通知配置成功。")
+    print("测试推送已发送，请在手机上查看。" if send_test()["sent"]
           else "测试推送发送失败，请检查地址、频道和令牌。")
 
 

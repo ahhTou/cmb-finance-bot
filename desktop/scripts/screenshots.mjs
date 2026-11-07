@@ -13,23 +13,34 @@ const shots = [
   ['app-status', 'idle', '/status'],
   ['app-drill', 'idle', '/drill'],
   ['app-settings', 'idle', '/settings'],
-  // Credentials tab, scrolled until the whole push card is visible.
+  // Dedicated notification tab, connection settings first.
   [
     'app-push',
     'idle',
     '/settings',
     async (page) => {
-      await page.getByRole('radio', { name: '凭据' }).click()
+      await page.getByRole('radio', { name: '推送通知', exact: true }).click()
       await page.getByTestId('push-card').scrollIntoViewIfNeeded()
+    },
+  ],
+  [
+    'app-push-options',
+    'idle',
+    '/settings',
+    async (page) => {
+      await page.getByRole('radio', { name: '推送通知', exact: true }).click()
+      await page.getByTestId('push-preferences').scrollIntoViewIfNeeded()
     },
   ],
 ]
 
+const selected = new Set(process.argv.slice(2))
 const server = await createServer({ mode: 'mock', logLevel: 'silent', server: { port: 5176, strictPort: true } })
 await server.listen()
 const browser = await webkit.launch()
 const page = await browser.newPage({ viewport: { width: 1093, height: 763 }, deviceScaleFactor: 2 })
 for (const [name, scenario, path, prepare] of shots) {
+  if (selected.size && !selected.has(name)) continue
   await page.goto(`http://localhost:5176/?scenario=${scenario}#${path}`)
   await page.waitForTimeout(2500) // event stream, device/system reads and entrance animations
   if (prepare) {

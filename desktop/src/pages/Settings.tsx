@@ -6,6 +6,7 @@ import { api, isTauri, resetBackend } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import type { PurchaseSettings, PushConfig, PushTestResult } from '../api/types'
 import { PurchaseFlow } from '../components/PurchaseFlow'
+import { PushPreferencesCard } from '../components/PushPreferences'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint } from '../components/ui/card'
 import { Confirm } from '../components/ui/dialog'
@@ -14,10 +15,11 @@ import { cn, type Tone } from '../lib/utils'
 import { type BackendConfig, backendConfig, setBackendConfig } from '../platform'
 import { useUI } from '../store'
 
-type Tab = 'watch' | 'credentials' | 'project'
+type Tab = 'watch' | 'credentials' | 'push' | 'project'
 const TABS: { value: Tab; label: string }[] = [
   { value: 'watch', label: '值守配置' },
   { value: 'credentials', label: '凭据' },
+  { value: 'push', label: '推送通知' },
   { value: 'project', label: '项目' },
 ]
 
@@ -25,11 +27,17 @@ export function SettingsPage() {
   const [tab, setTab] = useState<Tab>('watch')
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[26px] pb-2">
-      <div className="w-[300px] shrink-0">
+      <div className="w-full max-w-[420px] shrink-0">
         <Segmented label="设置分类" value={tab} options={TABS} onChange={setTab} />
       </div>
       {tab === 'watch' && <WatchSettings />}
       {tab === 'credentials' && <CredentialSettings />}
+      {tab === 'push' && (
+        <>
+          <PushCard />
+          <PushPreferencesCard />
+        </>
+      )}
       {tab === 'project' && <ProjectCard />}
     </div>
   )
@@ -553,7 +561,6 @@ function CredentialSettings() {
       <Card title="凭据状态" subtitle="这里只同步脚本保存的值，不会修改银行 App 里的设置。">
         <div className="flex gap-6">
           <Status label="登录与交易凭据" value={w.credentialState} good={stored} />
-          <Status label="推送通知" value={w.pushConfigured ? '已配置' : '未配置'} good={w.pushConfigured} />
         </div>
         {w.credentialsDisabled && <Hint tone="warn">值守进行中，暂时不能修改凭据。</Hint>}
       </Card>
@@ -561,7 +568,6 @@ function CredentialSettings() {
         <PatternCard />
         <PasswordCard />
       </div>
-      <PushCard />
     </>
   )
 }

@@ -1,0 +1,113 @@
+"""Live, non-secret notification preferences, independent of purchase settings.
+
+load/validate/save return {enabled: bool, events: {key: bool}}. Missing fields
+validate as enabled by default. save is a locked partial update: omitted values
+retain their saved values. view adds the ordered catalog for the management UI.
+"""
+import fcntl
+import json
+import os
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
+SETTINGS = Path(__file__).resolve().parents[1] / "var/night/push-settings.json"
+EVENTS = (
+    {"key": "watch_started", "label": "值守已布防", "description": "单项值守布防完成并开始等待。", "group": "值守"},
+    {"key": "watch_cancelled", "label": "值守已取消", "description": "手动取消当前值守。", "group": "值守"},
+    {"key": "watch_resumed", "label": "值守已恢复", "description": "恢复原有值守任务。", "group": "值守"},
+    {"key": "login_success", "label": "登录成功", "description": "银行 App 登录完成。", "group": "值守"},
+    {"key": "preparation_ready", "label": "购买页已就绪", "description": "购买页面准备完成，等待查询或购买。", "group": "值守"},
+    {"key": "query_started", "label": "额度查询开始", "description": "到达计划查询时间，开始查询额度。", "group": "值守"},
+    {"key": "purchase_success", "label": "购买成功", "description": "页面确认提交成功、购买成功或交易委托已接受。", "group": "购买结果"},
+    {"key": "purchase_failed", "label": "购买失败", "description": "额度不足、查询结束未买到或页面明确拒绝购买。", "group": "购买结果"},
+    {"key": "purchase_unknown", "label": "购买结果未知", "description": "提交后异常或结果无法确认，需要检查交易记录。", "group": "购买结果"},
+    {"key": "drill_completed", "label": "演练完成", "description": "演练已完成，未提交真实交易。", "group": "购买结果"},
+    {"key": "watch_aborted", "label": "值守异常中止", "description": "值守因准备失败或其他异常停止。", "group": "值守"},
+    {"key": "health_warning", "label": "运行健康告警", "description": "模拟器、屏幕或值守巡检发现异常。", "group": "设备与网络"},
+    {"key": "emulator_restarted", "label": "模拟器已重启", "description": "故障恢复过程中完成模拟器重启。", "group": "设备与网络"},
+    {"key": "network_recovered", "label": "网络已恢复", "description": "网络故障已修复，可以继续准备。", "group": "设备与网络"},
+    {"key": "network_failed", "label": "网络故障", "description": "网络不可用或修复失败。", "group": "设备与网络"},
+    {"key": "plan_started", "label": "计划已开始", "description": "整份计划开始串行执行。", "group": "计划"},
+    {"key": "plan_completed", "label": "计划已结束", "description": "整份计划执行结束并汇总结果。", "group": "计划"},
+    {"key": "plan_aborted", "label": "计划异常中止", "description": "整份计划因异常或结果未知停止。", "group": "计划"},
+    {"key": "plan_cancelled", "label": "计划已取消", "description": "手动取消整份计划。", "group": "计划"},
+    {"key": "plan_item_completed", "label": "计划项完成", "description": "计划中的一项布防执行完成。", "group": "计划"},
+    {"key": "plan_item_failed", "label": "计划项失败", "description": "计划中的一项布防或购买失败。", "group": "计划"},
+    {"key": "plan_item_skipped", "label": "计划项跳过", "description": "计划中的一项因时间已过等原因跳过。", "group": "计划"},
+    {"key": "system_status", "label": "其他状态通知", "description": "其他运行状态，以及尚未指定事件的旧通知。", "group": "系统"},
+)
+EVENT_KEYS = frozenset(event["key"] for event in EVENTS)
+DEFAULTS = {"enabled": True, "events": {key: True for key in (event["key"] for event in EVENTS)}}
+
+
+def validate(values):
+    """Validate strict booleans and known keys, filling omitted fields with True."""
+    if not isinstance(values, dict) or set(values) - {"enabled", "events"}:
+        raise RuntimeError("通知偏好格式无效。")
+    enabled = values.get("enabled", True)
+    events = values.get("events", {})
+    if type(enabled) is not bool:
+        raise RuntimeError("通知总开关必须为布尔值。")
+    if not isinstance(events, dict) or set(events) - EVENT_KEYS:
+        raise RuntimeError("通知事件格式无效或包含未知事件。")
+    if any(type(value) is not bool for value in events.values()):
+        raise RuntimeError("通知事件开关必须为布尔值。")
+    return {"enabled": enabled, "events": dict(DEFAULTS["events"], **events)}
+
+
+def load():
+    """Read a fresh snapshot; an absent file preserves all existing notifications."""
+    try:
+        text = SETTINGS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return validate({})
+    except UnicodeError:
+        raise RuntimeError("通知偏好文件格式无效。") from None
+    except OSError:
+        raise RuntimeError("无法读取通知偏好。") from None
+    try:
+        return validate(json.loads(text))
+    except (ValueError, UnicodeError):
+        raise RuntimeError("通知偏好文件格式无效。") from None
+
+
+@contextmanager
+def _lock():
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(SETTINGS.with_suffix(".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def save(values):
+    """Merge a partial update under a file lock and atomically publish it."""
+    validate(values)
+    try:
+        with _lock():
+            current = load()
+            result = validate({"enabled": values.get("enabled", current["enabled"]),
+                               "events": dict(current["events"], **values.get("events", {}))})
+            descriptor, name = tempfile.mkstemp(prefix="push-settings-", suffix=".tmp",
+                                                dir=SETTINGS.parent)
+            temp = Path(name)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as out:
+                    out.write(json.dumps(result, ensure_ascii=False, indent=1) + "\n")
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.replace(temp, SETTINGS)
+            finally:
+                temp.unlink(missing_ok=True)
+            return result
+    except OSError:
+        raise RuntimeError("无法保存通知偏好。") from None
+
+
+def view():
+    """Public non-secret response: enabled, event switches, and ordered catalog."""
+    return dict(load(), catalog=[dict(event) for event in EVENTS])
