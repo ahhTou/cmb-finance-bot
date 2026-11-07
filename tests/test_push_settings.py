@@ -33,8 +33,10 @@ class PushSettingsTest(unittest.TestCase):
     def test_missing_file_defaults_all_on_without_creating_files(self):
         settings = push_settings.load()
         self.assertIs(settings["enabled"], True)
-        self.assertEqual(len(settings["events"]), 23)
+        self.assertEqual(len(settings["events"]), 25)
         self.assertTrue(all(value is True for value in settings["events"].values()))
+        self.assertIs(settings["events"]["app_started"], True)
+        self.assertIs(settings["events"]["app_exited"], True)
         self.assertFalse(self.path.parent.exists())
 
     def test_partial_fields_fill_defaults_and_return_independent_objects(self):

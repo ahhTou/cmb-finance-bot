@@ -32,6 +32,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-07 管理 App 启动/退出推送**：推送新增「应用」组 `app_started` / `app_exited` 两个场景（总 25 类，默认开启、可单独关闭）。Tauri 壳启动时拉起 `src/push.py app-watch` 看门狗：先发「管理 App 已启动」，再阻塞读一条由壳持有的 stdin 管道；Cmd-Q、`pkill`、崩溃或 SIGKILL 都会让内核关闭写端，看门狗读到 EOF 后补发「管理 App 已退出」（含本次运行时长，失败按 2/5 秒最多重试 3 次），因此退出通知不依赖 `RunEvent::Exit`，也不阻塞退出；SIGTERM/SIGINT/SIGHUP 另作关机兜底。执行记录在 `var/push.log`，`pgrep -fl "push.py app-watch"` 可确认看门狗。验证：Python 全量 370 项通过（15 项跳过），`admin_server` 15 项通过；前端单元 33 项、e2e 80 项（WebKit + Chromium）、tsc、Biome（仅 1 个既有 warning）、Tauri Release 构建通过；重建重启 App 后 `var/push.log` 记录 `app_started 已发送`，`pkill` 退出后由看门狗补记 `app_exited 已发送`，再次启动正常；Cmd-Q 未直接实测（`osascript quit` 被 macOS 自动化权限拒绝），与 SIGTERM 同走管道 EOF。通知场景截图已重拍；真实手机端验收待账户持有人完成。
+
 - **2026-11-07 计划 UI 重构与状态模型**：计划页改为「时间线 / 周视图」两种视图：时间线连续展示全部任务、任务多时纵向滚动；周视图以今天为首日横向展示 7 天，左右切换 7 天窗口，不出现滚动条。计划购买时间上限从 24 小时改为 **14 天**。计划与每项状态统一为 `{primary, secondary, description}`：主状态决定颜色（待开始/运行中/已完成/失败/已跳过/已取消/已过期/未知），副状态为枚举，描述为可选文本；计划时间段已过且未在应用/计划进程运行期间执行时显示「已过期」。验证：Python 全量 357 项通过（15 项跳过），`admin_server` 15 项通过；前端单元 33 项、e2e 80 项、tsc、lint 和 build 通过。
 
 - **2026-11-07 计划审查 #4–#7 修复**：① 计划结束后显示只读执行结果，保留逐项状态、原因、预计与实际时间；「编辑 / 复制为新计划」再进入草稿。② 计划开始时快照购买配置，展示与执行都用快照；当前项未提交时发现配置变化就取消布防并中止计划，已进入提交则等结果后在下一项前停止，最后一项按快照完成。③ 提前量为「立即」或剩余时间不足时，页面显示「开始后立即准备」，执行后显示实际冷启动/结束时间。④ 新增「设置 → 其他 → 心跳超时」，进程存活但心跳超时显示告警，不自动中止或重试交易。验证：Python 全量 355 项通过（15 项跳过），`admin_server` 15 项通过；前端单元 30 项、e2e 76 项、tsc、lint 和 build 通过。
@@ -181,9 +183,13 @@ open "desktop/src-tauri/target/release/bundle/macos/招行理财值守.app"
 ```sh
 pgrep -x cmb-desktop
 pgrep -fl "admin_server.py"        # 应看到 --port <随机端口> --exit-with-parent
+pgrep -fl "push.py app-watch"      # 管理 App 生命周期推送看门狗，正常 1 个
+tail -n 5 var/push.log             # app_started / app_exited 的执行记录
 ```
 
 `ps` 在部分 Agent 沙箱里被禁止（`Operation not permitted: 'ps'`），用 `pgrep` 代替。`admin_server` 用随机端口，别按固定端口找。
+
+App 启动时会拉起一个 Python 看门狗（`src/push.py app-watch`），负责「管理 App 已启动 / 已退出」的手机推送。看门狗阻塞读一条由 App 进程持有的内核管道：App 无论 Cmd-Q、`pkill` 还是崩溃/SIGKILL，内核都会关闭写端，看门狗读到 EOF 后补发退出通知（失败按 2 秒、5 秒间隔最多重试 3 次），所以不依赖 `RunEvent::Exit`，也不阻塞退出。推送未配置或「设置 → 推送通知 → 应用」组开关关闭时只写 `var/push.log`，不报错。已配置推送时，每次重启管理 App 都会各收到一条启动/退出通知。
 
 `night_watch.py run` 是单独启动的进程，不属于 App，**重启 App 不影响正在进行的值守**。
 
@@ -256,7 +262,7 @@ pgrep -fl "admin_server.py"        # 应看到 --port <随机端口> --exit-with
    python3 -B src/night_watch.py status       # 进程：运行中；阶段：armed
    ```
 
-4. 手机推送（ntfy）是可选的。在管理 App「设置 → 推送通知」填写服务器地址（必须 https）、频道名和访问令牌，保存后可发送测试推送；已配置时令牌留空表示不修改，首次必须填写。终端命令 `python3 src/push.py setup` 仍可用作备选，`python3 src/push.py test` 可随时再测。不配置的话，所有通知只写进日志。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 已不再使用，请自己在「钥匙串访问」里删除。另一种方式：让 Agent 会话盯着日志，通过 Gmail 转发通知，但这要求 Claude 桌面 App 整夜开着。
+4. 手机推送（ntfy）是可选的。在管理 App「设置 → 推送通知」填写服务器地址（必须 https）、频道名和访问令牌，保存后可发送测试推送；已配置时令牌留空表示不修改，首次必须填写。终端命令 `python3 src/push.py setup` 仍可用作备选，`python3 src/push.py test` 可随时再测。不配置的话，所有通知只写进日志。管理 App 的启动/退出也走同一频道，退出通知由看门狗在 App 结束后补发（见 §2A.3），不影响值守继续运行。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 已不再使用，请自己在「钥匙串访问」里删除。另一种方式：让 Agent 会话盯着日志，通过 Gmail 转发通知，但这要求 Claude 桌面 App 整夜开着。
 
 ### 3.3 查看与取消
 

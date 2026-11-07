@@ -23,6 +23,8 @@
     "plan_item_completed": true,
     "plan_item_failed": true,
     "plan_item_skipped": true,
+    "app_started": true,
+    "app_exited": true,
     "system_status": true
   },
   "catalog": [
@@ -157,6 +159,18 @@
       "label": "计划项跳过",
       "description": "计划中的一项因时间已过等原因跳过。",
       "group": "计划"
+    },
+    {
+      "key": "app_started",
+      "label": "管理 App 已启动",
+      "description": "管理 App 启动后发送；值守和计划进程独立运行，不受影响。",
+      "group": "应用"
+    },
+    {
+      "key": "app_exited",
+      "label": "管理 App 已退出",
+      "description": "管理 App 退出后发送（含 Cmd-Q、强制结束和崩溃）；值守和计划进程继续运行。",
+      "group": "应用"
     },
     {
       "key": "system_status",

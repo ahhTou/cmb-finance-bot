@@ -1,7 +1,9 @@
 import contextlib
+from datetime import datetime
 from email.message import Message
 import io
 import json
+import signal
 import sys
 import threading
 import urllib.error
@@ -36,6 +38,29 @@ class FakeNtfy:
         if self.status >= 300:
             raise urllib.error.HTTPError(request.full_url, self.status, "mock status", {}, None)
         return contextlib.nullcontext(SimpleNamespace(status=self.status))
+
+
+class FlipStream:
+    """Reaches EOF like a real pipe and changes the fake server status on the way."""
+
+    def __init__(self, fake, status):
+        self.fake = fake
+        self.status = status
+
+    def read(self, size):
+        self.fake.status = self.status
+        return b""
+
+
+class SignalStream:
+    """Delivers one signal to the handler installed while the watchdog reads."""
+
+    def __init__(self, signum):
+        self.signum = signum
+
+    def read(self, size):
+        signal.getsignal(self.signum)(self.signum, None)
+        return b""      # only reached when no handler raises
 
 
 def config(server, topic="test-topic", token="test-token"):
@@ -335,6 +360,177 @@ class PushTest(unittest.TestCase):
         self.mock_find.side_effect = OSError("must not leak details")
         self.assertEqual(self.send("标题", "正文"), (False, ""))
         self.mock_open.assert_not_called()
+
+    # Management app lifecycle -------------------------------------------
+
+    def patch_now(self, moment):
+        """Freeze push.datetime.now() so the body's time line is deterministic."""
+        return patch.object(push, "datetime", SimpleNamespace(now=lambda: moment))
+
+    def watch(self, fake, stream=None, sleep=None):
+        """Run the watchdog against the in-memory transport, capturing stderr."""
+        self.mock_find.return_value = config(fake.url)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = push.app_watch(stream=io.BytesIO(b"") if stream is None else stream,
+                                    sleep=(lambda _: None) if sleep is None else sleep)
+        return result, err.getvalue()
+
+    def test_app_events_send_expected_title_body_and_priority(self):
+        fake = self.serve(200)
+        self.mock_find.return_value = config(fake.url)
+        moment = datetime(2026, 1, 2, 3, 4, 5)
+        with self.patch_now(moment):
+            self.assertEqual(push.send_app_event("app_started"), (True, None))
+            self.assertEqual(push.send_app_event("app_exited", uptime_seconds=3725),
+                             (True, None))
+
+        self.assertEqual(len(fake.requests), 2)
+        bodies = [json.loads(request["body"]) for request in fake.requests]
+        self.assertEqual([body["title"] for body in bodies],
+                         ["[招行值守] 管理 App 已启动", "[招行值守] 管理 App 已退出"])
+        self.assertEqual([body["priority"] for body in bodies], [3, 3])
+        self.assertEqual(bodies[0]["message"],
+                         "2026-01-02 03:04:05\n管理 App 已启动；值守与计划进程独立运行，不受影响。")
+        self.assertEqual(bodies[1]["message"].splitlines(),
+                         ["2026-01-02 03:04:05",
+                          "管理 App 已退出；值守与计划进程继续运行，不受影响。",
+                          "本次运行 1 小时 2 分 / 5 秒"])
+
+    def test_app_events_disabled_never_read_credentials_or_send(self):
+        for event in ("app_started", "app_exited"):
+            with self.subTest(event=event):
+                self.mock_preferences.return_value = push.push_settings.validate(
+                    {"events": {event: False}})
+                self.assertEqual(push.send_app_event(event), (False, "disabled"))
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_app_events_disabled_global_switch_never_reads_credentials(self):
+        self.mock_preferences.return_value = push.push_settings.validate({"enabled": False})
+        self.assertEqual(push.send_app_event("app_started"), (False, "disabled"))
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_app_events_unconfigured_reports_reason_without_network(self):
+        self.mock_find.side_effect = RuntimeError("钥匙串读取失败（系统状态 -25300）。")
+        self.assertEqual(push.send_app_event("app_started"), (False, "not_configured"))
+        self.assertEqual(push.send_app_event("app_exited"), (False, "not_configured"))
+        self.mock_open.assert_not_called()
+
+    def test_unknown_app_events_are_silent(self):
+        for event in ("app_typo", "", None, 1, []):
+            with self.subTest(event=event):
+                self.assertEqual(push.send_app_event(event), (False, "unknown_event"))
+        self.mock_preferences.assert_not_called()
+        self.mock_find.assert_not_called()
+        self.mock_open.assert_not_called()
+
+    def test_send_app_event_never_raises(self):
+        with patch.object(push, "_dispatch", side_effect=RuntimeError("boom")):
+            self.assertEqual(push.send_app_event("app_started"), (False, "RuntimeError"))
+
+    def test_app_watch_sends_start_then_exit_on_eof(self):
+        fake = self.serve(200)
+        result, err = self.watch(fake)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(fake.requests), 2)
+        titles = [json.loads(request["body"])["title"] for request in fake.requests]
+        self.assertEqual(titles, ["[招行值守] 管理 App 已启动", "[招行值守] 管理 App 已退出"])
+        exit_message = json.loads(fake.requests[1]["body"])["message"]
+        self.assertIn("管理 App 已退出；值守与计划进程继续运行，不受影响。", exit_message)
+        self.assertRegex(exit_message, r"本次运行 \d+ 小时 \d+ 分 / \d+ 秒$")
+        lines = err.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0],
+                         r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} app_started 已发送$")
+        self.assertRegex(lines[1],
+                         r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} app_exited 已发送$")
+
+    def test_app_watch_retries_the_exit_notification_three_times(self):
+        fake = self.serve(200)
+        delays = []
+        result, err = self.watch(fake, stream=FlipStream(fake, 500), sleep=delays.append)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(delays, [2, 5])
+        self.assertEqual(len(fake.requests), 4)     # one start + three exit attempts
+        titles = [json.loads(request["body"])["title"] for request in fake.requests]
+        self.assertEqual(titles, ["[招行值守] 管理 App 已启动"] +
+                         ["[招行值守] 管理 App 已退出"] * 3)
+        lines = err.splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("app_started 已发送", lines[0])
+        self.assertIn("app_exited 发送失败：HTTP 500，2 秒后重试", lines[1])
+        self.assertIn("app_exited 发送失败：HTTP 500，5 秒后重试", lines[2])
+        self.assertIn("app_exited 发送失败：HTTP 500", lines[3])
+        self.assertNotIn("test-token", err)
+
+    def test_app_watch_sends_only_the_start_when_exit_event_is_disabled(self):
+        fake = self.serve(200)
+        self.mock_preferences.return_value = push.push_settings.validate(
+            {"events": {"app_exited": False}})
+        delays = []
+        result, err = self.watch(fake, sleep=delays.append)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(delays, [])
+        self.assertEqual(len(fake.requests), 1)
+        self.assertIn("管理 App 已启动",
+                      json.loads(fake.requests[0]["body"])["title"])
+        self.assertIn("app_exited 未发送：该通知已关闭", err)
+
+    def test_app_watch_signal_during_read_sends_the_exit_notification(self):
+        fake = self.serve(200)
+        original = {signum: signal.getsignal(signum) for signum in push.EXIT_SIGNALS}
+        for signum, handler in original.items():
+            self.addCleanup(lambda s=signum, h=handler: signal.signal(s, h))
+        self.assertTrue(issubclass(push.AppExitTriggered, Exception))
+
+        result, err = self.watch(fake, stream=SignalStream(signal.SIGTERM))
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(json.loads(fake.requests[1]["body"])["title"],
+                         "[招行值守] 管理 App 已退出")
+        self.assertIn("app_exited 已发送", err)
+        for signum, handler in original.items():
+            self.assertIs(signal.getsignal(signum), handler)
+
+    def test_signal_handler_raises_app_exit_triggered(self):
+        for signum in push.EXIT_SIGNALS:
+            with self.subTest(signum=signum), self.assertRaises(push.AppExitTriggered):
+                push._raise_app_exit(signum, None)
+
+    def test_app_watch_unconfigured_logs_and_never_retries(self):
+        fake = self.serve(200)
+        self.mock_find.side_effect = RuntimeError("钥匙串读取失败（系统状态 -25300）。")
+        delays = []
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = push.app_watch(stream=io.BytesIO(b""), sleep=delays.append)
+        self.assertEqual(result, 0)
+        self.assertEqual(delays, [])
+        self.assertEqual(fake.requests, [])
+        self.mock_open.assert_not_called()
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("app_started 未发送：推送未配置", lines[0])
+        self.assertIn("app_exited 未发送：推送未配置", lines[1])
+
+    def test_app_watch_treats_a_broken_pipe_as_exit(self):
+        fake = self.serve(200)
+
+        class BrokenStream:
+            def read(self, size):
+                raise OSError("pipe gone")
+
+        result, _ = self.watch(fake, stream=BrokenStream())
+        self.assertEqual(result, 0)
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(json.loads(fake.requests[1]["body"])["title"],
+                         "[招行值守] 管理 App 已退出")
 
     def test_redirect_handler_refuses_replaying_authorization(self):
         request = push.urllib.request.Request("https://ntfy.example.com/",

@@ -35,6 +35,8 @@ EVENTS = (
     {"key": "plan_item_completed", "label": "计划项完成", "description": "计划中的一项布防执行完成。", "group": "计划"},
     {"key": "plan_item_failed", "label": "计划项失败", "description": "计划中的一项布防或购买失败。", "group": "计划"},
     {"key": "plan_item_skipped", "label": "计划项跳过", "description": "计划中的一项因时间已过等原因跳过。", "group": "计划"},
+    {"key": "app_started", "label": "管理 App 已启动", "description": "管理 App 启动后发送；值守和计划进程独立运行，不受影响。", "group": "应用"},
+    {"key": "app_exited", "label": "管理 App 已退出", "description": "管理 App 退出后发送（含 Cmd-Q、强制结束和崩溃）；值守和计划进程继续运行。", "group": "应用"},
     {"key": "system_status", "label": "其他状态通知", "description": "其他运行状态，以及尚未指定事件的旧通知。", "group": "系统"},
 )
 EVENT_KEYS = frozenset(event["key"] for event in EVENTS)

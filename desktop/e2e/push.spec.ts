@@ -39,7 +39,7 @@ test('notification tab is separate from credentials and persists detailed choice
   await page.getByRole('radio', { name: '推送通知', exact: true }).click()
   await expect(page.getByRole('heading', { name: '交易密码', exact: true })).toBeHidden()
   const preferences = page.getByTestId('push-preferences')
-  await expect(preferences.getByRole('switch')).toHaveCount(24)
+  await expect(preferences.getByRole('switch')).toHaveCount(26)
   const success = preferences.getByTestId('push-option-purchase_success').getByRole('switch')
   const unknown = preferences.getByTestId('push-option-purchase_unknown').getByRole('switch')
   await success.click()

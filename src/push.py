@@ -7,6 +7,15 @@ line fallback `python3 src/push.py setup` still prompts for the same values in
 the account holder's own terminal. Messages never include screenshots,
 passwords, tokens or Keychain contents.
 
+The Tauri shell starts the watchdog `python3 -B src/push.py app-watch` with a
+pipe on its stdin and keeps the write end open for the whole app lifetime. The
+watchdog announces the app start, then blocks until the pipe closes — normal
+quit, `pkill`, a crash and SIGKILL all close the write end, so EOF arrives
+either way — and announces the exit with a few retries. SIGTERM/SIGINT/SIGHUP
+are also handled as a best-effort fallback for system shutdown. The watch and
+plan processes keep running independently; these notifications only describe
+the management app itself.
+
 Publish API (see https://docs.ntfy.sh/publish/#publish-as-json):
 
     POST <server>/                     (the server root, https only)
@@ -24,10 +33,13 @@ watch loop.
 import getpass
 import json
 import re
+import signal
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 import keychain_store
 import push_settings
@@ -37,6 +49,24 @@ TIMEOUT = 5                              # seconds, per the watch's budget
 TITLE_PREFIX = "[招行值守] "
 TOPIC = re.compile(r"[-_A-Za-z0-9]{1,64}")
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+# Management app lifecycle messages: event -> (title, body line). The body
+# starts with the local time, so a delayed notification stays readable.
+APP_EVENTS = {
+    "app_started": ("管理 App 已启动",
+                    "管理 App 已启动；值守与计划进程独立运行，不受影响。"),
+    "app_exited": ("管理 App 已退出",
+                   "管理 App 已退出；值守与计划进程继续运行，不受影响。"),
+}
+# Reliability knobs for the exit notification only: they retry a failed ntfy
+# publish and never affect purchase or watch behaviour, so they stay module
+# constants instead of purchase settings.
+APP_EXIT_ATTEMPTS = 3                    # total attempts, including the first
+APP_EXIT_RETRY_DELAYS = (2, 5)           # seconds to wait before attempts 2 and 3
+READ_BYTES = 4096                        # drain size; the watchdog discards input
+EXIT_SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGINT", "SIGHUP")
+                     if hasattr(signal, name))
+SILENT_REASONS = (None, "unknown_event", "disabled", "not_configured")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -159,6 +189,31 @@ def _deliver(cfg, title, body, priority=3):
         return False, type(exc).__name__
 
 
+def _dispatch(event, title, body, priority=3):
+    """Deliver one event if enabled; returns (sent, reason) and never raises.
+
+    reason is None after a successful publish, "unknown_event", "disabled"
+    (the global switch or that event is off; unreadable preferences count as
+    closed), "not_configured" (no usable Keychain item) or the publish failure
+    (HTTP status / exception type name). Reasons only expose codes or type
+    names, never credential contents.
+    """
+    event = "system_status" if event is None else event
+    if not isinstance(event, str) or event not in push_settings.EVENT_KEYS:
+        return False, "unknown_event"
+    try:
+        preferences = push_settings.load()
+        if not preferences["enabled"] or not preferences["events"][event]:
+            return False, "disabled"
+    except Exception:
+        return False, "disabled"
+    try:
+        cfg = load()
+    except Exception:
+        return False, "not_configured"
+    return _deliver(cfg, title, body, priority)
+
+
 def send(title, body, priority=3, event=None):
     """Send an enabled event, reading preferences anew before touching Keychain.
 
@@ -167,18 +222,8 @@ def send(title, body, priority=3, event=None):
     False; no notification failure may interrupt the watch. Errors only expose
     status codes or exception type names, never credential contents.
     """
-    try:
-        event = "system_status" if event is None else event
-        if not isinstance(event, str) or event not in push_settings.EVENT_KEYS:
-            return False
-        preferences = push_settings.load()
-        if not preferences["enabled"] or not preferences["events"][event]:
-            return False
-        cfg = load()
-        sent, reason = _deliver(cfg, title, body, priority)
-    except Exception:
-        return False
-    if not sent:
+    sent, reason = _dispatch(event, title, body, priority)
+    if not sent and reason not in SILENT_REASONS:
         print(f"推送发送失败：{reason}", file=sys.stderr, flush=True)
     return sent
 
@@ -195,6 +240,140 @@ def send_test():
         raise RuntimeError(str(exc)) from None
     sent, reason = _deliver(cfg, "测试推送", "推送通知配置成功。")
     return {"sent": True} if sent else {"sent": False, "error": reason}
+
+
+# Management app lifecycle ------------------------------------------------
+
+class AppExitTriggered(Exception):
+    """Raised from the read loop's signal handler to start the exit notification."""
+
+
+def _stamp():
+    return f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+
+
+def _uptime_text(seconds):
+    """Human-readable management app uptime, e.g. 本次运行 1 小时 2 分 / 5 秒."""
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"本次运行 {hours} 小时 {minutes} 分 / {secs} 秒"
+
+
+def send_app_event(event, uptime_seconds=None):
+    """Push one management-app lifecycle event; returns (sent, reason).
+
+    The body starts with the local time and the event line; app_exited appends
+    the app's uptime when the caller knows it. Priority is 3: these are status
+    updates, not transaction results. Never raises and never includes the
+    server URL or token.
+    """
+    if not isinstance(event, str) or event not in APP_EVENTS:
+        return False, "unknown_event"
+    try:
+        title, line = APP_EVENTS[event]
+        body = f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{line}"
+        if event == "app_exited" and uptime_seconds is not None:
+            body += "\n" + _uptime_text(uptime_seconds)
+        return _dispatch(event, title, body, 3)
+    except Exception as exc:        # push must never break the watchdog
+        return False, type(exc).__name__
+
+
+def _log_lifecycle(event, result):
+    """One stderr line per lifecycle send, in the format push.log expects."""
+    sent, reason = result
+    if sent:
+        detail = "已发送"
+    elif reason == "disabled":
+        detail = "未发送：该通知已关闭"
+    elif reason == "not_configured":
+        detail = "未发送：推送未配置"
+    elif reason == "unknown_event":
+        detail = "未发送：未知事件"
+    else:
+        detail = f"发送失败：{reason}"
+    print(f"{_stamp()} {event} {detail}", file=sys.stderr, flush=True)
+
+
+def _send_app_exit(sleep, uptime_seconds):
+    """Send app_exited, retrying transient delivery failures.
+
+    A failure that the user's preference can explain (event closed, not
+    configured, unknown event) is never retried; HTTP/network failures are
+    retried APP_EXIT_ATTEMPTS times in total. The management app is already
+    gone, so this is the only chance to say it exited.
+    """
+    result = send_app_event("app_exited", uptime_seconds=uptime_seconds)
+    sent, reason = result
+    attempt = 1
+    while not sent and reason not in SILENT_REASONS and attempt < APP_EXIT_ATTEMPTS:
+        delay = APP_EXIT_RETRY_DELAYS[min(attempt - 1, len(APP_EXIT_RETRY_DELAYS) - 1)]
+        print(f"{_stamp()} app_exited 发送失败：{reason}，{delay} 秒后重试",
+              file=sys.stderr, flush=True)
+        sleep(delay)
+        result = send_app_event("app_exited", uptime_seconds=uptime_seconds)
+        sent, reason = result
+        attempt += 1
+    _log_lifecycle("app_exited", result)
+
+
+def _raise_app_exit(signum, frame):
+    raise AppExitTriggered()
+
+
+def _install_exit_handlers():
+    """Route SIGTERM/SIGINT/SIGHUP into AppExitTriggered; return saved handlers."""
+    previous = {}
+    for signum in EXIT_SIGNALS:
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _raise_app_exit)
+        except (OSError, ValueError):
+            previous.pop(signum, None)      # not the main thread: EOF still works
+    return previous
+
+
+def _restore_exit_handlers(previous):
+    for signum, handler in previous.items():
+        try:
+            signal.signal(signum, handler)
+        except (OSError, ValueError):
+            pass
+
+
+def app_watch(stream=None, sleep=None):
+    """Watch the management app lifetime and push start/exit notifications.
+
+    The Tauri shell starts this process with a pipe on stdin and keeps the
+    write end open for its whole lifetime, so a blocked read reaches EOF when
+    the shell goes away — Cmd-Q, `pkill`, a crash and SIGKILL all close the
+    write end in the kernel. SIGTERM/SIGINT/SIGHUP are also caught while
+    reading as a best-effort fallback for system shutdown. Tests inject
+    `stream` and `sleep`, so this never touches the terminal or waits.
+    """
+    stream = sys.stdin.buffer if stream is None else stream
+    sleep = time.sleep if sleep is None else sleep
+    started_at = time.monotonic()
+
+    _log_lifecycle("app_started", send_app_event("app_started"))
+
+    previous = _install_exit_handlers()
+    try:
+        while True:
+            try:
+                chunk = stream.read(READ_BYTES)
+            except AppExitTriggered:
+                break
+            except (OSError, ValueError):       # pipe already gone: same as EOF
+                break
+            if not chunk:
+                break
+    finally:
+        _restore_exit_handlers(previous)
+
+    _send_app_exit(sleep, time.monotonic() - started_at)
+    return 0
 
 
 def setup():
@@ -220,8 +399,10 @@ if __name__ == "__main__":
                 sys.exit(0)
             print(f"推送发送失败：{result['error']}", file=sys.stderr)
             sys.exit(1)
+        elif sys.argv[1:] == ["app-watch"]:
+            sys.exit(app_watch())
         else:
-            raise RuntimeError("用法：push.py setup | test")
+            raise RuntimeError("用法：push.py setup | test | app-watch")
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"停止：{exc}", file=sys.stderr)
         sys.exit(1)
