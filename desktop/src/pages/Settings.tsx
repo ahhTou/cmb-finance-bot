@@ -4,12 +4,13 @@ import { type ReactNode, useEffect, useState } from 'react'
 import { type UseFormRegisterReturn, useForm } from 'react-hook-form'
 import { api, isTauri, resetBackend } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
-import type { PurchaseSettings } from '../api/types'
+import type { PurchaseSettings, PushConfig, PushTestResult } from '../api/types'
 import { PurchaseFlow } from '../components/PurchaseFlow'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint } from '../components/ui/card'
+import { Confirm } from '../components/ui/dialog'
 import { Field, Input, Segmented } from '../components/ui/form'
-import { cn } from '../lib/utils'
+import { cn, type Tone } from '../lib/utils'
 import { type BackendConfig, backendConfig, setBackendConfig } from '../platform'
 import { useUI } from '../store'
 
@@ -560,6 +561,7 @@ function CredentialSettings() {
         <PatternCard />
         <PasswordCard />
       </div>
+      <PushCard />
     </>
   )
 }
@@ -740,6 +742,173 @@ function PasswordCard() {
       >
         保存交易密码
       </Button>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------- 推送通知
+
+const PUSH_SERVER = /^https:\/\/\S+$/i
+const PUSH_TOPIC = /^[-_A-Za-z0-9]{1,64}$/
+
+function PushCard() {
+  const busy = useUI((s) => s.busy)
+  const action = useAction()
+  const qc = useQueryClient()
+  const { data } = useQuery({ ...q.push, staleTime: 0 })
+  const [server, setServer] = useState('')
+  const [topic, setTopic] = useState('')
+  const [token, setToken] = useState('')
+  const [result, setResult] = useState<{ tone: Tone; text: string } | null>(null)
+  const [clearOpen, setClearOpen] = useState(false)
+  const configured = data?.configured === true
+  const disabled = !data || busy
+
+  useEffect(() => {
+    if (!data) return
+    setServer(data.server ?? '')
+    setTopic(data.topic ?? '')
+  }, [data])
+
+  const valid =
+    PUSH_SERVER.test(server.trim()) &&
+    PUSH_TOPIC.test(topic.trim()) &&
+    (token.trim().length > 0 || configured)
+
+  async function save() {
+    setResult(null)
+    const saved = await action('保存推送配置', () =>
+      api<PushConfig>('PUT', '/api/push', {
+        server: server.trim(),
+        topic: topic.trim(),
+        token: token.trim(),
+      }),
+    )
+    if (!saved) return
+    qc.setQueryData(q.push.queryKey, saved)
+    setToken('')
+    setServer(saved.server ?? server.trim())
+    setTopic(saved.topic ?? topic.trim())
+    setResult({ tone: 'good', text: '已保存；之后的通知会发到这个频道。' })
+  }
+
+  async function test() {
+    setResult(null)
+    const sent = await action('发送测试推送', () => api<PushTestResult>('POST', '/api/push/test'), false)
+    if (!sent) return
+    setResult(
+      sent.sent
+        ? { tone: 'good', text: '测试推送已发送，请在手机上查看。' }
+        : { tone: 'accent', text: `测试推送失败：${sent.error ?? '原因未知'}。` },
+    )
+  }
+
+  async function clear() {
+    setResult(null)
+    const cleared = await action('清除推送配置', () => api<PushConfig>('DELETE', '/api/push'))
+    if (!cleared) return
+    qc.setQueryData(q.push.queryKey, cleared)
+    setServer('')
+    setTopic('')
+    setToken('')
+    setResult({ tone: 'warn', text: '已清除推送配置；通知只写日志。' })
+  }
+
+  return (
+    <Card
+      testId="push-card"
+      title="推送通知"
+      subtitle="成交、失败和值守状态发到手机；服务器、频道和令牌只保存在本机钥匙串。"
+      badge={<Badge tone={configured ? 'good' : 'warn'}>{configured ? '已配置' : '未配置'}</Badge>}
+    >
+      <div className="grid grid-cols-2 gap-4 rounded-xl bg-field/60 p-3.5">
+        <div className="flex min-w-0 flex-col gap-[3px]">
+          <span className="text-[10px] text-muted">服务器地址</span>
+          <span className="truncate font-medium text-xs">{data?.server ?? '—'}</span>
+        </div>
+        <div className="flex min-w-0 flex-col gap-[3px]">
+          <span className="text-[10px] text-muted">频道</span>
+          <span className="truncate font-medium text-xs">{data?.topic ?? '—'}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="服务器地址">
+          <Input
+            data-testid="push-server"
+            value={server}
+            disabled={disabled}
+            autoComplete="off"
+            placeholder="https://ahhtou.wang/api/push/ntfy"
+            onChange={(e) => {
+              setServer(e.target.value)
+              setResult(null)
+            }}
+          />
+        </Field>
+        <Field label="频道">
+          <Input
+            data-testid="push-topic"
+            value={topic}
+            disabled={disabled}
+            autoComplete="off"
+            placeholder="如 cmb"
+            onChange={(e) => {
+              setTopic(e.target.value)
+              setResult(null)
+            }}
+          />
+        </Field>
+      </div>
+
+      <Field label="访问令牌">
+        <Input
+          data-testid="push-token"
+          type="password"
+          value={token}
+          disabled={disabled}
+          autoComplete="off"
+          placeholder={configured ? '已保存，留空不修改' : '首次配置必须填写'}
+          onChange={(e) => {
+            setToken(e.target.value)
+            setResult(null)
+          }}
+        />
+      </Field>
+
+      <Hint>令牌在 ahhtou.wang 的「推送通知」页新建，只勾选这个频道。这里保存后不会回显。</Hint>
+      {result && <Hint tone={result.tone}>{result.text}</Hint>}
+
+      <div className="flex items-center gap-2">
+        <Button
+          data-testid="push-clear"
+          variant="ghost"
+          disabled={disabled || !configured}
+          onClick={() => setClearOpen(true)}
+        >
+          清除配置
+        </Button>
+        <span className="flex-1" />
+        <Button data-testid="push-test" disabled={disabled || !configured} onClick={test}>
+          发送测试推送
+        </Button>
+        <Button data-testid="push-save" variant="primary" disabled={disabled || !valid} onClick={save}>
+          保存
+        </Button>
+      </div>
+
+      <Confirm
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title="清除推送配置？"
+        message="会删除本机钥匙串里的服务器、频道和令牌，之后的通知只写入日志。"
+        cancel="取消"
+        confirm="确认清除"
+        onConfirm={() => {
+          setClearOpen(false)
+          clear()
+        }}
+      />
     </Card>
   )
 }

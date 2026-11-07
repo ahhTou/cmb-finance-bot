@@ -121,6 +121,58 @@ def credential_info():
         return {"state": "unavailable"}
 
 
+def _replace(data, service=SERVICE, account=ACCOUNT):
+    """Overwrite an existing generic-password item; the caller verifies readback."""
+    length, content, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
+    status = sec.SecKeychainFindGenericPassword(None, len(service), service, len(account), account,
+                                               ctypes.byref(length), ctypes.byref(content), ctypes.byref(item))
+    if status != 0:
+        raise RuntimeError("无法更新钥匙串条目。")
+    try:
+        buf = ctypes.create_string_buffer(data)
+        status = sec.SecKeychainItemModifyAttributesAndData(item, None, len(data), buf)
+        if status != 0:
+            raise RuntimeError("钥匙串更新失败。")
+    finally:
+        sec.SecKeychainItemFreeContent(None, content)
+        if item:
+            core.CFRelease(item)
+
+
+def put(data, service=SERVICE, account=ACCOUNT):
+    """Create or overwrite a generic-password item and verify it by reading it back."""
+    try:
+        find(service=service, account=account)
+    except RuntimeError:
+        item = add(data, service=service, account=account)
+        if item:
+            core.CFRelease(item)
+    else:
+        _replace(data, service=service, account=account)
+    if find(service=service, account=account) != data:
+        raise RuntimeError("钥匙串回读验证失败。")
+
+
+def delete(service=SERVICE, account=ACCOUNT):
+    """Delete an item if present; returns False when there was nothing to delete."""
+    length, content, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
+    status = sec.SecKeychainFindGenericPassword(None, len(service), service, len(account), account,
+                                               ctypes.byref(length), ctypes.byref(content), ctypes.byref(item))
+    if status == ERR_NOT_FOUND:
+        return False
+    if status != 0:
+        raise RuntimeError(f"钥匙串读取失败（系统状态 {status}）。")
+    try:
+        status = sec.SecKeychainItemDelete(item)
+        if status != 0:
+            raise RuntimeError(f"钥匙串删除失败（系统状态 {status}）。")
+        return True
+    finally:
+        sec.SecKeychainItemFreeContent(None, content)
+        if item:
+            core.CFRelease(item)
+
+
 def _update(field, value, current=None, service=SERVICE):
     import hmac
     data = json.loads(find(service=service))
@@ -132,20 +184,7 @@ def _update(field, value, current=None, service=SERVICE):
     if not valid(data):
         raise RuntimeError("新凭据格式无效。")
     payload = json.dumps(data, separators=(",", ":")).encode()
-    length, content, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
-    status = sec.SecKeychainFindGenericPassword(None, len(service), service, len(ACCOUNT), ACCOUNT,
-                                               ctypes.byref(length), ctypes.byref(content), ctypes.byref(item))
-    if status != 0:
-        raise RuntimeError("无法更新钥匙串条目。")
-    try:
-        buf = ctypes.create_string_buffer(payload)
-        status = sec.SecKeychainItemModifyAttributesAndData(item, None, len(payload), buf)
-        if status != 0:
-            raise RuntimeError("钥匙串更新失败。")
-    finally:
-        sec.SecKeychainItemFreeContent(None, content)
-        if item:
-            core.CFRelease(item)
+    _replace(payload, service=service)
     if find(service=service) != payload:
         raise RuntimeError("钥匙串回读验证失败。")
 

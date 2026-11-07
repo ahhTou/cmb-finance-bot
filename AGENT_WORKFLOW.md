@@ -1,6 +1,6 @@
 # Agent 执行手册
 
-最后更新：2026-11-06。
+最后更新：2026-11-07。
 
 这是本项目的操作手册。接手时先读 §0 和 §1，再按要做的事跳到对应流程：
 
@@ -32,7 +32,7 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
-- **2026-11-07 提醒改为 ntfy 手机推送**：删除 QQ 邮箱 SMTP 通知（`src/notify.py`），新增 `src/push.py`：服务器、频道和访问令牌同存钥匙串 `cmb-finance-bot.push.v1`，`setup` 在本机终端录入并发一条测试推送，`test` 可重测；按 ntfy 标准 JSON 发布，5 秒超时，失败只在 stderr 写一行状态码或异常类型，不抛异常、不重试。成交成功、购买失败、异常中止用优先级 5；布防、开始、撤防、登录、页面就绪等状态提示用 3。管理 App 设置页和状态页显示「推送通知 已配置 / 未配置」，后端字段为 `push_configured`。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 不再使用，需在「钥匙串访问」手动删除。代码与隔离测试、前端检查已通过，管理 App 已重建并重启；真实推送地址和手机端验收待账户持有人完成。
+- **2026-11-07 提醒改为 ntfy 手机推送**：删除 QQ 邮箱 SMTP 通知（`src/notify.py`），新增 `src/push.py`：服务器、频道和访问令牌同存钥匙串 `cmb-finance-bot.push.v1`。配置改为在管理 App「设置 → 凭据 → 推送通知」完成：显示已配置/未配置、服务器和频道；表单可保存、发送测试推送、清除配置（需确认），令牌为空表示不改、首次配置必须填写，`config_info()` 只返回 `{configured, server, topic, token_set}`、永不返回令牌。后端接口 `GET/PUT/DELETE /api/push` 和 `POST /api/push/test`，token 照既有做法走 stdin payload；测试推送失败只回 HTTP 状态码或异常类型。`python3 src/push.py setup` 保留为备选并改用 `save_config()`，可覆盖已有条目。按 ntfy 标准 JSON 发布，5 秒超时，失败只在 stderr 写一行状态码或异常类型，不抛异常、不重试。成交成功、购买失败、异常中止用优先级 5；布防、开始、撤防、登录、页面就绪等状态提示用 3。管理 App 状态页「凭据与通知」仍显示「推送通知 已配置 / 未配置」，后端字段为 `push_configured`。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 不再使用，需在「钥匙串访问」手动删除。代码与隔离测试、前端 tsc / Vitest / e2e 已通过，管理 App 已重建并重启，README 截图已重拍（新增推送通知一张）；真实推送地址和手机端验收待账户持有人完成。
 
 - **2026-11-06 计划页收藏快捷选择与内嵌日志去滚动条**：① 「计划」页布防列表每行产品代码下方加收藏快捷选择，点测试项会同时填入产品和测试金额，普通收藏只填产品代码；运行中只读时隐藏。② 状态页「最近日志」卡片和历史页「值守日志」不再出现滚动条：预览只显示最新的整行、长行截断，完整日志点「查看日志」/「查看全部」在弹窗里看；历史详情面板本身也不滚动。README 截图已重拍，单测/e2e 与 Release 构建通过；真实窗口实战与手动验收待补。
 
@@ -244,7 +244,7 @@ pgrep -fl "admin_server.py"        # 应看到 --port <随机端口> --exit-with
    python3 -B src/night_watch.py status       # 进程：运行中；阶段：armed
    ```
 
-4. 手机推送（ntfy）是可选的。在自己的终端运行 `python3 src/push.py setup`，依次输入服务器地址（必须 https）、频道名和访问令牌；保存后会发一条测试推送，`python3 src/push.py test` 可随时再测。不配置的话，所有通知只写进日志。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 已不再使用，请自己在「钥匙串访问」里删除。另一种方式：让 Agent 会话盯着日志，通过 Gmail 转发通知，但这要求 Claude 桌面 App 整夜开着。
+4. 手机推送（ntfy）是可选的。在管理 App「设置 → 凭据 → 推送通知」填写服务器地址（必须 https）、频道名和访问令牌，保存后可发送测试推送；已配置时令牌留空表示不修改，首次必须填写。终端命令 `python3 src/push.py setup` 仍可用作备选，`python3 src/push.py test` 可随时再测。不配置的话，所有通知只写进日志。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 已不再使用，请自己在「钥匙串访问」里删除。另一种方式：让 Agent 会话盯着日志，通过 Gmail 转发通知，但这要求 Claude 桌面 App 整夜开着。
 
 ### 3.3 查看与取消
 
@@ -632,7 +632,7 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 | `src/admin_server.py` | 管理 App 用的本地 HTTP 后端，逐请求调用 `admin_cli.py` |
 | `desktop/` | 管理 App：Tauri 壳 + React 前端、假后端与端到端测试；构建与重启见 §2A |
 | `skills/cmb-watch/SKILL.md` | Agent 监听规则，唯一实现版本 |
-| `src/push.py` | 可选的 ntfy 手机推送（`setup` / `test`） |
+| `src/push.py` | 可选的 ntfy 手机推送（管理 App 设置页配置；`setup` / `test` 为终端备选） |
 | `src/fast_buy_uia2.py` | 单笔购买（推荐），值守也调用它 |
 | `src/buy_timed.py` | 连续 N 笔购买，带逐步计时；提供 `DETAIL_URL` 和 `js_eval_page` |
 | `src/cancel_orders.py` | 批量撤单 |

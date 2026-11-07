@@ -8,6 +8,7 @@ export function Card({
   badge,
   children,
   className,
+  testId,
 }: {
   title: string
   subtitle?: string
@@ -15,9 +16,13 @@ export function Card({
   badge?: ReactNode
   children: ReactNode
   className?: string
+  testId?: string
 }) {
   return (
-    <section className={cn('flex flex-col gap-4 rounded-[14px] bg-card p-[18px]', className)}>
+    <section
+      data-testid={testId}
+      className={cn('flex flex-col gap-4 rounded-[14px] bg-card p-[18px]', className)}
+    >
       <header className="flex flex-col gap-[5px]">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-semibold text-sm">{title}</h2>

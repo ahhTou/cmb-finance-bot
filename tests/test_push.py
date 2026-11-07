@@ -178,19 +178,16 @@ class PushTest(unittest.TestCase):
 
     def test_setup_saves_json_and_sends_a_test_push(self):
         saved = {}
-        item = object()
 
-        def add(payload, service):
+        def put(payload, service):
             saved["payload"] = payload
             saved["service"] = service
-            return item
 
         out = io.StringIO()
         with patch.object(push.sys.stdin, "isatty", return_value=True), \
              patch("builtins.input", side_effect=["https://ntfy.example.com", "topic-1"]), \
              patch.object(push.getpass, "getpass", return_value="secret-token"), \
-             patch.object(push.keychain_store, "add", side_effect=add), \
-             patch.object(push.keychain_store, "core"), \
+             patch.object(push.keychain_store, "put", side_effect=put), \
              patch.object(push, "send", return_value=True) as send, \
              contextlib.redirect_stdout(out):
             push.setup()
@@ -206,13 +203,74 @@ class PushTest(unittest.TestCase):
         with patch.object(push.sys.stdin, "isatty", return_value=True), \
              patch("builtins.input", side_effect=["http://ntfy.example.com", "topic-1"]), \
              patch.object(push.getpass, "getpass", return_value="secret-token"), \
-             patch.object(push.keychain_store, "add") as add:
+             patch.object(push.keychain_store, "put") as put:
             with self.assertRaises(RuntimeError):
                 push.setup()
-        add.assert_not_called()
+        put.assert_not_called()
         with patch.object(push.sys.stdin, "isatty", return_value=False):
             with self.assertRaises(RuntimeError):
                 push.setup()
+
+    def test_save_config_validates_and_overwrites(self):
+        with patch.object(push.keychain_store, "put") as put:
+            push.save_config(" https://ntfy.example.com ", " topic-1 ", " secret-token ")
+        payload = put.call_args.args[0]
+        self.assertEqual(put.call_args.kwargs, {"service": push.SERVICE})
+        self.assertEqual(json.loads(payload),
+                         {"server": "https://ntfy.example.com/",
+                          "topic": "topic-1", "token": "secret-token"})
+
+    def test_save_config_rejects_invalid_values_without_writing(self):
+        with patch.object(push.keychain_store, "put") as put:
+            for server, topic, token in [
+                ("http://ntfy.example.com", "topic-1", "secret-token"),
+                ("https://ntfy.example.com", "bad topic", "secret-token"),
+                ("https://ntfy.example.com", "topic-1", ""),
+                ("https://ntfy.example.com", "topic-1", "secret\n-token"),
+                (None, "topic-1", "secret-token"),
+            ]:
+                with self.subTest(server=server, topic=topic), self.assertRaises(RuntimeError):
+                    push.save_config(server, topic, token)
+        put.assert_not_called()
+
+    def test_config_info_returns_no_token(self):
+        self.mock_find.return_value = config("https://ntfy.example.com")
+        info = push.config_info()
+        self.assertEqual(info, {"configured": True,
+                                "server": "https://ntfy.example.com/",
+                                "topic": "test-topic", "token_set": True})
+        self.assertNotIn("test-token", json.dumps(info))
+
+    def test_config_info_absent_or_invalid_is_unconfigured(self):
+        for payload in (RuntimeError("absent"), b"{not-json",
+                        json.dumps({"server": "https://ntfy.example.com/"}).encode()):
+            self.mock_find.side_effect = payload if isinstance(payload, Exception) else None
+            self.mock_find.return_value = None if isinstance(payload, Exception) else payload
+            with self.subTest(payload=payload):
+                self.assertEqual(push.config_info(), {"configured": False, "server": None,
+                                                      "topic": None, "token_set": False})
+
+    def test_clear_config_deletes_the_keychain_item(self):
+        with patch.object(push.keychain_store, "delete") as delete:
+            push.clear_config()
+        delete.assert_called_once_with(service=push.SERVICE)
+
+    def test_send_test_reports_success_and_http_failure_without_token(self):
+        fake = self.serve(200)
+        self.mock_find.return_value = config(fake.url, token="secret-token-9")
+        self.assertEqual(push.send_test(), {"sent": True})
+        self.assertNotIn("secret-token-9", json.dumps(push.send_test()))
+
+        denied = self.serve(401)
+        self.mock_find.return_value = config(denied.url, token="secret-token-9")
+        result = push.send_test()
+        self.assertEqual(result, {"sent": False, "error": "HTTP 401"})
+        self.assertNotIn("secret-token-9", json.dumps(result))
+
+    def test_send_test_unconfigured_raises(self):
+        self.mock_find.side_effect = RuntimeError("钥匙串读取失败（系统状态 -25300）。")
+        with self.assertRaises(RuntimeError):
+            push.send_test()
 
     def test_server_url_validation(self):
         self.assertEqual(push._server_url("https://ntfy.example.com"),
@@ -227,6 +285,44 @@ class PushTest(unittest.TestCase):
         self.assertEqual(push._server_url("http://127.0.0.1:8080",
                                           allow_loopback_http=True),
                          "http://127.0.0.1:8080/")
+
+
+class KeychainPutTest(unittest.TestCase):
+    """The overwrite path used when the Keychain item already exists; all ctypes calls are mocked."""
+
+    def test_put_replaces_existing_item_then_verifies_readback(self):
+        new = b'{"new":2}'
+        with patch.object(push.keychain_store, "find", side_effect=[b'{"old":1}', new]) as find, \
+             patch.object(push.keychain_store, "_replace") as replace, \
+             patch.object(push.keychain_store, "add") as add:
+            push.keychain_store.put(new, service=b"test-service")
+        replace.assert_called_once_with(new, service=b"test-service",
+                                        account=push.keychain_store.ACCOUNT)
+        add.assert_not_called()
+        self.assertEqual(find.call_count, 2)
+
+    def test_put_creates_missing_item(self):
+        new = b'{"new":2}'
+        with patch.object(push.keychain_store, "find",
+                          side_effect=[RuntimeError("absent"), new]) as find, \
+             patch.object(push.keychain_store, "add", return_value=None) as add, \
+             patch.object(push.keychain_store, "_replace") as replace:
+            push.keychain_store.put(new, service=b"test-service")
+        add.assert_called_once_with(new, service=b"test-service",
+                                    account=push.keychain_store.ACCOUNT)
+        replace.assert_not_called()
+        self.assertEqual(find.call_count, 2)
+
+    def test_put_rejects_readback_mismatch(self):
+        with patch.object(push.keychain_store, "find", side_effect=[b'{"old":1}', b"other"]), \
+             patch.object(push.keychain_store, "_replace"):
+            with self.assertRaises(RuntimeError):
+                push.keychain_store.put(b'{"new":2}', service=b"test-service")
+
+    def test_delete_absent_item_is_not_an_error(self):
+        with patch.object(push.keychain_store.sec, "SecKeychainFindGenericPassword",
+                          return_value=push.keychain_store.ERR_NOT_FOUND):
+            self.assertFalse(push.keychain_store.delete(service=b"test-service"))
 
 
 if __name__ == "__main__":

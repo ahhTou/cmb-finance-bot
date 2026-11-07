@@ -4,7 +4,17 @@ import { ACTIVE_PHASES, clockTime, phaseName } from '../lib/utils'
 import { notify } from '../platform'
 import { useUI } from '../store'
 import { api, subscribe } from './client'
-import type { Device, History, Info, Log, PlanView, PurchaseSettings, Status, SystemInfo } from './types'
+import type {
+  Device,
+  History,
+  Info,
+  Log,
+  PlanView,
+  PurchaseSettings,
+  PushConfig,
+  Status,
+  SystemInfo,
+} from './types'
 
 export const q = {
   status: queryOptions({
@@ -20,6 +30,10 @@ export const q = {
   settings: queryOptions({
     queryKey: ['settings'],
     queryFn: () => api<PurchaseSettings>('GET', '/api/settings'),
+  }),
+  push: queryOptions({
+    queryKey: ['push'],
+    queryFn: () => api<PushConfig>('GET', '/api/push'),
   }),
   info: queryOptions({ queryKey: ['info'], queryFn: () => api<Info>('GET', '/api/info') }),
   // Plan mode: poll every 2 s only while the plan process is running, so item
@@ -100,6 +114,7 @@ export function useRefreshPage() {
         '/status': [status, device, () => qc.fetchQuery({ ...q.system, ...fresh })],
         '/plan': [() => qc.fetchQuery({ ...q.plan, ...fresh }), status],
         '/drill': [status, device],
+        '/settings': [status, () => qc.fetchQuery({ ...q.push, ...fresh })],
         '/history': [
           () => qc.fetchQuery({ ...q.history, ...fresh }),
           () => qc.fetchQuery({ ...q.log(800), ...fresh }),

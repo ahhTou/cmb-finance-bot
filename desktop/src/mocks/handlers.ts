@@ -8,6 +8,7 @@ import {
   HISTORY,
   LOG_LINES,
   makePlan,
+  makePush,
   makeStatus,
   makeTask,
   SETTINGS,
@@ -23,6 +24,7 @@ const state = {
   logs: kind === 'empty' ? [] : [...LOG_LINES],
   history: kind === 'empty' ? [] : [...HISTORY],
   plan: makePlan(kind),
+  push: makePush(kind),
   planLogs:
     kind === 'plan'
       ? [`${localISO(new Date()).slice(5).replace('T', ' ')} 已保存计划：2 项（演练）`]
@@ -30,7 +32,10 @@ const state = {
 }
 const active = () => ['armed', 'preparing', 'waiting', 'firing'].includes(state.task?.phase ?? '')
 const fail = (error: string, status = 400) => HttpResponse.json({ error }, { status })
-const status = () => makeStatus(state.task, state.favorites, state.logs)
+const status = () => ({
+  ...makeStatus(state.task, state.favorites, state.logs),
+  push_configured: state.push.configured,
+})
 const planStamp = () => localISO(new Date()).slice(5).replace('T', ' ')
 
 // ---- Plan mode (`/api/plan`) ------------------------------------------------
@@ -312,6 +317,41 @@ export const handlers = [
     return HttpResponse.json({ favorites: state.favorites, ok: true })
   }),
   http.post('/api/credentials/:kind', () => HttpResponse.json({ ok: true })),
+  // Push config: never echo the token; empty token keeps the saved one.
+  http.get('/api/push', async () => {
+    await delay(80)
+    return HttpResponse.json(state.push)
+  }),
+  http.put('/api/push', async ({ request }) => {
+    const body = (await request.json()) as { server?: string; topic?: string; token?: string }
+    await delay(300)
+    const server = (body.server ?? '').trim()
+    const topic = (body.topic ?? '').trim()
+    const token = (body.token ?? '').trim()
+    if (!/^https:\/\/\S+$/i.test(server)) return fail('推送服务器地址必须是 https 地址。')
+    if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic))
+      return fail('频道名只能包含字母、数字、- 和 _，最长 64 个字符。')
+    if (!token && !state.push.configured) return fail('还没有保存的访问令牌，请填写后再保存。')
+    state.push = {
+      configured: true,
+      server: server.endsWith('/') ? server : `${server}/`,
+      topic,
+      token_set: true,
+    }
+    return HttpResponse.json(state.push)
+  }),
+  http.post('/api/push/test', async () => {
+    await delay(400)
+    if (!state.push.configured) return fail('推送未配置。')
+    // A server containing "fail" exercises the failure message in e2e.
+    if (state.push.server?.includes('fail')) return HttpResponse.json({ sent: false, error: 'HTTP 401' })
+    return HttpResponse.json({ sent: true })
+  }),
+  http.delete('/api/push', async () => {
+    await delay(200)
+    state.push = { configured: false, server: null, topic: null, token_set: false }
+    return HttpResponse.json(state.push)
+  }),
   http.post('/api/open-log', () => HttpResponse.json({ ok: true })),
   // Plan mode: read, save (PUT), start, disarm, clear (DELETE).
   http.get('/api/plan', async () => {

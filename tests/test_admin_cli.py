@@ -75,6 +75,68 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn('do-not-echo', json.dumps(data))
 
+    def test_push_config_save_test_and_clear_never_echo_the_token(self):
+        info = {'configured': True, 'server': 'https://ntfy.example.com/',
+                'topic': 'topic-1', 'token_set': True}
+        with patch.object(admin.push, 'config_info', return_value=info):
+            code, data = self.call('push')
+        self.assertEqual(code, 0)
+        self.assertEqual(data, dict(info, ok=True))
+
+        with patch.object(admin.push, 'save_config') as save, \
+             patch.object(admin.push, 'config_info', return_value=info):
+            code, data = self.call(
+                'push-save',
+                stdin='{"server":"https://ntfy.example.com","topic":"topic-1","token":"secret-token"}')
+        self.assertEqual(code, 0)
+        save.assert_called_once_with('https://ntfy.example.com', 'topic-1', 'secret-token')
+        self.assertNotIn('secret-token', json.dumps(data))
+
+        with patch.object(admin.push, 'load',
+                          return_value={'server': 'https://ntfy.example.com/',
+                                        'topic': 'topic-1', 'token': 'saved-token'}), \
+             patch.object(admin.push, 'save_config') as save, \
+             patch.object(admin.push, 'config_info', return_value=info):
+            code, _ = self.call(
+                'push-save',
+                stdin='{"server":"https://ntfy.example.com","topic":"topic-1","token":""}')
+        self.assertEqual(code, 0)
+        save.assert_called_once_with('https://ntfy.example.com', 'topic-1', 'saved-token')
+
+        with patch.object(admin.push, 'load', side_effect=RuntimeError('absent')):
+            code, data = self.call(
+                'push-save',
+                stdin='{"server":"https://ntfy.example.com","topic":"topic-1","token":""}')
+        self.assertEqual(code, 1)
+        self.assertIn('访问令牌', data['error'])
+
+        with patch.object(admin.push, 'send_test',
+                          return_value={'sent': False, 'error': 'HTTP 401'}), \
+             patch.object(admin.push, 'config_info', return_value=info):
+            code, data = self.call('push-test')
+        self.assertEqual(code, 0)
+        self.assertEqual(data, {'sent': False, 'error': 'HTTP 401', 'ok': True})
+
+        with patch.object(admin.push, 'clear_config') as clear, \
+             patch.object(admin.push, 'config_info',
+                          return_value={'configured': False, 'server': None,
+                                        'topic': None, 'token_set': False}):
+            code, data = self.call('push-clear')
+        self.assertEqual(code, 0)
+        clear.assert_called_once_with()
+        self.assertFalse(data['configured'])
+
+    def test_push_save_rejects_malformed_stdin(self):
+        for payload in ('not-json', '[]', '{"server":1,"topic":"t","token":"x"}',
+                        '{"server":"https://ntfy.example.com","topic":"t"}'):
+            with self.subTest(payload=payload), \
+                 patch.object(admin.push, 'save_config') as save:
+                code, data = self.call('push-save', stdin=payload)
+                self.assertEqual(code, 1)
+                self.assertIn('格式', data['error'])
+                save.assert_not_called()
+
+
     def test_favorites_test_item_cli(self):
         code, data = self.call('favorites', '--add', 'JX040229', '--title', '标题')
         self.assertEqual(code, 0)

@@ -5,6 +5,7 @@ import type {
   Mode,
   Plan,
   PlanItem,
+  PushConfig,
   Status,
   SystemInfo,
   Task,
@@ -83,6 +84,17 @@ export const FAVORITES: Favorite[] = [
   { code: '133045A', title: '日日金 1 号' },
   { code: 'GS110021', title: '季季宝' },
 ]
+
+/** Fake push config for demos; never the account holder's real server or topic. */
+export function makePush(kind: Scenario): PushConfig {
+  if (kind === 'empty') return { configured: false, server: null, topic: null, token_set: false }
+  return {
+    configured: true,
+    server: 'https://ntfy.example.com/',
+    topic: 'cmb-demo',
+    token_set: true,
+  }
+}
 
 export function makeTask(kind: Scenario): Task | null {
   if (kind === 'armed')

@@ -107,6 +107,42 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(run.call_args.kwargs['input']), {'current': '111111', 'new': '222222'})
 
     @patch('admin_server.subprocess.run')
+    def test_push_routes_keep_the_token_out_of_argv(self, run):
+        run.return_value = done({'ok': True, 'configured': True,
+                                 'server': 'https://ntfy.example.com/',
+                                 'topic': 'topic-1', 'token_set': True})
+        r = self.call('GET', '/api/push')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['push'])
+
+        r = self.call('PUT', '/api/push', json={
+            'server': 'https://ntfy.example.com', 'topic': 'topic-1', 'token': 'secret-token'})
+        self.assertEqual(r.status_code, 200)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[3:], ['push-save'])
+        self.assertNotIn('secret-token', ' '.join(argv))
+        self.assertEqual(json.loads(run.call_args.kwargs['input']),
+                         {'server': 'https://ntfy.example.com',
+                          'topic': 'topic-1', 'token': 'secret-token'})
+
+        r = self.call('POST', '/api/push/test')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['push-test'])
+
+        r = self.call('DELETE', '/api/push')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['push-clear'])
+
+    @patch('admin_server.subprocess.run')
+    def test_push_token_defaults_to_empty_and_timeout_is_bounded(self, run):
+        run.return_value = done({'ok': True, 'configured': False,
+                                 'server': None, 'topic': None, 'token_set': False})
+        self.call('PUT', '/api/push', json={
+            'server': 'https://ntfy.example.com', 'topic': 'topic-1'})
+        self.assertEqual(json.loads(run.call_args.kwargs['input'])['token'], '')
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+
+    @patch('admin_server.subprocess.run')
     def test_plan_routes(self, run):
         run.return_value = done({'ok': True, 'plan': None})
         r = self.call('GET', '/api/plan')

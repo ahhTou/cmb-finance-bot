@@ -7,6 +7,7 @@ export type CancelRequest = components['schemas']['CancelRequest']
 export type PlanItemRequest = components['schemas']['PlanItemRequest']
 export type PlanRequest = components['schemas']['PlanRequest']
 export type PlanStartRequest = components['schemas']['PlanStartRequest']
+export type PushRequest = components['schemas']['PushRequest']
 
 // Responses are whatever admin_cli.py prints; these describe the fields the app reads.
 export type Mode = 'first_launch' | 'redemption'
@@ -101,6 +102,20 @@ export interface Log {
 export interface PurchaseSettings {
   settings: Record<string, number>
   settings_revision: string
+}
+
+/** GET/PUT/DELETE /api/push; never includes the token itself. */
+export interface PushConfig {
+  configured: boolean
+  server: string | null
+  topic: string | null
+  token_set: boolean
+}
+
+/** POST /api/push/test: delivered, or why the server refused it. */
+export interface PushTestResult {
+  sent: boolean
+  error?: string
 }
 
 export interface Info {

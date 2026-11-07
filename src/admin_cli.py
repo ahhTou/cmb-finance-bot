@@ -126,7 +126,8 @@ def parser():
     sub = p.add_subparsers(dest='cmd', required=True)
     for name in ('status', 'device', 'system', 'disarm', 'keep-awake', 'screenshot',
                  'set-login-pattern', 'set-payment-password', 'agent-release',
-                 'plan', 'plan-save', 'plan-disarm', 'plan-clear'):
+                 'plan', 'plan-save', 'plan-disarm', 'plan-clear',
+                 'push', 'push-save', 'push-test', 'push-clear'):
         sub.add_parser(name)
     plan_start = sub.add_parser('plan-start')
     plan_start.add_argument('--confirm-real-payment', action='store_true')
@@ -185,6 +186,28 @@ def parser():
 
 
 def dispatch(a):
+    if a.cmd == 'push': return push.config_info()
+    if a.cmd == 'push-save':
+        try:
+            data = json.loads(sys.stdin.read(4097))
+            if not isinstance(data, dict):
+                raise ValueError()
+            server, topic, token = (data.get(key) for key in ('server', 'topic', 'token'))
+            if not all(isinstance(value, str) for value in (server, topic, token)):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise nw.Abort('推送配置输入格式无效。')
+        if not token.strip():
+            try:
+                token = push.load()['token']
+            except (RuntimeError, ValueError, KeyError):
+                raise nw.Abort('还没有保存的访问令牌，请填写后再保存。')
+        push.save_config(server, topic, token)
+        return push.config_info()
+    if a.cmd == 'push-test': return push.send_test()
+    if a.cmd == 'push-clear':
+        push.clear_config()
+        return push.config_info()
     if a.cmd == 'settings':
         updates = {key: getattr(a, key) for key in purchase_settings.DEFAULTS
                    if getattr(a, key) is not None}

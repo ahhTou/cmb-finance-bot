@@ -136,6 +136,13 @@ class PasswordRequest(BaseModel):
     new: str
 
 
+class PushRequest(BaseModel):
+    server: str
+    topic: str
+    # Empty means "keep the saved token"; the first save needs a non-empty one.
+    token: str = ''
+
+
 class PlanItemRequest(BaseModel):
     code: str
     amount: str
@@ -319,6 +326,27 @@ def set_pattern(body: PatternRequest):
 @app.post('/api/credentials/payment-password')
 def set_password(body: PasswordRequest):
     return run(['set-payment-password'], {'current': body.current, 'new': body.new})
+
+
+@app.get('/api/push')
+def push_config():
+    return run(['push'])
+
+
+@app.put('/api/push')
+def save_push_config(body: PushRequest):
+    # The token goes through stdin like the other secrets, never argv.
+    return run(['push-save'], {'server': body.server, 'topic': body.topic, 'token': body.token})
+
+
+@app.post('/api/push/test')
+def test_push():
+    return run(['push-test'])
+
+
+@app.delete('/api/push')
+def clear_push_config():
+    return run(['push-clear'])
 
 
 @app.post('/api/open-log')

@@ -2,9 +2,10 @@
 """Phone push alerts through an ntfy server (standard JSON publish API).
 
 The server URL, topic and access token live together in a separate Keychain
-item; the account holder stores them with `python3 src/push.py setup` in their
-own terminal. Messages never include screenshots, passwords, tokens or Keychain
-contents.
+item. The management app configures them in 设置 → 凭据 → 推送通知; the command
+line fallback `python3 src/push.py setup` still prompts for the same values in
+the account holder's own terminal. Messages never include screenshots,
+passwords, tokens or Keychain contents.
 
 Publish API (see https://docs.ntfy.sh/publish/#publish-as-json):
 
@@ -66,13 +67,57 @@ def load():
     if not isinstance(data, dict) or not all(
             isinstance(data.get(k), str) and data[k].strip()
             for k in ("server", "topic", "token")):
-        raise RuntimeError("钥匙串里的推送配置不完整，请重新运行 push.py setup。")
+        raise RuntimeError("钥匙串里的推送配置不完整，请重新配置推送。")
     if not TOPIC.fullmatch(data["topic"]) or "\n" in data["token"] or "\r" in data["token"]:
-        raise RuntimeError("钥匙串里的推送配置无效，请重新运行 push.py setup。")
+        raise RuntimeError("钥匙串里的推送配置无效，请重新配置推送。")
     # Plain http is accepted only for loopback, so send() can be tested
-    # against a local fake server; setup() always requires https.
+    # against a local fake server; save_config() always requires https.
     return {"server": _server_url(data["server"], allow_loopback_http=True),
             "topic": data["topic"], "token": data["token"]}
+
+
+def save_config(server, topic, token):
+    """Validate and save the push config, overwriting any existing item.
+
+    The token never leaves this process through argv, logs or errors.
+    """
+    if not all(isinstance(value, str) for value in (server, topic, token)):
+        raise RuntimeError("推送配置格式无效。")
+    server = server.strip()
+    topic = topic.strip()
+    token = token.strip()
+    try:
+        server = _server_url(server)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    if not TOPIC.fullmatch(topic):
+        raise RuntimeError("频道名只能包含字母、数字、- 和 _，最长 64 个字符。")
+    if not token or "\n" in token or "\r" in token:
+        raise RuntimeError("访问令牌不能为空或包含换行。")
+    payload = json.dumps({"server": server, "topic": topic, "token": token},
+                         separators=(",", ":")).encode("utf-8")
+    try:
+        keychain_store.put(payload, service=SERVICE)
+    except RuntimeError as exc:
+        raise RuntimeError(f"保存推送配置失败：{exc}") from None
+
+
+def clear_config():
+    """Remove the Keychain item; already absent is not an error."""
+    try:
+        keychain_store.delete(service=SERVICE)
+    except RuntimeError as exc:
+        raise RuntimeError(f"清除推送配置失败：{exc}") from None
+
+
+def config_info():
+    """Non-secret view of the saved config. Never includes the token itself."""
+    try:
+        cfg = load()
+    except (RuntimeError, ValueError):
+        return {"configured": False, "server": None, "topic": None, "token_set": False}
+    return {"configured": True, "server": cfg["server"], "topic": cfg["topic"],
+            "token_set": bool(cfg["token"])}
 
 
 def configured():
@@ -91,16 +136,8 @@ def _priority(value):
     return value if 1 <= value <= 5 else 3
 
 
-def send(title, body, priority=3):
-    """Send one alert. Returns False instead of raising: a failed push must
-    never stop the watch loop. Without push setup this is a silent no-op.
-
-    The only thing ever written to stderr is an HTTP status or an exception
-    type name, so the token cannot leak into the log."""
-    try:
-        cfg = load()
-    except (RuntimeError, ValueError):
-        return False
+def _deliver(cfg, title, body, priority=3):
+    """Publish once. Returns (sent, reason) where reason is status or type name."""
     try:
         payload = json.dumps({"topic": cfg["topic"],
                               "title": TITLE_PREFIX + str(title),
@@ -113,15 +150,41 @@ def send(title, body, priority=3):
                      "Content-Type": "application/json"})
         with _OPENER.open(request, timeout=TIMEOUT) as response:
             if 200 <= response.status < 300:
-                return True
-            print(f"推送发送失败：HTTP {response.status}", file=sys.stderr, flush=True)
-            return False
+                return True, None
+            return False, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
-        print(f"推送发送失败：HTTP {exc.code}", file=sys.stderr, flush=True)
-        return False
+        return False, f"HTTP {exc.code}"
     except Exception as exc:        # network/TLS/timeout/anything: never raise
-        print(f"推送发送失败：{type(exc).__name__}", file=sys.stderr, flush=True)
+        return False, type(exc).__name__
+
+
+def send(title, body, priority=3):
+    """Send one alert. Returns False instead of raising: a failed push must
+    never stop the watch loop. Without push setup this is a silent no-op.
+
+    The only thing ever written to stderr is an HTTP status or an exception
+    type name, so the token cannot leak into the log."""
+    try:
+        cfg = load()
+    except (RuntimeError, ValueError):
         return False
+    sent, reason = _deliver(cfg, title, body, priority)
+    if not sent:
+        print(f"推送发送失败：{reason}", file=sys.stderr, flush=True)
+    return sent
+
+
+def send_test():
+    """Send one test alert; returns {'sent': True} or {'sent': False, 'error': ...}.
+
+    A missing/invalid config raises instead, so the caller can tell "not
+    configured" apart from "configured but the server rejected the push"."""
+    try:
+        cfg = load()
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(str(exc)) from None
+    sent, reason = _deliver(cfg, "测试推送", "推送通知配置成功。")
+    return {"sent": True} if sent else {"sent": False, "error": reason}
 
 
 def setup():
@@ -130,23 +193,8 @@ def setup():
     server = input("ntfy 服务器地址（https，例如 https://ntfy.example.com/）: ").strip()
     topic = input("频道名（topic）: ").strip()
     token = getpass.getpass("访问令牌（不显示）: ").strip()
-    try:
-        server = _server_url(server)
-    except ValueError as exc:
-        raise RuntimeError(str(exc))
-    if not TOPIC.fullmatch(topic):
-        raise RuntimeError("频道名只能包含字母、数字、- 和 _，最长 64 个字符。")
-    if not token or "\n" in token or "\r" in token:
-        raise RuntimeError("访问令牌不能为空或包含换行。")
-    payload = json.dumps({"server": server, "topic": topic, "token": token},
-                         separators=(",", ":")).encode("utf-8")
+    save_config(server, topic, token)
     token = None
-    try:
-        item = keychain_store.add(payload, service=SERVICE)
-        keychain_store.core.CFRelease(item)
-    except RuntimeError:
-        raise RuntimeError("写入失败；若已存在旧条目，请先在“钥匙串访问”里删除 "
-                           "cmb-finance-bot.push.v1 再重试。")
     print("已保存。正在发送测试推送…")
     print("测试推送已发送，请在手机上查看。" if send("测试推送", "推送通知配置成功。")
           else "测试推送发送失败，请检查地址、频道和令牌。")
@@ -157,9 +205,11 @@ if __name__ == "__main__":
         if sys.argv[1:] == ["setup"]:
             setup()
         elif sys.argv[1:] == ["test"]:
-            if not configured():
-                raise RuntimeError("推送未配置：先运行 python3 src/push.py setup。")
-            sys.exit(0 if send("测试推送", "推送通知正常。") else 1)
+            result = send_test()
+            if result["sent"]:
+                sys.exit(0)
+            print(f"推送发送失败：{result['error']}", file=sys.stderr)
+            sys.exit(1)
         else:
             raise RuntimeError("用法：push.py setup | test")
     except (OSError, RuntimeError, ValueError) as exc:

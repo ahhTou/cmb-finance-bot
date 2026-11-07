@@ -760,6 +760,86 @@
     }
    }
   },
+  "/api/push": {
+   "get": {
+    "summary": "Push Config",
+    "operationId": "push_config_api_push_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "summary": "Save Push Config",
+    "operationId": "save_push_config_api_push_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PushRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Clear Push Config",
+    "operationId": "clear_push_config_api_push_delete",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/push/test": {
+   "post": {
+    "summary": "Test Push",
+    "operationId": "test_push_api_push_test_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/open-log": {
    "post": {
     "summary": "Open Log",
@@ -1063,6 +1143,29 @@
     },
     "type": "object",
     "title": "PlanStartRequest"
+   },
+   "PushRequest": {
+    "properties": {
+     "server": {
+      "type": "string",
+      "title": "Server"
+     },
+     "topic": {
+      "type": "string",
+      "title": "Topic"
+     },
+     "token": {
+      "type": "string",
+      "title": "Token",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "required": [
+     "server",
+     "topic"
+    ],
+    "title": "PushRequest"
    },
    "ValidationError": {
     "properties": {
