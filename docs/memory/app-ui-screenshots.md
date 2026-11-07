@@ -5,7 +5,7 @@ type: project
 updated: 2026-11-07
 ---
 
-README「管理 App → 界面」一节的截图在 `docs/images/app-*.png`（任务 / 布防中 / 状态 / 演练 / 设置 / 推送通知）。在 `desktop/` 下运行 `pnpm screenshots` 重拍：脚本起一个假后端（MSW）的 Vite 服务，用 WebKit 按 1093×763、2 倍像素截图，数据全是演示数据。推送通知那张会打开「凭据」页签并滚动到卡片。
+README「管理 App → 界面」一节的截图在 `docs/images/app-*.png`（任务 / 布防中 / 计划 / 状态 / 演练 / 设置 / 推送连接 / 通知场景）。在 `desktop/` 下运行 `pnpm screenshots` 重拍：脚本起一个假后端（MSW）的 Vite 服务，用 WebKit 按 1093×763、2 倍像素截图，数据全是演示数据。推送通知两张会打开独立的「推送通知」页签，分别截连接配置和通知场景。
 
 **不要用真实环境拍「布防中」**：`arm` 会启动真实盯盘进程、到点会提交交易。假后端的 `armed` 场景就是布防中的演示态，不需要再改 `var/night/` 下的文件。
 
