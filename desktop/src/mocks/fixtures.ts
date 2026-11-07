@@ -254,6 +254,16 @@ export const HISTORY: HistoryRecord[] = [
   },
 ]
 
+export const PLAN_SETTINGS = {
+  arm_gap_minutes: 2,
+  first_end_slack_minutes: 2,
+  end_timeout_minutes: 5,
+  grace_seconds: 15,
+  poll_seconds: 2,
+  heartbeat_seconds: 10,
+  kill_wait_seconds: 10,
+}
+
 export const SETTINGS = {
   reopen_deadline: 3,
   drill_form_deadline: 3,

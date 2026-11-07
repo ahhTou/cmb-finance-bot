@@ -285,6 +285,16 @@ test('drill buy shows command output', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: '命令输出' })).toContainText('输完密码，未点确定，演练结束')
 })
 
+test('settings other tab edits plan scheduler values', async ({ page }) => {
+  await open(page, '/settings')
+  await page.getByRole('radio', { name: '其他' }).click()
+  await expect(page.getByTestId('other-settings')).toBeVisible()
+  const poll = page.getByLabel('轮询间隔')
+  await poll.fill('3')
+  await page.getByTestId('other-save').click()
+  await expect(page.getByText('已保存，之后的新计划使用这套值')).toBeVisible()
+})
+
 test('pages fit the minimum window without horizontal overflow', async ({ page }) => {
   await page.setViewportSize({ width: 940, height: 680 })
   for (const path of ['/tasks', '/status', '/drill', '/favorites', '/history', '/settings']) {

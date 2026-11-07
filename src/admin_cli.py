@@ -16,6 +16,7 @@ import time
 
 import night_watch as nw
 import keychain_store
+import plan_settings
 import purchase_settings
 import favorites
 import watch_plan
@@ -149,6 +150,9 @@ def parser():
     settings = sub.add_parser('settings')
     for key in purchase_settings.DEFAULTS:
         settings.add_argument('--' + key.replace('_', '-'), type=int)
+    settings_other = sub.add_parser('settings-other')
+    for key in plan_settings.DEFAULTS:
+        settings_other.add_argument('--' + key.replace('_', '-'), type=int)
     buy = sub.add_parser('buy')
     buy.add_argument('--code', required=True)
     buy.add_argument('--amount', required=True)
@@ -229,6 +233,13 @@ def dispatch(a):
             if updates:
                 values = purchase_settings.save(dict(values, **updates))
         return {'settings': values, 'settings_revision': purchase_settings.revision(values)}
+    if a.cmd == 'settings-other':
+        updates = {key: getattr(a, key) for key in plan_settings.DEFAULTS
+                   if getattr(a, key) is not None}
+        if updates:
+            with nw.task_lock(False):
+                plan_settings.save(updates)
+        return plan_settings.view()
     if a.cmd == 'status': return status()
     if a.cmd == 'plan': return watch_plan.view()
     if a.cmd == 'plan-save':

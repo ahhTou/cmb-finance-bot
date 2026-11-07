@@ -110,6 +110,11 @@ export interface PurchaseSettings {
   settings_revision: string
 }
 
+/** Plan scheduler internals from Settings → 其他; no secret and no revision. */
+export interface PlanSettings {
+  settings: Record<string, number>
+}
+
 /** GET/PUT/DELETE /api/push; never includes the token itself. */
 export interface PushConfig {
   configured: boolean

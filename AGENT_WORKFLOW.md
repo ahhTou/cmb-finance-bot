@@ -32,6 +32,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-07 计划内部参数移到「设置 → 其他」**：新增 `src/plan_settings.py` 和 `var/night/plan-settings.json`；相邻项间隔、首发结束余量、单项超时、进程消失宽限、轮询/心跳/终止等待 7 项从 `watch_plan.py` 常量移入设置。管理 App 新增第五个「其他」页签，后端新增 `GET/PUT /api/settings/other`，CLI 新增 `settings-other`；`plan-start` 时快照到 `plan.json` 的 `runtime_settings`，运行中的计划保持开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。验证：Python 全量 348 项中 332 项通过、15 项跳过，唯一错误为既有 `test_timed_buy`；前端单元测试 30 项、e2e 74 项、tsc、lint 和 build 通过。本轮未执行真实计划或交易。
+
 - **2026-11-07 计划前三项修复与通知分类**：计划任务终态新增 `outcome=success/failed/dry_run/unknown`；明确失败记失败并继续，提交异常、结果未知、提交进程消失则整份计划中止，提示查交易记录，不重试。计划取消、超时与异常清理在任务锁内核对计划/任务归属，不误取消并发新建的独立布防。开始请求必须携带已核对的 `plan_id/content_revision/settings_revision`；确认框冻结完整清单，后端锁内校验内容与配置，旧确认不得启动新内容。设置新增独立「推送通知」Tab，连接配置和通知选项分开保存；总开关与 23 类通知场景单独可配，默认全开，实时读取偏好，测试推送绕过开关。非敏感选项在 `var/night/push-settings.json`，不参与购买配置版本，不会因开关通知中止计划。计划审查第 4–7 项和体验优化暂缓，记录在 [计划已知问题](docs/plan-known-issues.md)。本轮未执行真实布防、购买、凭据修改或真实推送。验证：Python 全量 338 项中 323 项通过、14 项跳过，唯一错误为已知旧 `test_timed_buy.test_single_submit_success`（数字键不完整）；前端单元测试 30 项、WebKit/Chromium e2e 72 项、类型检查、lint 和 Tauri Release 构建通过（2026-11-07 复核全量 e2e 时 WebKit 内嵌日志弹窗出现 1 次不稳定失败，该用例单独重跑通过）；通知页截图已更新。确认无活跃值守与计划后已重启管理 App，单份托管后端健康检查通过。
 
 - **2026-11-07 提醒改为 ntfy 手机推送**：删除 QQ 邮箱 SMTP 通知（`src/notify.py`），新增 `src/push.py`：服务器、频道和访问令牌同存钥匙串 `cmb-finance-bot.push.v1`。配置改为在管理 App「设置 → 推送通知」完成：显示已配置/未配置、服务器和频道；表单可保存、发送测试推送、清除配置（需确认），令牌为空表示不改、首次配置必须填写，`config_info()` 只返回 `{configured, server, topic, token_set}`、永不返回令牌。后端接口 `GET/PUT/DELETE /api/push` 和 `POST /api/push/test`，token 照既有做法走 stdin payload；测试推送失败只回 HTTP 状态码或异常类型。`python3 src/push.py setup` 保留为备选并改用 `save_config()`，可覆盖已有条目。按 ntfy 标准 JSON 发布，5 秒超时，失败只在 stderr 写一行状态码或异常类型，不抛异常、不重试。成交成功、购买失败、异常中止用优先级 5；布防、开始、撤防、登录、页面就绪等状态提示用 3。管理 App 状态页「凭据与通知」仍显示「推送通知 已配置 / 未配置」，后端字段为 `push_configured`。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 不再使用，需在「钥匙串访问」手动删除。代码与隔离测试、前端 tsc / Vitest / e2e 已通过，管理 App 已重建并重启，README 截图已重拍（新增推送通知一张）；真实推送地址和手机端验收待账户持有人完成。
@@ -183,7 +185,7 @@ pgrep -fl "admin_server.py"        # 应看到 --port <随机端口> --exit-with
 |---|---|---|
 | `desktop/src` 前端、`src-tauri`（Rust） | 要 | 要 |
 | `src/admin_server.py` | 不用 | 要 |
-| `admin_cli.py`、`night_watch.py`、`query_gate.py`/`.js`、`purchase_settings.py` 等 | 不用 | 不用 |
+| `admin_cli.py`、`night_watch.py`、`query_gate.py`/`.js`、`purchase_settings.py`、`plan_settings.py` 等 | 不用 | 不用 |
 
 后端每个请求都会新起子进程运行 `admin_cli`，下一次请求或下一次布防就用上新代码。**已布防的任务沿用布防时保存的配置快照**，改设置不会影响它。
 
@@ -421,7 +423,7 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 - 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`，读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；心跳超时尚未用于健康判定，已记为待修问题。
 - 任务终态按 `outcome=success/failed/dry_run/unknown` 判断，不以 `phase=done` 代替购买成功。明确失败（布防/准备失败、窗口内没买到、页面明确失败）记 `failed` 并继续；明确成功或演练完成记 `done`。旧记录只接受明确结果白名单，不熟悉的结果保守视为未知。watch 进程消失后等 15 秒宽限：能证明未进入提交则记失败继续，仍为 `firing`、有 `fired_at` 或任务记录丢失则记结果未知。**结果未知、提交阶段超时或未捕获异常**会整份中止，不杀提交中进程，不开始下一项，提示「请查交易记录，不要重复提交」。
 - 若计划进程自己异常退出（被 kill、崩溃），`plan.json` 会停在 `running` 且 `pid` 不存活（`stale`），页面显示「进程已退出」，需要人工点「取消计划」收口；此时当前 watch 可能仍在跑，先查是否已提交过。
-- 计划进程内部的轮询/心跳/宽限/超时（2 秒轮询、10 秒心跳、15 秒宽限、超时 5 分钟、杀进程等待 10 秒）和相邻间隔 2 分钟都是**内部稳定性常量**，与 `night_watch` 的巡检间隔、重试预算同类，不做成设置；影响购买时间的可调值仍只有设置里的「冷启动提前量」。
+- 计划进程内部的轮询/心跳/宽限/超时/终止等待和相邻间隔都在「设置 → 其他」里调（`src/plan_settings.py`，`var/night/plan-settings.json`）。它们不属于购买配置，不改变 `settings_revision`；`plan-start` 时读取并快照到 `plan.json` 的 `runtime_settings`，运行中的计划沿用开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。
 
 ### 5B.2 操作（管理 App「计划」页）
 
@@ -442,9 +444,13 @@ python3 -B src/admin_cli.py plan-start --plan-id <计划ID> --content-revision <
     --settings-revision <配置版本> --confirm-real-payment   # 版本来自上面已核对的 plan 响应；演练省略付款 flag
 python3 -B src/admin_cli.py plan-disarm          # 取消计划并取消当前布防
 python3 -B src/admin_cli.py plan-clear           # 未运行时清空计划
+python3 -B src/admin_cli.py settings-other        # 查看「设置 → 其他」的计划调度参数
+python3 -B src/admin_cli.py settings-other --poll-seconds 3 --heartbeat-seconds 15
 ```
 
 HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/plan/disarm`、`DELETE /api/plan`。开始请求必须提供 `plan_id/content_revision/settings_revision`，确认内容或配置变化会拒绝，真实计划另需 `confirm_real_payment=true`。
+
+计划调度参数：`GET/PUT /api/settings/other`，或 `admin_cli.py settings-other`（CLI 参数用 `--poll-seconds` 这类形式）；保存支持部分更新，未知键、越界值和非整数拒绝，且 `poll_seconds` 不得大于 `heartbeat_seconds`。
 
 通知偏好：`GET/PUT /api/push/preferences`，或 `admin_cli.py push-preferences` / `push-preferences-save`（stdin JSON）。返回 `{enabled, events: {事件键: bool}, catalog: [{key,label,description,group}]}`；保存支持部分更新，未知事件和非布尔值拒绝。连接凭据仍走原 `GET/PUT/DELETE /api/push`，测试仍是 `POST /api/push/test`。
 
@@ -452,8 +458,9 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 
 | 文件 | 内容 |
 |---|---|
-| `var/night/plan.json` | 计划输入、每项状态、`plan_id`/`generation`/`pid`/心跳；0600、原子写 |
+| `var/night/plan.json` | 计划输入、每项状态、`plan_id`/`generation`/`pid`/心跳；启动时写入 `runtime_settings` 快照；0600、原子写 |
 | `var/night/plan.log` | 计划进程日志：每项布防/完成/失败、降级为立即冷启动、异常中止 |
+| `var/night/plan-settings.json` | 「设置 → 其他」的计划调度参数；0600、原子写 |
 | `var/night/history.jsonl` | 每个计划项仍写一条普通值守历史，额外带 `plan_id`、`plan_item` |
 
 | 日志 / 现象 | 含义 | 处理 |
@@ -633,6 +640,7 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 | `docs/purchase-chain.md` | 购买链路 P1–P12：每步做什么、入口函数、耗时、可优化点 |
 | `src/night_watch.py` | 夜间值守：`arm`（首发 / 不定时抢购）/ `status` / `disarm` / `resume` / `run` |
 | `src/watch_plan.py` | 计划模式：多布防串行排程、plan.json、计划进程 |
+| `src/plan_settings.py` | 「设置 → 其他」的计划调度参数：校验、保存、计划开始时快照 |
 | `src/admin_cli.py` | 管理 App / Agent 共用的单行 JSON 接口 |
 | `src/admin_server.py` | 管理 App 用的本地 HTTP 后端，逐请求调用 `admin_cli.py` |
 | `desktop/` | 管理 App：Tauri 壳 + React 前端、假后端与端到端测试；构建与重启见 §2A |

@@ -215,6 +215,60 @@
     }
    }
   },
+  "/api/settings/other": {
+   "get": {
+    "summary": "Settings Other",
+    "operationId": "settings_other_api_settings_other_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "summary": "Save Settings Other",
+    "operationId": "save_settings_other_api_settings_other_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": {
+         "type": "integer"
+        },
+        "type": "object",
+        "title": "Values"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/arm": {
    "post": {
     "summary": "Arm",

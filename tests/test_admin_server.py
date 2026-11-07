@@ -211,6 +211,18 @@ class ServerTest(unittest.TestCase):
         self.call('PUT', '/api/settings', json={'first_offset_ms': 200})
         self.assertEqual(run.call_args.args[0][3:], ['settings', '--first-offset-ms', '200'])
 
+    @patch('admin_server.subprocess.run')
+    def test_plan_settings_routes(self, run):
+        run.return_value = done({'ok': True, 'settings': {'poll_seconds': 2}})
+        self.call('GET', '/api/settings/other')
+        self.assertEqual(run.call_args.args[0][3:], ['settings-other'])
+        self.call('PUT', '/api/settings/other',
+                  json={'poll_seconds': 3, 'heartbeat_seconds': 15})
+        self.assertEqual(run.call_args.args[0][3:], [
+            'settings-other', '--poll-seconds', '3', '--heartbeat-seconds', '15'])
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+        self.assertEqual(self.call('PUT', '/api/settings/other', json={'--yes': 1}).status_code, 400)
+
 
 if __name__ == '__main__':
     unittest.main()

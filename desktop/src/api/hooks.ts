@@ -9,6 +9,7 @@ import type {
   History,
   Info,
   Log,
+  PlanSettings,
   PlanView,
   PurchaseSettings,
   PushConfig,
@@ -31,6 +32,10 @@ export const q = {
   settings: queryOptions({
     queryKey: ['settings'],
     queryFn: () => api<PurchaseSettings>('GET', '/api/settings'),
+  }),
+  planSettings: queryOptions({
+    queryKey: ['plan-settings'],
+    queryFn: () => api<PlanSettings>('GET', '/api/settings/other'),
   }),
   push: queryOptions({
     queryKey: ['push'],
@@ -123,6 +128,7 @@ export function useRefreshPage() {
           status,
           () => qc.fetchQuery({ ...q.push, ...fresh }),
           () => qc.fetchQuery({ ...q.pushPreferences, ...fresh }),
+          () => qc.fetchQuery({ ...q.planSettings, ...fresh }),
         ],
         '/history': [
           () => qc.fetchQuery({ ...q.history, ...fresh }),

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import night_watch as nw
+import plan_settings
 import purchase_settings
 import query_gate
 import watch_plan
@@ -35,6 +36,8 @@ class PlanTestBase(unittest.TestCase):
             self.stack.enter_context(patch.object(nw, name, value))
         self.stack.enter_context(patch.object(purchase_settings, "SETTINGS",
                                               self.state / "purchase-settings.json"))
+        self.stack.enter_context(patch.object(plan_settings, "SETTINGS",
+                                              self.state / "plan-settings.json"))
         self.stack.enter_context(patch.object(nw, "alert"))
         self.stack.enter_context(patch.object(nw, "log"))
         self.stack.enter_context(patch.object(watch_plan, "log"))
@@ -57,14 +60,18 @@ class PlanTestBase(unittest.TestCase):
         return watch_plan.save({"dry_run": dry_run, "items": items})
 
     def running_plan(self, items, dry_run=True, generation="gentest", pid=5555,
-                     settings_revision=None):
+                     settings_revision=None, runtime_settings=None):
         plan = self.save(items, dry_run=dry_run)
         plan.update(phase="running", generation=generation, pid=pid,
                     started_at=iso(self.now), last_tick=iso(self.now),
                     settings_revision=settings_revision or
-                    purchase_settings.revision(purchase_settings.load()))
+                    purchase_settings.revision(purchase_settings.load()),
+                    runtime_settings=runtime_settings or plan_settings.load())
         watch_plan.save_plan(plan)
         return plan
+
+    def runtime(self, **overrides):
+        return dict(plan_settings.DEFAULTS, **overrides)
 
     def plan_path(self):
         return self.state / "plan.json"
@@ -364,6 +371,18 @@ class StartTest(PlanTestBase):
         self.assertTrue((self.state / "plan.log").exists())
         self.assertEqual(plan["plan_id"], saved["plan_id"])
 
+    def test_start_snapshots_plan_settings(self):
+        self.save([self.item(at=self.at())])
+        plan_settings.save({"first_end_slack_minutes": 10})
+        fake = types.SimpleNamespace(pid=4321)
+        with patch.object(watch_plan.subprocess, "Popen", return_value=fake):
+            data = self.start()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["runtime_settings"]["first_end_slack_minutes"], 10)
+        before = data["plan"]["items"][0]["end_at"]
+        plan_settings.save({"first_end_slack_minutes": 20})
+        self.assertEqual(watch_plan.view()["plan"]["items"][0]["end_at"], before)
+
     def test_start_twice_aborts(self):
         self.save([self.item(at=self.at())])
         fake = types.SimpleNamespace(pid=4321)
@@ -646,9 +665,11 @@ class ClearTest(PlanTestBase):
 
 
 class RunnerTest(PlanTestBase):
-    def prepare(self, items, dry_run=True, generation="gen-run", settings_revision=None):
+    def prepare(self, items, dry_run=True, generation="gen-run", settings_revision=None,
+                runtime_settings=None):
         return self.running_plan(items, dry_run=dry_run, generation=generation,
-                                 settings_revision=settings_revision)
+                                 settings_revision=settings_revision,
+                                 runtime_settings=runtime_settings)
 
     def two_items(self):
         return [self.item(code="AAAA", at=self.at(60)),
@@ -677,12 +698,12 @@ class RunnerTest(PlanTestBase):
                     self.assertIn('请查交易记录', saved['result'])
 
     def test_dead_firing_stops_plan_without_killing_or_next_arm(self):
-        self.prepare(self.two_items(), dry_run=False)
+        self.prepare(self.two_items(), dry_run=False,
+                     runtime_settings=self.runtime(grace_seconds=0))
         firing = dict(task('t1', 'firing'), fired_at='marker')
         with patch.object(nw, 'arm_task', return_value=task('t1')) as arm, \
              patch.object(nw, 'load_task', return_value=firing), \
              patch.object(nw, 'alive', return_value=False), \
-             patch.object(watch_plan, 'GRACE_SECONDS', -1), \
              patch.object(nw, 'disarm_task') as disarm:
             watch_plan.run('gen-run')
         saved = watch_plan.load_plan()
@@ -815,11 +836,11 @@ class RunnerTest(PlanTestBase):
         self.assertTrue(any("立即冷启动" in str(call) for call in log.call_args_list))
 
     def test_vanished_worker_fails_after_grace(self):
-        self.prepare([self.item(at=self.at(60))])
+        self.prepare([self.item(at=self.at(60))],
+                     runtime_settings=self.runtime(grace_seconds=0))
         with patch.object(nw, "arm_task", return_value=task("t1", "armed")), \
              patch.object(nw, "load_task", return_value=task("t1", "armed")), \
              patch.object(nw, "alive", return_value=False), \
-             patch.object(watch_plan, "GRACE_SECONDS", -1), \
              patch.object(nw, "alert"):
             watch_plan.run("gen-run")
         saved = watch_plan.load_plan()
@@ -828,14 +849,14 @@ class RunnerTest(PlanTestBase):
         self.assertEqual(saved["phase"], "done")
 
     def test_item_timeout_disarms_watch_and_continues(self):
-        plan = self.prepare(self.two_items())
+        plan = self.prepare(self.two_items(),
+                            runtime_settings=self.runtime(end_timeout_minutes=-240))
         armed = task("t1", "armed")
         with patch.object(nw, "arm_task",
                           side_effect=[armed, task("t2", "armed")]), \
              patch.object(nw, "load_task", return_value=armed), \
              patch.object(nw, "alive", return_value=True), \
              patch.object(nw, "disarm_task") as disarm_task, \
-             patch.object(watch_plan, "END_TIMEOUT", timedelta(hours=-4)), \
              patch.object(nw, "alert"):
             watch_plan.run("gen-run")
         saved = watch_plan.load_plan()
@@ -847,14 +868,14 @@ class RunnerTest(PlanTestBase):
         self.assertEqual(saved["phase"], "done")
 
     def test_item_timeout_disarm_failure_aborts_plan_unknown(self):
-        self.prepare([self.item(at=self.at(60))])
+        self.prepare([self.item(at=self.at(60))],
+                     runtime_settings=self.runtime(end_timeout_minutes=-240))
         armed = task("t1", "armed")
         with patch.object(nw, "arm_task", return_value=armed), \
              patch.object(nw, "load_task", return_value=armed), \
              patch.object(nw, "alive", return_value=True), \
              patch.object(nw, "disarm_task",
                           side_effect=nw.Abort("正在提交，不能取消；请等结果并查交易记录。")), \
-             patch.object(watch_plan, "END_TIMEOUT", timedelta(hours=-4)), \
              patch.object(nw, "alert"):
             watch_plan.run("gen-run")
         saved = watch_plan.load_plan()
@@ -865,12 +886,12 @@ class RunnerTest(PlanTestBase):
         self.assertIn("正在提交，不能取消", saved["result"])
 
     def test_firing_timeout_aborts_without_killing(self):
-        self.prepare([self.item(at=self.at(60))])
+        self.prepare([self.item(at=self.at(60))],
+                     runtime_settings=self.runtime(end_timeout_minutes=-240))
         with patch.object(nw, "arm_task", return_value=task("t1", "armed")), \
              patch.object(nw, "load_task", return_value=task("t1", "firing")), \
              patch.object(nw, "alive", return_value=True), \
              patch.object(nw, "stop_watch") as stop, \
-             patch.object(watch_plan, "END_TIMEOUT", timedelta(minutes=-120)), \
              patch.object(nw, "alert"):
             watch_plan.run("gen-run")
         saved = watch_plan.load_plan()

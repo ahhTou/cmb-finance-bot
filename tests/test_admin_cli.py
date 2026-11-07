@@ -29,6 +29,7 @@ class AdminTest(unittest.TestCase):
         self.stack.enter_context(patch.object(admin.push, 'configured', return_value=False))
         self.stack.enter_context(patch.object(admin.favorites, 'PATH', state / 'favorites.json'))
         self.stack.enter_context(patch.object(admin.push_settings, 'SETTINGS', state / 'push-settings.json'))
+        self.stack.enter_context(patch.object(admin.plan_settings, 'SETTINGS', state / 'plan-settings.json'))
 
     def tearDown(self):
         self.stack.close()
@@ -70,6 +71,25 @@ class AdminTest(unittest.TestCase):
             code, _ = self.call('settings', '--reopen-deadline', value)
             self.assertEqual(code, 1)
         self.assertEqual(self.call('settings')[1]['settings'], data['settings'])
+
+    def test_plan_settings_persist_independently_of_purchase_settings(self):
+        purchase_revision = admin.purchase_settings.revision(admin.purchase_settings.load())
+        code, initial = self.call('settings-other')
+        self.assertEqual(code, 0)
+        self.assertEqual(initial['settings'], admin.plan_settings.DEFAULTS)
+        code, saved = self.call('settings-other', '--poll-seconds', '3',
+                                '--heartbeat-seconds', '15')
+        self.assertEqual(code, 0)
+        self.assertEqual(saved['settings']['poll_seconds'], 3)
+        self.assertEqual(saved['settings']['heartbeat_seconds'], 15)
+        self.assertEqual(self.call('settings-other')[1], saved)
+        self.assertEqual(admin.purchase_settings.revision(admin.purchase_settings.load()),
+                         purchase_revision)
+        for argv in (('--poll-seconds', '0'), ('--poll-seconds', '61'),
+                     ('--heartbeat-seconds', '2'), ('--typo', '1')):
+            code, _ = self.call('settings-other', *argv)
+            self.assertEqual(code, 1)
+        self.assertEqual(self.call('settings-other')[1], saved)
 
     def test_argv_secret_rejected_without_echo(self):
         code, data = self.call('set-payment-password', '--new', 'do-not-echo')

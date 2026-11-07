@@ -39,18 +39,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import fast_buy
 import night_watch as nw
+import plan_settings
 import purchase_settings
 import query_gate
 
 MAX_ITEMS = 20                        # 一份计划最多几项（先例：favorites.MAX_ITEMS）
 MAX_LEAD = timedelta(hours=24)        # 与 night_watch.MAX_LEAD 一致
-ARM_GAP = timedelta(minutes=2)        # 下一项冷启动至少比上一项结束晚 2 分钟
-FIRST_END_SLACK = timedelta(minutes=2)  # 首发：查询窗口后的提交安全余量
-END_TIMEOUT = timedelta(minutes=5)    # 单项超过预计结束这么久还没结束就停止
-GRACE_SECONDS = 15                    # 值守进程消失后等这么久仍无终态就按失败处理
-POLL_SECONDS = 2                      # 计划进程轮询值守任务的间隔
-HEARTBEAT_SECONDS = 10                # 计划进程写 last_tick 的间隔
-KILL_WAIT_SECONDS = 10                # 计划进程 SIGTERM 后等多久再 SIGKILL
 LOG_LINES = 15                        # view 返回的 plan.log 行数
 CODE = re.compile(r"[A-Za-z0-9]{4,20}")
 ACTIVE_PHASES = ("armed", "preparing", "waiting", "firing")
@@ -127,6 +121,12 @@ def _settings_revision():
     return purchase_settings.revision(purchase_settings.load())
 
 
+def _runtime(plan=None):
+    """The plan worker's scheduler values: snapshot if present, live otherwise."""
+    raw = (plan or {}).get("runtime_settings")
+    return plan_settings.snapshot(raw) if raw else plan_settings.load()
+
+
 def plan_content_revision(plan):
     """Digest only confirmed input; runtime state and computed times are excluded."""
     content = {"dry_run": plan.get("dry_run", False), "items": [
@@ -183,20 +183,22 @@ def _plan_at(item):
         raise nw.Abort("计划里的购买时间格式无效。")
 
 
-def _plan_end_at(at, mode, settings):
+def _plan_end_at(at, mode, settings, runtime):
     """预计占用结束时间：首发看查询窗口 + 提交余量，不定时看抢购窗口。"""
     if mode == "redemption":
         return at + timedelta(minutes=settings["irregular_window_minutes"])
     _, gate_end = query_gate.schedule(at, "first_launch", settings)
-    return max(at, gate_end) + FIRST_END_SLACK
+    return max(at, gate_end) + timedelta(minutes=runtime["first_end_slack_minutes"])
 
 
-def schedule(plan, settings, now):
+def schedule(plan, settings, now, runtime=None):
     """实时计算每项的 prep_at/end_at，并给出阻塞问题和警告。
 
     prep_at/end_at 只在展示时计算，不写进 plan.json。
     """
     settings = purchase_settings.validate(settings)
+    runtime = runtime or plan_settings.load()
+    arm_gap = timedelta(minutes=runtime["arm_gap_minutes"])
     prep = timedelta(minutes=settings["cold_start_minutes"])
     items = plan.get("items") if isinstance(plan, dict) else None
     items = items if isinstance(items, list) else []
@@ -204,7 +206,7 @@ def schedule(plan, settings, now):
     for item in items:
         at = _plan_at(item)
         prep_at = at - prep
-        end_at = _plan_end_at(at, item.get("mode"), settings)
+        end_at = _plan_end_at(at, item.get("mode"), settings, runtime)
         enriched.append(dict(item, prep_at=_iso(prep_at), end_at=_iso(end_at)))
     if not items:
         problems.append("计划里还没有布防。")
@@ -218,10 +220,10 @@ def schedule(plan, settings, now):
         prev_at = _plan_at(items[index - 1])
         prev_end = datetime.fromisoformat(enriched[index - 1]["end_at"])
         cur_prep = datetime.fromisoformat(enriched[index]["prep_at"])
-        if cur_prep >= prev_end + ARM_GAP:
+        if cur_prep >= prev_end + arm_gap:
             continue
-        # 让 cur_prep 至少比 prev_end 晚 2 分钟所需的购买时间差。
-        need = prev_end - prev_at + prep + ARM_GAP
+        # 让 cur_prep 至少比 prev_end 晚 arm_gap 所需的购买时间差。
+        need = prev_end - prev_at + prep + arm_gap
         minutes = math.ceil(need.total_seconds() / 60)
         problems.append(
             f"第 {index + 1} 项与第 {index} 项间隔太近：第 {index + 1} 项需在 "
@@ -229,7 +231,7 @@ def schedule(plan, settings, now):
             f"请把购买时间拉开到至少 {minutes} 分钟。")
     if enriched:
         prep_at = datetime.fromisoformat(enriched[0]["prep_at"])
-        if now > prep_at - ARM_GAP and _plan_at(items[0]) > now:
+        if now > prep_at - arm_gap and _plan_at(items[0]) > now:
             warnings.append("第一项已进入冷启动时间，开始后将立即冷启动。")
     return {"items": enriched, "problems": problems, "warnings": warnings}
 
@@ -240,10 +242,11 @@ def view():
     revision = purchase_settings.revision(settings)
     now = _now()
     plan = load_plan()
+    runtime = _runtime(plan)
     problems, warnings = [], []
     running = stale = False
     if plan is not None:
-        computed = schedule(plan, settings, now)
+        computed = schedule(plan, settings, now, runtime)
         plan = dict(plan, items=computed["items"], content_revision=plan_content_revision(plan))
         problems, warnings = computed["problems"], computed["warnings"]
         running = plan.get("phase") == "running" and nw.alive(plan.get("pid"))
@@ -335,7 +338,8 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
         if phase != "idle":
             raise nw.Abort("计划已结束；请清空后重新保存再开始。")
         settings = purchase_settings.load()
-        problems = schedule(plan, settings, _now())["problems"]
+        runtime = plan_settings.load()
+        problems = schedule(plan, settings, _now(), runtime)["problems"]
         if problems:
             raise nw.Abort(problems[0])
         if not plan.get("dry_run") and not confirm_real_payment:
@@ -349,7 +353,7 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
                     or content_revision != plan_content_revision(plan)
                     or settings_revision != purchase_settings.revision(settings)):
                 raise nw.Abort("计划内容或值守配置已变化，或缺少确认版本；请重新读取计划并核对后开始。")
-            problems = schedule(plan, settings, _now())["problems"]
+            problems = schedule(plan, settings, _now(), runtime)["problems"]
             if problems:
                 raise nw.Abort(problems[0])
             task = nw.load_task()
@@ -359,7 +363,8 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
             now = _now_iso()
             plan.update(phase="running", generation=generation, started_at=now,
                         ended_at=None, pid=None, last_tick=now, result=None,
-                        settings_revision=purchase_settings.revision(settings))
+                        settings_revision=purchase_settings.revision(settings),
+                        runtime_settings=runtime)
             for item in plan.get("items", []):
                 item.update(state="pending", task_id=None, result=None,
                             armed_at=None, ended_at=None)
@@ -393,7 +398,7 @@ def _stop_plan_process(plan):
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         return  # Worker exited between the liveness check and termination.
-    end = time.monotonic() + KILL_WAIT_SECONDS
+    end = time.monotonic() + _runtime(plan)["kill_wait_seconds"]
     while nw.alive(pid) and time.monotonic() < end:
         time.sleep(.1)
     if nw.alive(pid):
@@ -606,7 +611,7 @@ def _safe_abort(plan, message):
     nw.alert("计划已中止", result, 5, event='plan_aborted')
 
 
-def _wait_item(plan, index, end_at):
+def _wait_item(plan, index, end_at, runtime):
     """Wait for the armed item's watch process to reach a terminal phase."""
     task_id = plan["items"][index].get("task_id")
     grace = None
@@ -616,7 +621,7 @@ def _wait_item(plan, index, end_at):
         if current is None:
             return None
         plan = current
-        if time.monotonic() - beat >= HEARTBEAT_SECONDS:
+        if time.monotonic() - beat >= runtime["heartbeat_seconds"]:
             plan["last_tick"] = _now_iso()
             if not _save_running(plan):
                 return None
@@ -635,14 +640,14 @@ def _wait_item(plan, index, end_at):
                 result = f"结果未知：{result or '没有可确认的交易结果'}；请查交易记录，不要重复提交"
             return outcome, result
         if not live:
-            grace = grace if grace is not None else time.monotonic() + GRACE_SECONDS
+            grace = grace if grace is not None else time.monotonic() + runtime["grace_seconds"]
             if time.monotonic() >= grace:
                 if task is None or task.get("phase") == "firing" or task.get("fired_at"):
                     return "unknown", "值守进程已退出，结果未知；请查交易记录，不要重复提交"
                 return "failed", "值守进程已退出（未进入提交）"
         else:
             grace = None
-        if datetime.now() > end_at + END_TIMEOUT:
+        if datetime.now() > end_at + timedelta(minutes=runtime["end_timeout_minutes"]):
             if task and task.get("phase") == "firing":
                 # Never kill a submission in flight: report and stop the plan.
                 return "firing-timeout", "提交阶段超时，结果未知；请查交易记录，不要重复提交"
@@ -657,7 +662,7 @@ def _wait_item(plan, index, end_at):
                 return ("firing-timeout",
                         f"布防超时且无法终止（{exc}）；结果未知，请查交易记录，不要重复提交")
             return "failed", "布防超过预计结束时间仍未结束，已停止"
-        time.sleep(POLL_SECONDS)
+        time.sleep(runtime["poll_seconds"])
 
 
 def run(generation):
@@ -669,6 +674,8 @@ def run(generation):
             return
     action = "演练" if plan.get("dry_run") else "真实"
     try:
+        runtime = _runtime(plan)
+        arm_gap = timedelta(minutes=runtime["arm_gap_minutes"])
         nw.alert(f"计划已开始：{len(plan.get('items') or [])} 项（{action}）", event='plan_started')
         log(f"计划开始：{len(plan.get('items') or [])} 项（{action}）")
         while True:
@@ -699,9 +706,9 @@ def run(generation):
                 _abort(plan, "值守配置在计划期间被修改，计划已停止")
                 return
             end_at = datetime.fromisoformat(
-                schedule(plan, settings, now)["items"][index]["end_at"])
+                schedule(plan, settings, now, runtime)["items"][index]["end_at"])
             prep = settings["cold_start_minutes"]
-            if at - now < timedelta(minutes=prep) + ARM_GAP:
+            if at - now < timedelta(minutes=prep) + arm_gap:
                 prep = 0
                 log(f"第 {index + 1} 项剩余时间不足，改为立即冷启动。")
             plan["last_tick"] = _now_iso()
@@ -728,7 +735,7 @@ def run(generation):
             plan["last_tick"] = _now_iso()
             if not _save_running(plan):
                 return
-            outcome = _wait_item(plan, index, end_at)
+            outcome = _wait_item(plan, index, end_at, runtime)
             if outcome is None:
                 return
             state, result = outcome

@@ -219,6 +219,21 @@ def save_settings(values: Dict[str, int]):
     return run(args)
 
 
+@app.get('/api/settings/other')
+def settings_other():
+    return run(['settings-other'])
+
+
+@app.put('/api/settings/other')
+def save_settings_other(values: Dict[str, int]):
+    args = ['settings-other']
+    for key, value in values.items():
+        if not re.fullmatch(r'[a-z_]{1,40}', key):
+            raise Failure(400, '配置项名称无效。')
+        args += ['--' + key.replace('_', '-'), str(value)]
+    return run(args)
+
+
 @app.post('/api/arm')
 def arm(body: ArmRequest):
     args = ['arm', '--code', body.code, '--amount', body.amount, '--mode', body.mode]

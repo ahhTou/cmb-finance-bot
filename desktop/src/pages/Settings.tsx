@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useState } from 'react'
 import { type UseFormRegisterReturn, useForm } from 'react-hook-form'
 import { api, isTauri, resetBackend } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
-import type { PurchaseSettings, PushConfig, PushTestResult } from '../api/types'
+import type { PlanSettings, PurchaseSettings, PushConfig, PushTestResult } from '../api/types'
 import { PurchaseFlow } from '../components/PurchaseFlow'
 import { PushPreferencesCard } from '../components/PushPreferences'
 import { Button } from '../components/ui/button'
@@ -15,12 +15,13 @@ import { cn, type Tone } from '../lib/utils'
 import { type BackendConfig, backendConfig, setBackendConfig } from '../platform'
 import { useUI } from '../store'
 
-type Tab = 'watch' | 'credentials' | 'push' | 'project'
+type Tab = 'watch' | 'credentials' | 'push' | 'project' | 'other'
 const TABS: { value: Tab; label: string }[] = [
   { value: 'watch', label: '值守配置' },
   { value: 'credentials', label: '凭据' },
   { value: 'push', label: '推送通知' },
   { value: 'project', label: '项目' },
+  { value: 'other', label: '其他' },
 ]
 
 export function SettingsPage() {
@@ -39,6 +40,7 @@ export function SettingsPage() {
         </>
       )}
       {tab === 'project' && <ProjectCard />}
+      {tab === 'other' && <OtherSettings />}
     </div>
   )
 }
@@ -487,16 +489,23 @@ function Setting({
   label,
   help,
   error,
+  kind,
   children,
 }: {
   label: string
   help?: string
   error?: string
+  kind?: 'limit' | 'fixed'
   children: ReactNode
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <span className="font-medium text-xs">{label}</span>
+      <span className="flex items-center gap-2 font-medium text-xs">
+        {label}
+        {kind && (
+          <Badge tone={kind === 'limit' ? 'warn' : 'blue'}>{kind === 'limit' ? '限度' : '固定'}</Badge>
+        )}
+      </span>
       {children}
       {error ? <Hint tone="accent">{error}</Hint> : help ? <Hint>{help}</Hint> : null}
     </div>
@@ -546,6 +555,204 @@ function NumberInput({
       />
       <span className={cn('shrink-0 text-muted', compact ? 'text-[10px]' : 'text-[11px]')}>{unit}</span>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- 其他
+
+/** Same defaults and limits as src/plan_settings.py. */
+const OTHER_DEFAULTS = {
+  arm_gap_minutes: 2,
+  first_end_slack_minutes: 2,
+  end_timeout_minutes: 5,
+  grace_seconds: 15,
+  poll_seconds: 2,
+  heartbeat_seconds: 10,
+  kill_wait_seconds: 10,
+}
+type OtherKey = keyof typeof OTHER_DEFAULTS
+type OtherValues = Record<OtherKey, string>
+const OTHER_KEYS = Object.keys(OTHER_DEFAULTS) as OtherKey[]
+const OTHER_LIMITS: Record<OtherKey, [number, number]> = {
+  arm_gap_minutes: [0, 60],
+  first_end_slack_minutes: [0, 60],
+  end_timeout_minutes: [1, 120],
+  grace_seconds: [0, 300],
+  poll_seconds: [1, 60],
+  heartbeat_seconds: [1, 300],
+  kill_wait_seconds: [1, 120],
+}
+const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' | 'fixed'; help: string }> = {
+  arm_gap_minutes: {
+    label: '相邻项间隔',
+    unit: '分钟',
+    kind: 'limit',
+    help: '下一项冷启动至少比上一项预计结束晚这么久；只参与排程校验，不产生等待。',
+  },
+  first_end_slack_minutes: {
+    label: '首发结束余量',
+    unit: '分钟',
+    kind: 'limit',
+    help: '首发项在查询窗口之后额外预留的提交余量；只影响排程估算。',
+  },
+  end_timeout_minutes: {
+    label: '单项超时',
+    unit: '分钟',
+    kind: 'limit',
+    help: '超过预计结束这么久仍未结束就停止；条件成立即停，调大不会固定等待。',
+  },
+  grace_seconds: {
+    label: '进程消失宽限',
+    unit: '秒',
+    kind: 'limit',
+    help: '值守进程消失后等这么久仍无终态才判失败或结果未知；拿到终态就继续。',
+  },
+  poll_seconds: {
+    label: '轮询间隔',
+    unit: '秒',
+    kind: 'fixed',
+    help: '计划进程检查值守状态的固定间隔，直接形成响应延迟。',
+  },
+  heartbeat_seconds: {
+    label: '心跳间隔',
+    unit: '秒',
+    kind: 'fixed',
+    help: '计划进程写 last_tick 的固定间隔；不能短于轮询间隔。',
+  },
+  kill_wait_seconds: {
+    label: '终止等待',
+    unit: '秒',
+    kind: 'limit',
+    help: 'SIGTERM 后等这么久再 SIGKILL；进程提前退出就继续。',
+  },
+}
+
+function validateOther(v: OtherValues) {
+  const errors: Partial<Record<OtherKey, string>> = {}
+  for (const key of OTHER_KEYS) {
+    const [min, max] = OTHER_LIMITS[key]
+    const n = Number(v[key])
+    if (!/^\d+$/.test(v[key] ?? '') || n < min || n > max) errors[key] = `请输入 ${min}–${max} 的整数`
+  }
+  const poll = Number(v.poll_seconds)
+  const heartbeat = Number(v.heartbeat_seconds)
+  if (!errors.poll_seconds && !errors.heartbeat_seconds && poll > heartbeat)
+    errors.heartbeat_seconds = '心跳间隔不能短于轮询间隔'
+  return errors
+}
+
+const toOtherValues = (source: Partial<Record<string, unknown>>) =>
+  Object.fromEntries(
+    OTHER_KEYS.map((key) => [key, String(source[key] ?? OTHER_DEFAULTS[key])]),
+  ) as OtherValues
+
+function OtherSettings() {
+  const busy = useUI((s) => s.busy)
+  const action = useAction()
+  const qc = useQueryClient()
+  const { data } = useQuery({ ...q.planSettings, staleTime: 0 })
+  const [saved, setSaved] = useState(false)
+  const form = useForm<OtherValues>({ mode: 'onChange' })
+  const values = form.watch()
+  const errors = validateOther(values)
+  const invalid = Object.keys(errors).length > 0
+  const dirty = form.formState.isDirty
+  const disabled = !data || busy
+
+  useEffect(() => {
+    if (data) form.reset(toOtherValues(data.settings))
+  }, [data, form])
+
+  const save = form.handleSubmit(async (raw) => {
+    const body = Object.fromEntries(OTHER_KEYS.map((key) => [key, Number(raw[key])]))
+    const result = await action('保存其他设置', () => api<PlanSettings>('PUT', '/api/settings/other', body))
+    if (result) {
+      qc.setQueryData(q.planSettings.queryKey, result)
+      form.reset(toOtherValues(result.settings))
+      setSaved(true)
+    }
+  })
+
+  const num = (key: OtherKey) => (
+    <NumberInput
+      label={OTHER_META[key].label}
+      unit={OTHER_META[key].unit}
+      error={errors[key]}
+      disabled={disabled}
+      placeholder={String(OTHER_DEFAULTS[key])}
+      {...form.register(key, { onChange: () => setSaved(false) })}
+    />
+  )
+
+  const field = (key: OtherKey) => (
+    <Setting
+      label={OTHER_META[key].label}
+      help={OTHER_META[key].help}
+      error={errors[key]}
+      kind={OTHER_META[key].kind}
+    >
+      {num(key)}
+    </Setting>
+  )
+
+  return (
+    <form className="flex flex-col gap-4" onSubmit={save} data-testid="other-settings">
+      <Card title="计划排程" subtitle="这些值只影响计划的排程估算和校验，不改变购买参数。">
+        <div className="grid grid-cols-2 gap-4">
+          {field('arm_gap_minutes')}
+          {field('first_end_slack_minutes')}
+        </div>
+      </Card>
+
+      <Card title="进程监控" subtitle="计划进程检查值守、写心跳和处理异常的时间参数；计划开始时快照。">
+        <div className="grid grid-cols-2 gap-4">
+          {field('poll_seconds')}
+          {field('heartbeat_seconds')}
+          {field('grace_seconds')}
+          {field('end_timeout_minutes')}
+          {field('kill_wait_seconds')}
+        </div>
+      </Card>
+
+      <div className="sticky bottom-0 flex items-center gap-3 rounded-[14px] bg-card/95 px-[18px] py-3 shadow-[0_-8px_24px_rgb(0_0_0/0.35)] ring-[0.6px] ring-white/10 backdrop-blur">
+        <span className={cn('text-xs', invalid ? 'text-accent' : 'text-muted')}>
+          {invalid
+            ? `有 ${Object.keys(errors).length} 项需要修改`
+            : dirty
+              ? '有未保存的修改'
+              : saved
+                ? '已保存，之后的新计划使用这套值'
+                : '新计划开始时使用这套值；运行中的计划保持开始时的值'}
+        </span>
+        <span className="flex-1" />
+        <Button
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => {
+            for (const key of OTHER_KEYS)
+              form.setValue(key, String(OTHER_DEFAULTS[key]), { shouldDirty: true, shouldValidate: true })
+            setSaved(false)
+          }}
+        >
+          恢复默认
+        </Button>
+        <Button
+          variant="ghost"
+          disabled={disabled || !dirty}
+          onClick={() => data && form.reset(toOtherValues(data.settings))}
+        >
+          撤销修改
+        </Button>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={disabled || invalid || !dirty}
+          data-testid="other-save"
+        >
+          保存其他设置
+        </Button>
+      </div>
+    </form>
   )
 }
 

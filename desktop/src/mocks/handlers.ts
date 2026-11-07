@@ -11,6 +11,7 @@ import {
   makePush,
   makeStatus,
   makeTask,
+  PLAN_SETTINGS,
   SETTINGS,
   SYSTEM,
   scenario,
@@ -27,6 +28,7 @@ const state = {
   plan: makePlan(kind),
   push: makePush(kind),
   pushPreferences: structuredClone(pushPreferencesDefaults),
+  planSettings: structuredClone(PLAN_SETTINGS),
   planLogs:
     kind === 'plan'
       ? [`${localISO(new Date()).slice(5).replace('T', ' ')} 已保存计划：2 项（演练）`]
@@ -42,15 +44,12 @@ const planStamp = () => localISO(new Date()).slice(5).replace('T', ' ')
 
 // ---- Plan mode (`/api/plan`) ------------------------------------------------
 // Mirrors src/watch_plan.py: prep_at = at - cold start; first-launch end is the
-// worst-case query window (90 s) plus a 2 min submit margin; redemption end is
-// the configured window. Kept in sync with the real backend so the mock cannot
-// hide a scheduling difference.
+// query worst case (90 s) plus the configured submit margin; redemption uses
+// the configured window. Plan scheduler values come from Settings → 其他.
 const PLAN_PREP_MINUTES = SETTINGS.cold_start_minutes
-const PLAN_FIRST_END_MINUTES = 3.5
-const PLAN_END_MINUTES: Record<Mode, number> = {
-  first_launch: PLAN_FIRST_END_MINUTES,
-  redemption: SETTINGS.irregular_window_minutes,
-}
+const planEndMinutes = (mode: Mode) =>
+  mode === 'redemption' ? SETTINGS.irregular_window_minutes : state.planSettings.first_end_slack_minutes + 1.5
+const planArmGap = () => state.planSettings.arm_gap_minutes
 const planClock = (value: string) => /T(\d{2}:\d{2})/.exec(value)?.[1] ?? value
 
 function planItemView(item: PlanItem): PlanItem {
@@ -59,7 +58,7 @@ function planItemView(item: PlanItem): PlanItem {
   return {
     ...item,
     prep_at: localISO(new Date(at.getTime() - PLAN_PREP_MINUTES * 60_000)),
-    end_at: localISO(new Date(at.getTime() + PLAN_END_MINUTES[item.mode] * 60_000)),
+    end_at: localISO(new Date(at.getTime() + planEndMinutes(item.mode) * 60_000)),
   }
 }
 
@@ -80,11 +79,11 @@ function planProblems(plan: Plan): string[] {
     const previousAt = parseLocal(previous.at)
     const currentAt = parseLocal(current.at)
     if (!previousAt || !currentAt) continue
-    const previousEnd = previousAt.getTime() + PLAN_END_MINUTES[previous.mode] * 60_000
+    const previousEnd = previousAt.getTime() + planEndMinutes(previous.mode) * 60_000
     const currentPrep = currentAt.getTime() - PLAN_PREP_MINUTES * 60_000
-    if (currentPrep >= previousEnd + 2 * 60_000) continue
+    if (currentPrep >= previousEnd + planArmGap() * 60_000) continue
     const minimum = Math.ceil(
-      (previousEnd - previousAt.getTime() + (PLAN_PREP_MINUTES + 2) * 60_000) / 60_000,
+      (previousEnd - previousAt.getTime() + (PLAN_PREP_MINUTES + planArmGap()) * 60_000) / 60_000,
     )
     problems.push(
       `第 ${index + 1} 项与第 ${index} 项间隔太近：第 ${index + 1} 项需在 ${planClock(localISO(new Date(currentPrep)))} 开始冷启动，但第 ${index} 项预计 ${planClock(localISO(new Date(previousEnd)))} 才结束；请把购买时间拉开到至少 ${minimum} 分钟。`,
@@ -99,7 +98,7 @@ function planWarnings(plan: Plan): string[] {
   const at = parseLocal(first.at)
   if (!at) return []
   const prepAt = at.getTime() - PLAN_PREP_MINUTES * 60_000
-  if (Date.now() > prepAt - 2 * 60_000 && at.getTime() > Date.now())
+  if (Date.now() > prepAt - planArmGap() * 60_000 && at.getTime() > Date.now())
     return ['第一项已进入冷启动时间，开始后将立即冷启动。']
   return []
 }
@@ -238,6 +237,11 @@ export const handlers = [
   http.put('/api/settings', async ({ request }) => {
     Object.assign(SETTINGS, await request.json())
     return HttpResponse.json({ settings: SETTINGS, settings_revision: 'mock-revision' })
+  }),
+  http.get('/api/settings/other', () => HttpResponse.json({ settings: state.planSettings })),
+  http.put('/api/settings/other', async ({ request }) => {
+    Object.assign(state.planSettings, await request.json())
+    return HttpResponse.json({ settings: state.planSettings })
   }),
   http.post('/api/arm', async ({ request }) => {
     const body = (await request.json()) as ArmRequest
