@@ -3,7 +3,7 @@ import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction } from '../api/hooks'
-import type { Mode, PlanRequest, PlanStartRequest, PlanView } from '../api/types'
+import type { Mode, PlanItem, PlanRequest, PlanStartRequest, PlanView } from '../api/types'
 import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint, Metric, MetricGrid } from '../components/ui/card'
@@ -27,6 +27,7 @@ import {
   planPhaseTone,
   planTotals,
 } from '../lib/plan'
+import { cn } from '../lib/utils'
 import { useUI } from '../store'
 
 /**
@@ -45,6 +46,7 @@ export function PlanPage() {
   const [confirmed, setConfirmed] = useState(false)
   const [confirmation, setConfirmation] = useState<PlanView | null>(null)
   const [now, setNow] = useState(() => new Date())
+  const [editingTerminal, setEditingTerminal] = useState(false)
 
   // The status card shows a countdown; a one-second tick is enough.
   useEffect(() => {
@@ -63,8 +65,13 @@ export function PlanPage() {
   const plan = view?.plan ?? null
   const running = view?.running === true
   const stale = view?.stale === true
+  const heartbeatStale = view?.heartbeat_stale === true
+  const settingsChanged = view?.settings_changed === true
   const phase = plan?.phase ?? null
-  const readOnly = running || stale
+  const terminal =
+    !!plan && !running && !stale && (phase === 'done' || phase === 'aborted' || phase === 'disarmed')
+  const resultView = terminal && !editingTerminal
+  const readOnly = running || stale || resultView
   const problems = view?.problems ?? []
   const warnings = view?.warnings ?? []
   const totals = planTotals(plan)
@@ -72,9 +79,9 @@ export function PlanPage() {
   const confirmPlan = confirmation?.plan ?? null
   const confirmTotals = planTotals(confirmPlan)
   const confirmDryRun = confirmPlan?.dry_run ?? false
-  const rows = readOnly ? draftFromPlan(plan) : (draft ?? [])
-  const localProblems = readOnly ? [] : draftProblems(draft ?? [])
-  const dirty = readOnly ? false : planDirty(draft ?? [], dryRun, plan)
+  const rows = resultView ? draftFromPlan(plan) : (draft ?? [])
+  const localProblems = resultView ? [] : draftProblems(draft ?? [])
+  const dirty = resultView ? false : planDirty(draft ?? [], dryRun, plan)
   // The backend always recomputes `problems` against "now", so after the first
   // item's purchase time they would read "已过" while the plan is running fine.
   // They only block starting, so the page treats them as blockers while idle.
@@ -95,6 +102,7 @@ export function PlanPage() {
     qc.setQueryData(q.plan.queryKey, result)
     setDraft(draftFromPlan(result.plan))
     setDryRun(result.plan?.dry_run ?? false)
+    setEditingTerminal(false)
   }
 
   async function run(label: string, request: () => Promise<PlanView>) {
@@ -155,6 +163,13 @@ export function PlanPage() {
     await run('清空计划', () => api<PlanView>('DELETE', '/api/plan'))
   }
 
+  function editTerminal() {
+    if (!plan) return
+    setDraft(draftFromPlan(plan))
+    setDryRun(plan.dry_run ?? false)
+    setEditingTerminal(true)
+  }
+
   function patch(index: number, changes: Partial<PlanDraftItem>) {
     // Editing invalidates the backend-computed times and item state for this row.
     setDraft((current) =>
@@ -189,7 +204,9 @@ export function PlanPage() {
         subtitle={
           running
             ? '计划正在按时间顺序执行；下方列表只读，可随时取消。'
-            : '只填购买时间；保存后程序算出每项的冷启动与预计结束时间。'
+            : resultView
+              ? '计划已结束；这里保留每项状态、原因和实际时间。'
+              : '只填购买时间；保存后程序算出每项的冷启动与预计结束时间。'
         }
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -201,6 +218,7 @@ export function PlanPage() {
               </Badge>
             )}
             {stale && <Badge tone="warn">进程已退出</Badge>}
+            {!stale && running && heartbeatStale && <Badge tone="warn">心跳超时</Badge>}
           </div>
           <span className="text-[11px] text-muted">
             {next
@@ -210,6 +228,16 @@ export function PlanPage() {
                 : '还没有计划'}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {terminal && resultView && (
+              <Button data-testid="plan-edit" disabled={busy} onClick={editTerminal}>
+                编辑 / 复制为新计划
+              </Button>
+            )}
+            {terminal && editingTerminal && (
+              <Button data-testid="plan-results" disabled={busy} onClick={() => setEditingTerminal(false)}>
+                查看执行结果
+              </Button>
+            )}
             {(running || stale) && (
               <Button data-testid="plan-disarm" variant="primary" disabled={busy} onClick={disarm}>
                 取消计划
@@ -231,10 +259,34 @@ export function PlanPage() {
           <Metric title="布防项" value={`${totals.count} 项`} />
           <Metric title="合计金额" value={`¥ ${totals.amount}`} />
           <Metric title="执行进度" value={plan ? `${finished} / ${plan.items.length} 项已结束` : '—'} />
-          <Metric title="最近心跳" value={plan?.last_tick ? isoClock(plan.last_tick) : '—'} />
+          <Metric
+            title="最近心跳"
+            value={
+              view?.heartbeat_age_s != null
+                ? `${view.heartbeat_age_s} 秒前`
+                : plan?.last_tick
+                  ? isoClock(plan.last_tick)
+                  : '—'
+            }
+          />
         </MetricGrid>
         {stale && (
           <Hint tone="warn">计划进程已退出，但计划仍标记为运行中。请点「取消计划」止损后重新保存。</Hint>
+        )}
+        {!stale && running && heartbeatStale && (
+          <Hint tone="warn">
+            计划进程仍在，但
+            {view.heartbeat_age_s == null ? '没有心跳记录' : `已 ${view.heartbeat_age_s} 秒没有写心跳`}
+            （阈值 {view.heartbeat_timeout_s ?? '—'} 秒）；只提示，不会自动重试交易，可取消计划后检查。
+          </Hint>
+        )}
+        {settingsChanged && (running || stale) && (
+          <Hint tone="warn">
+            值守配置已修改：当前项按开始时的快照执行；未进入提交时会停止计划，已进入提交则等结果后停止后续项。
+          </Hint>
+        )}
+        {settingsChanged && terminal && (
+          <Hint>本计划使用开始时的配置快照；修改后的配置只影响下一份计划。</Hint>
         )}
         {(phase === 'aborted' || phase === 'disarmed') && plan?.result && (
           <Hint tone="warn">{plan.result}</Hint>
@@ -266,8 +318,12 @@ export function PlanPage() {
       )}
 
       <Card
-        title="布防列表"
-        subtitle={`最多 ${PLAN_MAX_ITEMS} 项；程序严格按购买时间先后串行执行，一项结束后才开始下一项。`}
+        title={resultView ? '执行结果' : '布防列表'}
+        subtitle={
+          resultView
+            ? '逐项结果与时间来自开始时的计划快照。'
+            : `最多 ${PLAN_MAX_ITEMS} 项；程序严格按购买时间先后串行执行，一项结束后才开始下一项。`
+        }
         badge={
           <Button
             data-testid="plan-add"
@@ -293,6 +349,7 @@ export function PlanPage() {
                 index={index}
                 row={row}
                 readOnly={readOnly}
+                resultMode={resultView}
                 busy={busy}
                 onPatch={patch}
                 onRemove={remove}
@@ -302,7 +359,11 @@ export function PlanPage() {
         )}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {readOnly ? (
-            <Hint>运行中不能修改；需要调整请先取消计划。</Hint>
+            <Hint>
+              {resultView
+                ? '这是执行结果；点「编辑 / 复制为新计划」可基于它新建草稿。'
+                : '运行中不能修改；需要调整请先取消计划。'}
+            </Hint>
           ) : (
             <>
               <Switch
@@ -401,10 +462,42 @@ export function PlanPage() {
   )
 }
 
+/** HH:MM:SS for actual worker timestamps. */
+function isoSecond(value: string | null | undefined) {
+  const text = (value ?? '').trim().replace(' ', 'T')
+  const match = /T(\d{2}:\d{2}:\d{2})/.exec(text)
+  return match ? match[1] : isoClock(value)
+}
+
+/** Estimated cold-start wording for one saved item. */
+function prepEstimate(item: PlanItem | null | undefined) {
+  if (!item) return '—'
+  if (item.prep_mode === 'immediate') return item.prep_text ?? '开始后立即准备'
+  return item.prep_at ? `预计 ${isoClock(item.prep_at)}` : '—'
+}
+
+/** Actual cold-start wording once the worker armed the item. */
+function prepActual(item: PlanItem | null | undefined) {
+  if (!item?.armed_at) return null
+  const lead =
+    item.prep_minutes == null
+      ? ''
+      : item.prep_minutes === 0
+        ? '（立即）'
+        : `（提前 ${item.prep_minutes} 分钟）`
+  return `实际 ${isoSecond(item.armed_at)}${lead}`
+}
+
+/** One-line cold-start summary for the editable/running row. */
+function prepLabel(item: PlanItem | null | undefined) {
+  return prepActual(item) ?? prepEstimate(item)
+}
+
 function PlanRow({
   index,
   row,
   readOnly,
+  resultMode,
   busy,
   onPatch,
   onRemove,
@@ -412,6 +505,7 @@ function PlanRow({
   index: number
   row: PlanDraftItem
   readOnly: boolean
+  resultMode: boolean
   busy: boolean
   onPatch: (index: number, changes: Partial<PlanDraftItem>) => void
   onRemove: (index: number) => void
@@ -419,6 +513,46 @@ function PlanRow({
   const saved = row.saved
   const touched = row.code.trim() !== '' || row.amount.trim() !== '' || row.at !== ''
   const problem = !readOnly && touched ? draftItemProblem(row) : null
+  if (resultMode) {
+    const state = saved?.state ?? 'pending'
+    const result = saved?.result ?? (state === 'pending' ? '未执行' : '—')
+    return (
+      <div
+        data-testid={`plan-row-${index}`}
+        className="flex flex-col gap-1.5 rounded-[10px] bg-field px-2.5 py-2"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-5 text-[10px] text-muted tabular-nums">#{index + 1}</span>
+          <span className="font-semibold text-xs">
+            {row.code} · ¥ {row.amount}
+          </span>
+          <Badge tone={itemStateTone(state)}>{itemStateName(state)}</Badge>
+          <span className="text-[10px] text-muted">
+            {row.mode === 'redemption' ? '不定时抢购' : '首发模式'} · 购买 {row.at.replace('T', ' ')}
+          </span>
+        </div>
+        <div className="text-[10px] text-muted">
+          冷启动 {prepEstimate(saved)} · {prepActual(saved) ?? '实际：未执行'} · 预计结束{' '}
+          {saved?.end_at ? isoClock(saved.end_at) : '—'}
+        </div>
+        {(saved?.armed_at || saved?.ended_at) && (
+          <div className="text-[10px] text-muted">
+            实际冷启动 {saved?.armed_at ? isoSecond(saved.armed_at) : '未执行'} · 实际结束{' '}
+            {saved?.ended_at ? isoSecond(saved.ended_at) : '未结束'}
+          </div>
+        )}
+        <div
+          data-testid={`plan-result-${index}`}
+          className={cn(
+            'text-[11px]',
+            state === 'failed' || state === 'skipped' ? 'text-warn' : 'text-muted',
+          )}
+        >
+          结果：{result}
+        </div>
+      </div>
+    )
+  }
   return (
     <div
       data-testid={`plan-row-${index}`}
@@ -501,7 +635,7 @@ function PlanRow({
         <div className="flex flex-wrap items-center gap-2">
           {saved && (
             <span className="text-[10px] text-muted">
-              冷启动 {isoClock(saved.prep_at)} · 购买 {isoClock(saved.at)} · 预计结束 {isoClock(saved.end_at)}
+              冷启动 {prepLabel(saved)} · 购买 {isoClock(saved.at)} · 预计结束 {isoClock(saved.end_at)}
             </span>
           )}
           {readOnly && saved && <Badge tone={itemStateTone(saved.state)}>{itemStateName(saved.state)}</Badge>}

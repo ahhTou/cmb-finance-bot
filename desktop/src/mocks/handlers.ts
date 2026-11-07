@@ -55,9 +55,12 @@ const planClock = (value: string) => /T(\d{2}:\d{2})/.exec(value)?.[1] ?? value
 function planItemView(item: PlanItem): PlanItem {
   const at = parseLocal(item.at)
   if (!at) return { ...item }
+  const immediate = SETTINGS.cold_start_minutes === 0
   return {
     ...item,
-    prep_at: localISO(new Date(at.getTime() - PLAN_PREP_MINUTES * 60_000)),
+    prep_at: immediate ? null : localISO(new Date(at.getTime() - PLAN_PREP_MINUTES * 60_000)),
+    prep_mode: immediate ? 'immediate' : 'scheduled',
+    prep_text: immediate ? '开始后立即准备' : null,
     end_at: localISO(new Date(at.getTime() + planEndMinutes(item.mode) * 60_000)),
   }
 }
@@ -113,12 +116,19 @@ function planContentRevision(plan: Plan) {
 function planView(): PlanView {
   const plan = state.plan
   const running = plan?.phase === 'running'
+  const heartbeatTimeout = state.planSettings.heartbeat_timeout_seconds
+  const lastTick = plan?.last_tick ? parseLocal(plan.last_tick) : null
+  const heartbeatAge = lastTick ? Math.max(0, Math.round((Date.now() - lastTick.getTime()) / 1000)) : null
   return {
     plan: plan
       ? { ...plan, content_revision: planContentRevision(plan), items: plan.items.map(planItemView) }
       : null,
     running,
     stale: false,
+    heartbeat_stale: running && (heartbeatAge == null || heartbeatAge > heartbeatTimeout),
+    heartbeat_age_s: heartbeatAge,
+    heartbeat_timeout_s: heartbeatTimeout,
+    settings_changed: false,
     problems: plan ? planProblems(plan) : [],
     warnings: plan ? planWarnings(plan) : [],
     task: state.task,

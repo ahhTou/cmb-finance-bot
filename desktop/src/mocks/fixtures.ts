@@ -18,14 +18,23 @@ import { localISO } from '../lib/utils'
  * `progress` replays the real 11-05 11:06 drill log step by step.
  * `plan` presets one idle two-item plan for the plan page demo and screenshots.
  */
-export type Scenario = 'idle' | 'armed' | 'redemption' | 'firing' | 'progress' | 'empty' | 'error' | 'plan'
+export type Scenario =
+  | 'idle'
+  | 'armed'
+  | 'redemption'
+  | 'firing'
+  | 'progress'
+  | 'empty'
+  | 'error'
+  | 'plan'
+  | 'plan-done'
 
 export function scenario(): Scenario {
   const value = new URLSearchParams(location.search).get('scenario')
   return (
-    (['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error', 'plan'] as const).find(
-      (s) => s === value,
-    ) ?? 'idle'
+    (
+      ['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error', 'plan', 'plan-done'] as const
+    ).find((s) => s === value) ?? 'idle'
   )
 }
 
@@ -157,6 +166,55 @@ function planItem(item_id: string, code: string, amount: string, minutes: number
 
 /** The `plan` scenario: an idle, drill-mode two-item plan with times in the future. */
 export function makePlan(kind: Scenario): Plan | null {
+  if (kind === 'plan-done') {
+    const started = inMinutes(-180)
+    const ended = inMinutes(-60)
+    return {
+      version: 1,
+      plan_id: 'mock-plan-done',
+      generation: 'mock-gen-done',
+      created_at: inMinutes(-240),
+      started_at: started,
+      ended_at: ended,
+      dry_run: true,
+      phase: 'done',
+      pid: null,
+      last_tick: ended,
+      settings_revision: 'mock-revision',
+      settings_snapshot: SETTINGS,
+      result: '完成 1 项，失败 1 项，跳过 0 项',
+      items: [
+        {
+          item_id: 'mock-done-1',
+          code: 'JX040229',
+          amount: '5000',
+          at: inMinutes(-160),
+          mode: 'first_launch',
+          state: 'done',
+          outcome: 'success',
+          task_id: 'mock-task-1',
+          result: '交易委托已接受',
+          armed_at: inMinutes(-167),
+          ended_at: inMinutes(-155),
+          prep_minutes: 7,
+        },
+        {
+          item_id: 'mock-done-2',
+          code: '133045A',
+          amount: '20000',
+          at: inMinutes(-90),
+          mode: 'redemption',
+          state: 'failed',
+          outcome: 'failed',
+          task_id: 'mock-task-2',
+          result: '窗口内没有买到',
+          armed_at: inMinutes(-97),
+          ended_at: inMinutes(-88),
+          prep_minutes: 0,
+        },
+      ],
+    }
+  }
   if (kind !== 'plan') return null
   return {
     version: 1,
@@ -262,6 +320,7 @@ export const PLAN_SETTINGS = {
   poll_seconds: 2,
   heartbeat_seconds: 10,
   kill_wait_seconds: 10,
+  heartbeat_timeout_seconds: 60,
 }
 
 export const SETTINGS = {

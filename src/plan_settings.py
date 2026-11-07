@@ -19,6 +19,7 @@ DEFAULTS = {
     "poll_seconds": 2,             # 计划进程轮询值守任务的间隔
     "heartbeat_seconds": 10,       # 计划进程写 last_tick 的间隔
     "kill_wait_seconds": 10,       # SIGTERM 后等多久再 SIGKILL
+    "heartbeat_timeout_seconds": 60,  # 计划进程心跳超过这么久未更新视为异常
 }
 
 LIMITS = {
@@ -29,6 +30,7 @@ LIMITS = {
     "poll_seconds": (1, 60),
     "heartbeat_seconds": (1, 300),
     "kill_wait_seconds": (1, 120),
+    "heartbeat_timeout_seconds": (10, 600),
 }
 
 

@@ -73,6 +73,10 @@ test('empty plan: add two items, save, start a drill, then cancel', async ({ pag
   await expect(page.getByTestId('plan-status')).toContainText('已取消')
   await expect(page.getByTestId('plan-disarm')).toBeHidden()
   await expect(page.getByTestId('plan-clear')).toBeVisible()
+  // Terminal results stay visible instead of falling back to the stale draft.
+  await expect(page.getByTestId('plan-result-0')).toContainText('计划已被手动取消')
+  await page.getByTestId('plan-edit').click()
+  await expect(page.getByTestId('plan-item-code-0')).toBeEnabled()
 })
 
 test('real confirmation lists every item and sends the reviewed versions', async ({ page }) => {
@@ -153,6 +157,17 @@ test('a running plan is read-only', async ({ page }) => {
   await expect(page.getByTestId('plan-item-amount-0')).toBeDisabled()
   await expect(page.getByTestId('plan-item-remove-0')).toBeHidden()
   await expect(page.getByTestId('plan-save')).toBeHidden()
+})
+
+test('finished plan keeps per-item results and can be copied into a draft', async ({ page }) => {
+  await open(page, '/plan', 'plan-done')
+  await expect(page.getByTestId('plan-status')).toContainText('已完成')
+  await expect(page.getByTestId('plan-result-0')).toContainText('交易委托已接受')
+  await expect(page.getByTestId('plan-result-1')).toContainText('窗口内没有买到')
+  // Execution results are not an editable form until the user asks to copy.
+  await expect(page.getByTestId('plan-item-code-0')).toHaveCount(0)
+  await page.getByTestId('plan-edit').click()
+  await expect(page.getByTestId('plan-item-code-0')).toBeEnabled()
 })
 
 test('plan page fits the minimum window', async ({ page }) => {

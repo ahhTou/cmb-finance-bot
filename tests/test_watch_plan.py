@@ -268,6 +268,24 @@ class ScheduleTest(PlanTestBase):
         self.assertEqual(
             watch_plan.schedule(plan, settings, at + timedelta(minutes=1))["warnings"], [])
 
+    def test_zero_cold_start_previews_immediate_preparation(self):
+        settings = purchase_settings.validate(dict(purchase_settings.DEFAULTS, cold_start_minutes=0))
+        now = datetime(2026, 11, 6, 8, 0, 0)
+        plan = self.save([self.item(at=now + timedelta(minutes=60))])
+        row = watch_plan.schedule(plan, settings, now)["items"][0]
+        self.assertEqual(row["prep_mode"], "immediate")
+        self.assertIsNone(row["prep_at"])
+        self.assertIn("立即", row["prep_text"])
+
+    def test_late_item_previews_immediate_preparation(self):
+        settings = purchase_settings.load()
+        now = datetime(2026, 11, 6, 8, 0, 0)
+        plan = self.save([self.item(at=now + timedelta(minutes=5))])
+        row = watch_plan.schedule(plan, settings, now)["items"][0]
+        self.assertEqual(row["prep_mode"], "immediate")
+        self.assertIn("剩余时间不足", row["prep_text"])
+        self.assertIsNotNone(row["prep_at"])
+
 
 class ViewTest(PlanTestBase):
     def test_empty_view(self):
@@ -305,6 +323,36 @@ class ViewTest(PlanTestBase):
             data = watch_plan.view()
         self.assertFalse(data["running"])
         self.assertTrue(data["stale"])
+
+    def test_view_uses_started_settings_snapshot_and_flags_changes(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan["settings_snapshot"] = dict(purchase_settings.DEFAULTS, cold_start_minutes=10)
+        plan["settings_revision"] = purchase_settings.revision(plan["settings_snapshot"])
+        watch_plan.save_plan(plan)
+        data = watch_plan.view()
+        self.assertTrue(data["settings_changed"])
+        self.assertEqual(data["plan"]["items"][0]["prep_at"],
+                         iso(datetime.fromisoformat(plan["items"][0]["at"]) - timedelta(minutes=10)))
+
+    def test_running_with_old_heartbeat_is_flagged_without_becoming_stale(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan["last_tick"] = iso(datetime.now() - timedelta(seconds=61))
+        watch_plan.save_plan(plan)
+        with patch.object(nw, "alive", return_value=True):
+            data = watch_plan.view()
+        self.assertTrue(data["running"])
+        self.assertFalse(data["stale"])
+        self.assertTrue(data["heartbeat_stale"])
+        self.assertGreaterEqual(data["heartbeat_age_s"], 61)
+        self.assertEqual(data["heartbeat_timeout_s"], 60)
+
+    def test_alive_recent_heartbeat_is_healthy(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan["last_tick"] = iso(datetime.now())
+        watch_plan.save_plan(plan)
+        with patch.object(nw, "alive", return_value=True):
+            data = watch_plan.view()
+        self.assertFalse(data["heartbeat_stale"])
 
     def test_logs_tail(self):
         (self.state / "plan.log").write_text(
@@ -819,6 +867,41 @@ class RunnerTest(PlanTestBase):
         self.assertEqual(saved["phase"], "aborted")
         self.assertIn("值守配置在计划期间被修改", saved["result"])
         arm.assert_not_called()
+
+    def test_config_change_before_submit_stops_waiting_item(self):
+        plan = self.prepare([self.item(at=self.at(60))])
+        plan["items"][0]["task_id"] = "t1"
+        plan["settings_snapshot"] = purchase_settings.load()
+        watch_plan.save_plan(plan)
+        armed = task("t1", "armed")
+        changed = dict(purchase_settings.DEFAULTS, cold_start_minutes=8)
+        with patch.object(nw, "load_task", return_value=armed), \
+             patch.object(nw, "alive", return_value=True), \
+             patch.object(purchase_settings, "load", return_value=changed), \
+             patch.object(nw, "disarm_task") as disarm:
+            outcome = watch_plan._wait_item(
+                plan, 0, datetime.now() + timedelta(minutes=60),
+                plan_settings.load())
+        self.assertEqual(outcome[0], "config-changed")
+        disarm.assert_not_called()
+        self.assertEqual(watch_plan.load_plan()["phase"], "running")
+
+    def test_config_change_while_waiting_aborts_and_cancels_watch(self):
+        plan = self.prepare([self.item(at=self.at(60))])
+        armed = task("t1", "armed")
+        armed["plan_id"] = plan["plan_id"]
+        with patch.object(nw, "arm_task", return_value=armed), \
+             patch.object(watch_plan, "_wait_item",
+                          return_value=("config-changed", "值守配置在计划期间被修改")), \
+             patch.object(nw, "load_task", return_value=armed), \
+             patch.object(nw, "disarm_task") as disarm, \
+             patch.object(nw, "alert"):
+            watch_plan.run("gen-run")
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "aborted")
+        self.assertIn("值守配置在计划期间被修改", saved["result"])
+        self.assertEqual(saved["items"][0]["state"], "failed")
+        disarm.assert_called_once()
 
     def test_prep_downgrades_to_immediate_when_late(self):
         self.prepare([self.item(code="AAAA", at=self.at(5)),

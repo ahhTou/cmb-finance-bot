@@ -32,13 +32,15 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-07 计划审查 #4–#7 修复**：① 计划结束后显示只读执行结果，保留逐项状态、原因、预计与实际时间；「编辑 / 复制为新计划」再进入草稿。② 计划开始时快照购买配置，展示与执行都用快照；当前项未提交时发现配置变化就取消布防并中止计划，已进入提交则等结果后在下一项前停止，最后一项按快照完成。③ 提前量为「立即」或剩余时间不足时，页面显示「开始后立即准备」，执行后显示实际冷启动/结束时间。④ 新增「设置 → 其他 → 心跳超时」，进程存活但心跳超时显示告警，不自动中止或重试交易。验证：Python 全量 355 项通过（15 项跳过），`admin_server` 15 项通过；前端单元 30 项、e2e 76 项、tsc、lint 和 build 通过。
+
 - **2026-11-07 修掉 test_timed_buy 旧报错**：测试 fixture 把密码数字键写成了 `TextView`，而 `security_keys()` 只认 `Button`，导致 `test_single_submit_success` 一直报「数字键不完整」；补上正确的 `BUTTON` 类后该用例恢复。Python 全量 348 项全部通过（15 项跳过），不再有已知失败。
 
 - **2026-11-07 稳定历史日志弹窗 e2e**：全量并行时 WebKit 偶发找不到 Radix dialog；`inline log areas` 用例改为先显式等对话框可见、再断言内容，并给 10 秒超时，覆盖冷启动/并行挂载延迟。全量 e2e 74 项通过。
 
-- **2026-11-07 计划内部参数移到「设置 → 其他」**：新增 `src/plan_settings.py` 和 `var/night/plan-settings.json`；相邻项间隔、首发结束余量、单项超时、进程消失宽限、轮询/心跳/终止等待 7 项从 `watch_plan.py` 常量移入设置。管理 App 新增第五个「其他」页签，后端新增 `GET/PUT /api/settings/other`，CLI 新增 `settings-other`；`plan-start` 时快照到 `plan.json` 的 `runtime_settings`，运行中的计划保持开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。验证：Python 全量 348 项中 332 项通过、15 项跳过，1 个既有 `test_timed_buy` 错误（下一轮已修）；前端单元测试 30 项、e2e 74 项、tsc、lint 和 build 通过。本轮未执行真实计划或交易。
+- **2026-11-07 计划内部参数移到「设置 → 其他」**：新增 `src/plan_settings.py` 和 `var/night/plan-settings.json`；相邻项间隔、首发结束余量、单项超时、进程消失宽限、轮询/心跳/终止等待/心跳超时 8 项从 `watch_plan.py` 常量移入设置。管理 App 新增第五个「其他」页签，后端新增 `GET/PUT /api/settings/other`，CLI 新增 `settings-other`；`plan-start` 时快照到 `plan.json` 的 `runtime_settings`，运行中的计划保持开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。验证：Python 全量 348 项中 332 项通过、15 项跳过，1 个既有 `test_timed_buy` 错误（下一轮已修）；前端单元测试 30 项、e2e 74 项、tsc、lint 和 build 通过。本轮未执行真实计划或交易。
 
-- **2026-11-07 计划前三项修复与通知分类**：计划任务终态新增 `outcome=success/failed/dry_run/unknown`；明确失败记失败并继续，提交异常、结果未知、提交进程消失则整份计划中止，提示查交易记录，不重试。计划取消、超时与异常清理在任务锁内核对计划/任务归属，不误取消并发新建的独立布防。开始请求必须携带已核对的 `plan_id/content_revision/settings_revision`；确认框冻结完整清单，后端锁内校验内容与配置，旧确认不得启动新内容。设置新增独立「推送通知」Tab，连接配置和通知选项分开保存；总开关与 23 类通知场景单独可配，默认全开，实时读取偏好，测试推送绕过开关。非敏感选项在 `var/night/push-settings.json`，不参与购买配置版本，不会因开关通知中止计划。计划审查第 4–7 项和体验优化暂缓，记录在 [计划已知问题](docs/plan-known-issues.md)。本轮未执行真实布防、购买、凭据修改或真实推送。验证：Python 全量 338 项中 323 项通过、14 项跳过，唯一错误为已知旧 `test_timed_buy.test_single_submit_success`（数字键不完整）；前端单元测试 30 项、WebKit/Chromium e2e 72 项、类型检查、lint 和 Tauri Release 构建通过（2026-11-07 复核全量 e2e 时 WebKit 内嵌日志弹窗出现 1 次不稳定失败，该用例单独重跑通过）；通知页截图已更新。确认无活跃值守与计划后已重启管理 App，单份托管后端健康检查通过。
+- **2026-11-07 计划前三项修复与通知分类**：计划任务终态新增 `outcome=success/failed/dry_run/unknown`；明确失败记失败并继续，提交异常、结果未知、提交进程消失则整份计划中止，提示查交易记录，不重试。计划取消、超时与异常清理在任务锁内核对计划/任务归属，不误取消并发新建的独立布防。开始请求必须携带已核对的 `plan_id/content_revision/settings_revision`；确认框冻结完整清单，后端锁内校验内容与配置，旧确认不得启动新内容。设置新增独立「推送通知」Tab，连接配置和通知选项分开保存；总开关与 23 类通知场景单独可配，默认全开，实时读取偏好，测试推送绕过开关。非敏感选项在 `var/night/push-settings.json`，不参与购买配置版本，不会因开关通知中止计划。计划审查第 4–7 项当时暂缓（后来已修复，见上一则），体验优化记录在 [计划已知问题](docs/plan-known-issues.md)。本轮未执行真实布防、购买、凭据修改或真实推送。验证：Python 全量 338 项中 323 项通过、14 项跳过，唯一错误为已知旧 `test_timed_buy.test_single_submit_success`（数字键不完整）；前端单元测试 30 项、WebKit/Chromium e2e 72 项、类型检查、lint 和 Tauri Release 构建通过（2026-11-07 复核全量 e2e 时 WebKit 内嵌日志弹窗出现 1 次不稳定失败，该用例单独重跑通过）；通知页截图已更新。确认无活跃值守与计划后已重启管理 App，单份托管后端健康检查通过。
 
 - **2026-11-07 提醒改为 ntfy 手机推送**：删除 QQ 邮箱 SMTP 通知（`src/notify.py`），新增 `src/push.py`：服务器、频道和访问令牌同存钥匙串 `cmb-finance-bot.push.v1`。配置改为在管理 App「设置 → 推送通知」完成：显示已配置/未配置、服务器和频道；表单可保存、发送测试推送、清除配置（需确认），令牌为空表示不改、首次配置必须填写，`config_info()` 只返回 `{configured, server, topic, token_set}`、永不返回令牌。后端接口 `GET/PUT/DELETE /api/push` 和 `POST /api/push/test`，token 照既有做法走 stdin payload；测试推送失败只回 HTTP 状态码或异常类型。`python3 src/push.py setup` 保留为备选并改用 `save_config()`，可覆盖已有条目。按 ntfy 标准 JSON 发布，5 秒超时，失败只在 stderr 写一行状态码或异常类型，不抛异常、不重试。成交成功、购买失败、异常中止用优先级 5；布防、开始、撤防、登录、页面就绪等状态提示用 3。管理 App 状态页「凭据与通知」仍显示「推送通知 已配置 / 未配置」，后端字段为 `push_configured`。旧钥匙串条目 `cmb-finance-bot.smtp.v1` 不再使用，需在「钥匙串访问」手动删除。代码与隔离测试、前端 tsc / Vitest / e2e 已通过，管理 App 已重建并重启，README 截图已重拍（新增推送通知一张）；真实推送地址和手机端验收待账户持有人完成。
 
@@ -422,12 +424,12 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 - 一项 = 购买时间 + 模式（首发/不定时抢购）+ 产品代码 + 金额；最多 **20 项**，购买时间须在未来 **24 小时**内，按时间排序保存。
 - 相邻两项必须满足：`下一项冷启动时间 ≥ 上一项预计结束时间 + 2 分钟`。上一项预计结束时间：首发按「开售 + 查询窗口 + 2 分钟提交余量」，不定时按「开始 + 窗口分钟数」。不满足时保存可以成功，但 `problems` 会给出至少需要的间隔、**不能开始**。
 - 程序启动计划进程后逐项执行：上一项结束（`done` 或 `aborted`）后才处理下一项；某项失败会在计划日志/推送里记录并继续下一项；**用户手动取消当前布防（任务页「取消布防」）会让整份计划停止**。
-- 计划开始后不能修改计划（只能取消/清空）；计划期间手动单独布防会被拒绝（`_arm` 计划互斥）。当前配置变化只在下一项布防前检查，当前项仍按布防快照执行；最后一项结束后不再核对，该行为与运行中时间展示仍有待完善，见 [计划已知问题](docs/plan-known-issues.md)。
+- 计划开始后不能修改计划（只能取消/清空）；计划期间手动单独布防会被拒绝（`_arm` 计划互斥）。计划开始时快照购买配置；运行期间修改配置时，若当前项未进入提交，中止计划并取消当前布防；已进入提交则等结果，并在下一项布防前停止；最后一项按快照执行完后结束。管理 App 在运行中显示配置变化提示，展示使用开始时的快照。
 - 真实计划必须显式确认：管理 App 确认框冻结并列出全部产品、金额、模式、购买日期时间，勾选「我已核对产品和金额，确认真实支付 ¥…」；开始请求携带计划 ID、内容版本和配置版本，在计划锁与任务锁内校验。CLI 演练与真实都必须显式带 `--plan-id`、`--content-revision`、`--settings-revision`（分别来自已核对的 `plan` 响应的 `plan.plan_id`、`plan.content_revision` 与顶层 `settings_revision`），真实还必须带 `--confirm-real-payment`。缺版本或版本变化会拒绝，不能自动取最新版本来绕过重新核对。演练计划只输交易密码、不点确定、不提交。
-- 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`，读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；心跳超时尚未用于健康判定，已记为待修问题。
+- 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`/`settings_snapshot`，读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；进程仍存活但心跳超过「设置 → 其他」的阈值时只显示「心跳超时」告警，不据此自动重试交易。
 - 任务终态按 `outcome=success/failed/dry_run/unknown` 判断，不以 `phase=done` 代替购买成功。明确失败（布防/准备失败、窗口内没买到、页面明确失败）记 `failed` 并继续；明确成功或演练完成记 `done`。旧记录只接受明确结果白名单，不熟悉的结果保守视为未知。watch 进程消失后等 15 秒宽限：能证明未进入提交则记失败继续，仍为 `firing`、有 `fired_at` 或任务记录丢失则记结果未知。**结果未知、提交阶段超时或未捕获异常**会整份中止，不杀提交中进程，不开始下一项，提示「请查交易记录，不要重复提交」。
 - 若计划进程自己异常退出（被 kill、崩溃），`plan.json` 会停在 `running` 且 `pid` 不存活（`stale`），页面显示「进程已退出」，需要人工点「取消计划」收口；此时当前 watch 可能仍在跑，先查是否已提交过。
-- 计划进程内部的轮询/心跳/宽限/超时/终止等待和相邻间隔都在「设置 → 其他」里调（`src/plan_settings.py`，`var/night/plan-settings.json`）。它们不属于购买配置，不改变 `settings_revision`；`plan-start` 时读取并快照到 `plan.json` 的 `runtime_settings`，运行中的计划沿用开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。
+- 计划进程内部的轮询/心跳/宽限/超时/终止等待、心跳超时阈值和相邻间隔都在「设置 → 其他」里调（`src/plan_settings.py`，`var/night/plan-settings.json`）。它们不属于购买配置，不改变 `settings_revision`；`plan-start` 时读取并快照到 `plan.json` 的 `runtime_settings`，运行中的计划沿用开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。
 
 ### 5B.2 操作（管理 App「计划」页）
 

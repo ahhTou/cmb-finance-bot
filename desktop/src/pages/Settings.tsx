@@ -569,6 +569,7 @@ const OTHER_DEFAULTS = {
   poll_seconds: 2,
   heartbeat_seconds: 10,
   kill_wait_seconds: 10,
+  heartbeat_timeout_seconds: 60,
 }
 type OtherKey = keyof typeof OTHER_DEFAULTS
 type OtherValues = Record<OtherKey, string>
@@ -581,6 +582,7 @@ const OTHER_LIMITS: Record<OtherKey, [number, number]> = {
   poll_seconds: [1, 60],
   heartbeat_seconds: [1, 300],
   kill_wait_seconds: [1, 120],
+  heartbeat_timeout_seconds: [10, 600],
 }
 const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' | 'fixed'; help: string }> = {
   arm_gap_minutes: {
@@ -618,6 +620,12 @@ const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' 
     unit: '秒',
     kind: 'fixed',
     help: '计划进程写 last_tick 的固定间隔；不能短于轮询间隔。',
+  },
+  heartbeat_timeout_seconds: {
+    label: '心跳超时',
+    unit: '秒',
+    kind: 'limit',
+    help: '计划进程超过这么久没有写心跳就标记为心跳异常；只提示，不自动重试交易。',
   },
   kill_wait_seconds: {
     label: '终止等待',
@@ -711,6 +719,7 @@ function OtherSettings() {
           {field('grace_seconds')}
           {field('end_timeout_minutes')}
           {field('kill_wait_seconds')}
+          {field('heartbeat_timeout_seconds')}
         </div>
       </Card>
 

@@ -126,6 +126,16 @@ def _runtime(plan=None):
     raw = (plan or {}).get("runtime_settings")
     return plan_settings.snapshot(raw) if raw else plan_settings.load()
 
+def _settings_for(plan):
+    """Purchase settings used by this plan: the start snapshot when available."""
+    raw = (plan or {}).get("settings_snapshot")
+    if isinstance(raw, dict):
+        try:
+            return purchase_settings.validate(raw)
+        except RuntimeError:
+            pass
+    return purchase_settings.load()
+
 
 def plan_content_revision(plan):
     """Digest only confirmed input; runtime state and computed times are excluded."""
@@ -199,15 +209,26 @@ def schedule(plan, settings, now, runtime=None):
     settings = purchase_settings.validate(settings)
     runtime = runtime or plan_settings.load()
     arm_gap = timedelta(minutes=runtime["arm_gap_minutes"])
+    immediate = settings["cold_start_minutes"] == 0
     prep = timedelta(minutes=settings["cold_start_minutes"])
     items = plan.get("items") if isinstance(plan, dict) else None
     items = items if isinstance(items, list) else []
+    next_index = next((index for index, item in enumerate(items)
+                       if item.get("state") in ("pending", "running")), None)
     enriched, problems, warnings = [], [], []
-    for item in items:
+    for index, item in enumerate(items):
         at = _plan_at(item)
-        prep_at = at - prep
+        estimated_prep = at - prep
+        prep_at = _iso(estimated_prep)
+        prep_mode = "scheduled"
+        prep_text = None
+        if immediate:
+            prep_mode, prep_text, prep_at = "immediate", "开始后立即准备", None
+        elif index == next_index and now > estimated_prep - arm_gap and at > now:
+            prep_mode, prep_text = "immediate", "剩余时间不足，开始后立即冷启动"
         end_at = _plan_end_at(at, item.get("mode"), settings, runtime)
-        enriched.append(dict(item, prep_at=_iso(prep_at), end_at=_iso(end_at)))
+        enriched.append(dict(item, prep_at=prep_at, prep_mode=prep_mode,
+                             prep_text=prep_text, end_at=_iso(end_at)))
     if not items:
         problems.append("计划里还没有布防。")
     for index, item in enumerate(items, 1):
@@ -219,17 +240,20 @@ def schedule(plan, settings, now, runtime=None):
     for index in range(1, len(items)):
         prev_at = _plan_at(items[index - 1])
         prev_end = datetime.fromisoformat(enriched[index - 1]["end_at"])
-        cur_prep = datetime.fromisoformat(enriched[index]["prep_at"])
+        current = enriched[index]
+        cur_prep = (datetime.fromisoformat(current["prep_at"])
+                    if current["prep_at"] else _plan_at(items[index]))
         if cur_prep >= prev_end + arm_gap:
             continue
         # 让 cur_prep 至少比 prev_end 晚 arm_gap 所需的购买时间差。
         need = prev_end - prev_at + prep + arm_gap
         minutes = math.ceil(need.total_seconds() / 60)
+        action = "准备" if current["prep_mode"] == "immediate" else "开始冷启动"
         problems.append(
             f"第 {index + 1} 项与第 {index} 项间隔太近：第 {index + 1} 项需在 "
-            f"{cur_prep:%H:%M:%S} 开始冷启动，但第 {index} 项预计 {prev_end:%H:%M:%S} 才结束；"
+            f"{cur_prep:%H:%M:%S} {action}，但第 {index} 项预计 {prev_end:%H:%M:%S} 才结束；"
             f"请把购买时间拉开到至少 {minutes} 分钟。")
-    if enriched:
+    if enriched and not immediate:
         prep_at = datetime.fromisoformat(enriched[0]["prep_at"])
         if now > prep_at - arm_gap and _plan_at(items[0]) > now:
             warnings.append("第一项已进入冷启动时间，开始后将立即冷启动。")
@@ -238,23 +262,40 @@ def schedule(plan, settings, now, runtime=None):
 
 def view():
     """后端响应：计划 + 运行/过期状态 + problems/warnings + 任务与日志。"""
-    settings = purchase_settings.load()
-    revision = purchase_settings.revision(settings)
+    live_settings = purchase_settings.load()
+    revision = purchase_settings.revision(live_settings)
     now = _now()
     plan = load_plan()
     runtime = _runtime(plan)
     problems, warnings = [], []
-    running = stale = False
+    running = stale = heartbeat_stale = settings_changed = False
+    heartbeat_age = None
     if plan is not None:
-        computed = schedule(plan, settings, now, runtime)
+        computed = schedule(plan, _settings_for(plan), now, runtime)
         plan = dict(plan, items=computed["items"], content_revision=plan_content_revision(plan))
         problems, warnings = computed["problems"], computed["warnings"]
         running = plan.get("phase") == "running" and nw.alive(plan.get("pid"))
         stale = plan.get("phase") == "running" and not running
+        settings_changed = bool(
+            plan.get("settings_revision")
+            and revision != plan["settings_revision"])
+        last_tick = plan.get("last_tick")
+        if last_tick:
+            try:
+                heartbeat_age = max(0, round((now - datetime.fromisoformat(last_tick)).total_seconds()))
+            except (TypeError, ValueError):
+                heartbeat_age = None
+        heartbeat_stale = bool(
+            plan.get("phase") == "running"
+            and (heartbeat_age is None
+                 or heartbeat_age > runtime["heartbeat_timeout_seconds"]))
     path = log_path()
     logs = (path.read_text(encoding="utf-8", errors="replace").splitlines()[-LOG_LINES:]
             if path.exists() else [])
     return {"plan": plan, "running": bool(running), "stale": bool(stale),
+            "heartbeat_stale": heartbeat_stale, "heartbeat_age_s": heartbeat_age,
+            "heartbeat_timeout_s": runtime["heartbeat_timeout_seconds"],
+            "settings_changed": settings_changed,
             "problems": problems, "warnings": warnings, "task": nw.load_task(),
             "log_path": str(path), "logs": logs, "settings_revision": revision,
             "now": now.isoformat()}
@@ -364,7 +405,7 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
             plan.update(phase="running", generation=generation, started_at=now,
                         ended_at=None, pid=None, last_tick=now, result=None,
                         settings_revision=purchase_settings.revision(settings),
-                        runtime_settings=runtime)
+                        settings_snapshot=settings, runtime_settings=runtime)
             for item in plan.get("items", []):
                 item.update(state="pending", task_id=None, result=None,
                             armed_at=None, ended_at=None)
@@ -639,6 +680,19 @@ def _wait_item(plan, index, end_at, runtime):
             if outcome == "unknown":
                 result = f"结果未知：{result or '没有可确认的交易结果'}；请查交易记录，不要重复提交"
             return outcome, result
+        if plan.get("settings_revision"):
+            try:
+                changed = (purchase_settings.revision(purchase_settings.load())
+                           != plan["settings_revision"])
+            except (RuntimeError, OSError, ValueError):
+                changed = True
+            # A submission in flight or an already terminal item must finish;
+            # the run loop then stops before arming the next item.
+            settled = bool(task and (task.get("phase") in ("done", "aborted", "disarmed", "firing")
+                                     or task.get("fired_at")))
+            if changed and not settled:
+                return ("config-changed",
+                        "值守配置在计划期间被修改，当前项未提交，计划已停止")
         if not live:
             grace = grace if grace is not None else time.monotonic() + runtime["grace_seconds"]
             if time.monotonic() >= grace:
@@ -701,10 +755,11 @@ def run(generation):
                 log(f"第 {index + 1} 项购买时间已过，跳过。")
                 nw.alert(f"计划第 {index + 1} 项跳过", f"{item['code']} 购买时间已过", event='plan_item_skipped')
                 continue
-            settings = purchase_settings.load()
-            if purchase_settings.revision(settings) != plan.get("settings_revision"):
+            live_settings = purchase_settings.load()
+            if purchase_settings.revision(live_settings) != plan.get("settings_revision"):
                 _abort(plan, "值守配置在计划期间被修改，计划已停止")
                 return
+            settings = _settings_for(plan)
             end_at = datetime.fromisoformat(
                 schedule(plan, settings, now, runtime)["items"][index]["end_at"])
             prep = settings["cold_start_minutes"]
@@ -713,7 +768,7 @@ def run(generation):
                 log(f"第 {index + 1} 项剩余时间不足，改为立即冷启动。")
             plan["last_tick"] = _now_iso()
             item.update(state="running", armed_at=_now_iso(), ended_at=None,
-                        result=None, task_id=None)
+                        result=None, task_id=None, prep_minutes=prep)
             if not _save_running(plan):
                 return
             log(f"第 {index + 1} 项开始布防：{item['code']} {item['amount']} 元，"
@@ -742,6 +797,14 @@ def run(generation):
             if state == "disarmed":
                 _abort(plan, f"第 {index + 1} 项布防被取消，计划已停止",
                        item_index=index, item_state="skipped", item_result="用户取消布防")
+                return
+            if state == "config-changed":
+                note = _abort_running_watch(plan)
+                message = f"第 {index + 1} 项：{result}"
+                if note:
+                    message += f"；{note}"
+                _abort(plan, message, item_index=index, item_state="failed",
+                       item_result="值守配置已修改，当前项未提交")
                 return
             if state in ("unknown", "firing-timeout"):
                 if not _finish_item(plan, index, "failed", result, outcome="unknown"):

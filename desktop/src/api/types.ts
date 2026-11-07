@@ -170,7 +170,11 @@ export interface PlanItem {
   armed_at?: string | null
   ended_at?: string | null
   /** Computed by the backend view; absent on the request/save payload. */
-  prep_at?: string
+  prep_at?: string | null
+  prep_mode?: 'scheduled' | 'immediate'
+  prep_text?: string | null
+  /** Actual cold-start lead recorded when the worker armed this item. */
+  prep_minutes?: number | null
   end_at?: string
 }
 
@@ -187,6 +191,8 @@ export interface Plan {
   pid?: number | null
   last_tick?: string | null
   settings_revision?: string | null
+  /** Purchase settings frozen when the plan started. */
+  settings_snapshot?: Record<string, number> | null
   result?: string | null
   items: PlanItem[]
 }
@@ -195,6 +201,10 @@ export interface PlanView {
   plan: Plan | null
   running: boolean
   stale: boolean
+  heartbeat_stale: boolean
+  heartbeat_age_s: number | null
+  heartbeat_timeout_s: number
+  settings_changed: boolean
   problems: string[]
   warnings: string[]
   task: Task | null
