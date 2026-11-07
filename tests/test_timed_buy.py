@@ -20,6 +20,7 @@ def page(*items):
 
 TEXT = "android.widget.TextView"
 EDIT = "android.widget.EditText"
+BUTTON = "android.widget.Button"
 results = page(("手机银行搜索", TEXT), ("理财 133045A", TEXT))
 detail = page(("133045A", TEXT), ("购买，点击可跳转至购买页", TEXT))
 empty_form = page(("133045A", TEXT), ("购买金额", TEXT), ("请输入", EDIT))
@@ -27,7 +28,7 @@ filled = page(("0.01, 请输入", EDIT), ("同意协议下一步", TEXT))
 risk = page(("一键输入", TEXT), ("本人已阅读风险揭示", TEXT))
 risk_done = page(("本人已阅读风险揭示", EDIT), ("确认", TEXT))
 auth = page(("请输入取款密码", TEXT), ("招商银行安全输入", TEXT), ("￥0.01", TEXT),
-            ("完成", TEXT), ("确定", TEXT), *[(str(n), TEXT) for n in range(10)])
+            ("完成", TEXT), ("确定", TEXT), *[(str(n), BUTTON) for n in range(10)])
 for node in auth:
     if node.get("text") == "确定":
         node.set("bounds", "[100,200][200,250]")

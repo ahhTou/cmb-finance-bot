@@ -19,7 +19,7 @@
 - [ ] `pnpm e2e`（假后端，WebKit + Chromium）
 - [ ] `python3 -B -m unittest tests.test_favorites tests.test_admin_cli`
 - [ ] `.venv/bin/python -B -m unittest tests.test_admin_server`
-- [ ] `python3 -B -m unittest discover -s tests -p "test_*.py"`；只允许既有 `test_timed_buy` 错误
+- [ ] `python3 -B -m unittest discover -s tests -p "test_*.py"`；必须全过（15 项既有 skip 不计失败）
 - [ ] `cd desktop && pnpm build`
 
 ## B. 布防价格二次确认（手动界面）
@@ -167,5 +167,5 @@
 
 - `pnpm test` 30 项、`pnpm exec tsc --noEmit` 0 错误；`pnpm check` 0 error，仅 1 个既有 warning / 5 个 info。
 - Playwright e2e 74 项（WebKit + Chromium）全过；历史日志对话框改为显式等待可见 10 秒，避免冷启动/并行时 WebKit 首次挂载超过默认 5 秒的偶发失败。
-- Python 全量 348 项（约 3.7 秒）：332 通过、15 跳过、1 个既有 `test_timed_buy` 错误；`.venv/bin/python -m unittest tests.test_admin_server` 15 项通过。
+- Python 全量 348 项（约 1.6 秒）：333 通过、15 跳过、0 错误；`.venv/bin/python -m unittest tests.test_admin_server` 15 项通过。
 - 管理 App 已重建并重启；真实计划窗口、真实设备与推送通知仍待账户持有人验收。

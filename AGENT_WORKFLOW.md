@@ -32,9 +32,11 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-07 修掉 test_timed_buy 旧报错**：测试 fixture 把密码数字键写成了 `TextView`，而 `security_keys()` 只认 `Button`，导致 `test_single_submit_success` 一直报「数字键不完整」；补上正确的 `BUTTON` 类后该用例恢复。Python 全量 348 项全部通过（15 项跳过），不再有已知失败。
+
 - **2026-11-07 稳定历史日志弹窗 e2e**：全量并行时 WebKit 偶发找不到 Radix dialog；`inline log areas` 用例改为先显式等对话框可见、再断言内容，并给 10 秒超时，覆盖冷启动/并行挂载延迟。全量 e2e 74 项通过。
 
-- **2026-11-07 计划内部参数移到「设置 → 其他」**：新增 `src/plan_settings.py` 和 `var/night/plan-settings.json`；相邻项间隔、首发结束余量、单项超时、进程消失宽限、轮询/心跳/终止等待 7 项从 `watch_plan.py` 常量移入设置。管理 App 新增第五个「其他」页签，后端新增 `GET/PUT /api/settings/other`，CLI 新增 `settings-other`；`plan-start` 时快照到 `plan.json` 的 `runtime_settings`，运行中的计划保持开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。验证：Python 全量 348 项中 332 项通过、15 项跳过，唯一错误为既有 `test_timed_buy`；前端单元测试 30 项、e2e 74 项、tsc、lint 和 build 通过。本轮未执行真实计划或交易。
+- **2026-11-07 计划内部参数移到「设置 → 其他」**：新增 `src/plan_settings.py` 和 `var/night/plan-settings.json`；相邻项间隔、首发结束余量、单项超时、进程消失宽限、轮询/心跳/终止等待 7 项从 `watch_plan.py` 常量移入设置。管理 App 新增第五个「其他」页签，后端新增 `GET/PUT /api/settings/other`，CLI 新增 `settings-other`；`plan-start` 时快照到 `plan.json` 的 `runtime_settings`，运行中的计划保持开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 24 小时内仍是产品约束，不在此页。验证：Python 全量 348 项中 332 项通过、15 项跳过，1 个既有 `test_timed_buy` 错误（下一轮已修）；前端单元测试 30 项、e2e 74 项、tsc、lint 和 build 通过。本轮未执行真实计划或交易。
 
 - **2026-11-07 计划前三项修复与通知分类**：计划任务终态新增 `outcome=success/failed/dry_run/unknown`；明确失败记失败并继续，提交异常、结果未知、提交进程消失则整份计划中止，提示查交易记录，不重试。计划取消、超时与异常清理在任务锁内核对计划/任务归属，不误取消并发新建的独立布防。开始请求必须携带已核对的 `plan_id/content_revision/settings_revision`；确认框冻结完整清单，后端锁内校验内容与配置，旧确认不得启动新内容。设置新增独立「推送通知」Tab，连接配置和通知选项分开保存；总开关与 23 类通知场景单独可配，默认全开，实时读取偏好，测试推送绕过开关。非敏感选项在 `var/night/push-settings.json`，不参与购买配置版本，不会因开关通知中止计划。计划审查第 4–7 项和体验优化暂缓，记录在 [计划已知问题](docs/plan-known-issues.md)。本轮未执行真实布防、购买、凭据修改或真实推送。验证：Python 全量 338 项中 323 项通过、14 项跳过，唯一错误为已知旧 `test_timed_buy.test_single_submit_success`（数字键不完整）；前端单元测试 30 项、WebKit/Chromium e2e 72 项、类型检查、lint 和 Tauri Release 构建通过（2026-11-07 复核全量 e2e 时 WebKit 内嵌日志弹窗出现 1 次不稳定失败，该用例单独重跑通过）；通知页截图已更新。确认无活跃值守与计划后已重启管理 App，单份托管后端健康检查通过。
 
@@ -656,7 +658,7 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 | `src/keychain_store.py` | 钥匙串读写（`update-login`） |
 | `src/manage.py`、`scripts/project` | 模拟器启动 / 停止 / 状态 |
 | `src/stress_buy.py` | N 笔真实购买压测，慎用 |
-| `src/run_task.py`、`src/timed_buy.py` | 早期实验路径，已不再使用；`tests/test_timed_buy.py` 有 1 个报错 |
+| `src/run_task.py`、`src/timed_buy.py` | 早期实验路径，已不再使用；对应测试可作回归参考 |
 | `tests/test_night_watch.py` | 值守单元测试：`python3 -B -m unittest tests.test_night_watch` |
 | `tests/test_watch_plan.py` | 计划模式单元测试：`python3 -B -m unittest tests.test_watch_plan` |
 | `tests/test_redemption.py` | 不定时抢购单元测试：布防窗口、提交标记、窗口内无额度 |

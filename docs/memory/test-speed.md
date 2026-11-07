@@ -17,4 +17,4 @@ updated: 2026-11-05
 - 新增外部依赖时要同步给测试加默认 mock，默认值取"正常可用"，需要失败路径的用例单独 override。给 `arm` 加网络检查后，`test_redemption` / `test_watch_recovery` 都应默认 `network_state` 返回 `up`。
 - "诊断信息"类函数（如 `wifi_never_validated`）要吞掉全部异常：它不该因为 MagicMock 或环境异常而让主流程崩掉，更不该在正常路径多查一次。
 - 改完必须跑 `time python3 -B -m unittest discover -s tests -p "test_*.py"` 确认总时长。当前基线约 **2 秒**；超过 10 秒说明有测试在等真实环境。
-- 已知的既有失败只有 `tests/test_timed_buy.py` 一项（早期实验路径，见 AGENT_WORKFLOW.md §8），其余必须全过。
+- 测试必须全过；`tests/test_timed_buy.py` 的旧报错已在 2026-11-07 修掉（数字键 fixture 的控件类名不对），不要再把它当已知失败。
