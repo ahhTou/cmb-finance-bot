@@ -28,12 +28,24 @@ export type Scenario =
   | 'error'
   | 'plan'
   | 'plan-done'
+  | 'plan-expired'
 
 export function scenario(): Scenario {
   const value = new URLSearchParams(location.search).get('scenario')
   return (
     (
-      ['idle', 'armed', 'redemption', 'firing', 'progress', 'empty', 'error', 'plan', 'plan-done'] as const
+      [
+        'idle',
+        'armed',
+        'redemption',
+        'firing',
+        'progress',
+        'empty',
+        'error',
+        'plan',
+        'plan-done',
+        'plan-expired',
+      ] as const
     ).find((s) => s === value) ?? 'idle'
   )
 }
@@ -166,6 +178,48 @@ function planItem(item_id: string, code: string, amount: string, minutes: number
 
 /** The `plan` scenario: an idle, drill-mode two-item plan with times in the future. */
 export function makePlan(kind: Scenario): Plan | null {
+  if (kind === 'plan-expired') {
+    return {
+      version: 1,
+      plan_id: 'mock-plan-expired',
+      generation: null,
+      created_at: inMinutes(-300),
+      started_at: null,
+      ended_at: null,
+      dry_run: true,
+      phase: 'idle',
+      pid: null,
+      last_tick: null,
+      settings_revision: 'mock-revision',
+      result: null,
+      items: [
+        {
+          item_id: 'mock-expired-1',
+          code: 'JX040229',
+          amount: '5000',
+          at: inMinutes(-120),
+          mode: 'first_launch',
+          state: 'pending',
+          task_id: null,
+          result: null,
+          armed_at: null,
+          ended_at: null,
+        },
+        {
+          item_id: 'mock-expired-2',
+          code: '133045A',
+          amount: '20000',
+          at: inMinutes(-60),
+          mode: 'redemption',
+          state: 'pending',
+          task_id: null,
+          result: null,
+          armed_at: null,
+          ended_at: null,
+        },
+      ],
+    }
+  }
   if (kind === 'plan-done') {
     const started = inMinutes(-180)
     const ended = inMinutes(-60)

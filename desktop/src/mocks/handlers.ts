@@ -73,7 +73,7 @@ function planProblems(plan: Plan): string[] {
     const at = parseLocal(item.at)
     if (!at) return [`第 ${index + 1} 项购买时间格式无效。`]
     if (at.getTime() <= now) return [`第 ${index + 1} 项购买时间已过（${planClock(item.at)}）。`]
-    if (at.getTime() > now + 24 * 3600_000) return [`第 ${index + 1} 项购买时间超过 24 小时。`]
+    if (at.getTime() > now + 14 * 24 * 3600_000) return [`第 ${index + 1} 项购买时间超过 14 天。`]
     return []
   })
   for (let index = 1; index < items.length; index += 1) {

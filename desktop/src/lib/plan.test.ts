@@ -11,11 +11,16 @@ import {
   itemInputToISO,
   itemStateName,
   itemStateTone,
+  itemStatus,
   nextItem,
   planDirty,
   planPhaseName,
   planPhaseTone,
+  planStatus,
   planTotals,
+  statusPrimaryName,
+  statusPrimaryTone,
+  statusSecondaryName,
 } from './plan'
 
 function item(overrides: Partial<PlanItem> = {}): PlanItem {
@@ -60,6 +65,46 @@ describe('item states', () => {
     expect(planPhaseTone('done')).toBe('good')
     expect(planPhaseTone('aborted')).toBe('warn')
     expect(planPhaseTone(null)).toBe('muted')
+  })
+})
+
+describe('status model', () => {
+  const now = new Date(2026, 10, 7, 10, 0, 0)
+
+  it('names and colors every primary status', () => {
+    expect(statusPrimaryName(null)).toBe('未计划')
+    expect(statusPrimaryName({ primary: 'pending', secondary: 'scheduled' })).toBe('待开始')
+    expect(statusPrimaryName({ primary: 'running', secondary: 'waiting' })).toBe('运行中')
+    expect(statusPrimaryName({ primary: 'expired', secondary: 'time_passed' })).toBe('已过期')
+    expect(statusPrimaryTone({ primary: 'running', secondary: 'waiting' })).toBe('accent')
+    expect(statusPrimaryTone({ primary: 'done', secondary: 'success' })).toBe('good')
+    expect(statusPrimaryTone({ primary: 'failed', secondary: 'purchase_failed' })).toBe('warn')
+    expect(statusSecondaryName({ primary: 'failed', secondary: 'result_unknown' })).toBe('结果未知')
+  })
+
+  it('falls back to expired for a pending item whose time passed', () => {
+    const past = item({ at: '2026-11-07T09:00:00' })
+    expect(itemStatus(past, now)).toMatchObject({ primary: 'expired', secondary: 'time_passed' })
+    expect(itemStatus(item({ at: '2026-11-07T11:00:00' }), now)).toMatchObject({
+      primary: 'pending',
+      secondary: 'scheduled',
+    })
+  })
+
+  it('falls back to a plan status when the backend has not supplied one', () => {
+    expect(planStatus(null, now)).toBeNull()
+    expect(planStatus(plan([], { phase: 'idle' }), now)).toMatchObject({
+      primary: 'pending',
+      secondary: 'scheduled',
+    })
+    expect(planStatus(plan([item({ at: '2026-11-07T09:00:00' })], { phase: 'idle' }), now)).toMatchObject({
+      primary: 'expired',
+      secondary: 'time_passed',
+    })
+    expect(planStatus(plan([], { phase: 'disarmed' }), now)).toMatchObject({
+      primary: 'cancelled',
+      secondary: 'manual_cancel',
+    })
   })
 })
 

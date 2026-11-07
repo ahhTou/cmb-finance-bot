@@ -224,6 +224,13 @@ class ScheduleTest(PlanTestBase):
         self.assertNotIn("prep_at", watch_plan.load_plan()["items"][0])
         self.assertNotIn("end_at", watch_plan.load_plan()["items"][0])
 
+    def test_plan_lead_allows_fourteen_days(self):
+        when = (datetime.now() + timedelta(days=3)).replace(microsecond=0)
+        self.assertEqual(
+            nw.parse_target(iso(when), prep_minutes=7, max_lead=watch_plan.MAX_LEAD), when)
+        with self.assertRaises(nw.Abort):
+            nw.parse_target(iso(when), prep_minutes=7)
+
     def test_problems(self):
         settings = purchase_settings.load()
         now = datetime(2026, 11, 6, 8, 0, 0)
@@ -233,8 +240,8 @@ class ScheduleTest(PlanTestBase):
         past = self.save([self.item(code="AAAA", at=now - timedelta(minutes=5))])
         self.assertIn("第 1 项购买时间已过（07:55）。",
                       watch_plan.schedule(past, settings, now)["problems"])
-        far = self.save([self.item(code="AAAA", at=now + timedelta(hours=25))])
-        self.assertIn("第 1 项购买时间超过 24 小时。",
+        far = self.save([self.item(code="AAAA", at=now + timedelta(days=14, hours=1))])
+        self.assertIn("第 1 项购买时间超过 14 天。",
                       watch_plan.schedule(far, settings, now)["problems"])
         normal = self.save([self.item(code="AAAA", at=now + timedelta(minutes=60)),
                             self.item(code="BBBB", at=now + timedelta(minutes=180))])
@@ -353,6 +360,29 @@ class ViewTest(PlanTestBase):
         with patch.object(nw, "alive", return_value=True):
             data = watch_plan.view()
         self.assertFalse(data["heartbeat_stale"])
+
+    def test_status_model_for_pending_expired_and_running(self):
+        future = self.save([self.item(at=self.at(90))])
+        data = watch_plan.view()
+        self.assertEqual(data["status"]["primary"], "pending")
+        self.assertEqual(data["plan"]["items"][0]["status"]["secondary"], "scheduled")
+
+        past = self.save([self.item(at=self.now - timedelta(minutes=5))])
+        data = watch_plan.view()
+        self.assertEqual(data["status"]["primary"], "expired")
+        self.assertEqual(data["status"]["secondary"], "time_passed")
+        self.assertEqual(data["plan"]["items"][0]["status"]["primary"], "expired")
+        self.assertIn("未在应用运行期间", data["status"]["description"])
+
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan["items"][0].update(state="running", task_id="t1")
+        watch_plan.save_plan(plan)
+        with patch.object(nw, "load_task", return_value=task("t1", "armed")), \
+             patch.object(nw, "alive", return_value=True):
+            data = watch_plan.view()
+        self.assertEqual(data["status"]["primary"], "running")
+        self.assertEqual(data["status"]["secondary"], "preparing")
+        self.assertEqual(data["plan"]["items"][0]["status"]["secondary"], "preparing")
 
     def test_logs_tail(self):
         (self.state / "plan.log").write_text(

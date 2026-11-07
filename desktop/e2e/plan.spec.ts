@@ -66,7 +66,7 @@ test('empty plan: add two items, save, start a drill, then cancel', async ({ pag
   await confirm.getByRole('button', { name: '开始演练' }).click()
 
   await expect(page.getByTestId('plan-status')).toContainText('运行中')
-  await expect(page.getByTestId('plan-row-0')).toContainText('执行中')
+  await expect(page.getByTestId('plan-row-0')).toContainText('运行中')
   await expect(page.getByTestId('plan-item-code-0')).toBeDisabled()
 
   await page.getByTestId('plan-disarm').click()
@@ -148,8 +148,8 @@ test('a running plan is read-only', async ({ page }) => {
   await page.getByTestId('plan-confirm').getByRole('button', { name: '开始演练' }).click()
 
   await expect(page.getByTestId('plan-status')).toContainText('运行中')
-  await expect(page.getByTestId('plan-row-0')).toContainText('执行中')
-  await expect(page.getByTestId('plan-row-1')).toContainText('待执行')
+  await expect(page.getByTestId('plan-row-0')).toContainText('运行中')
+  await expect(page.getByTestId('plan-row-1')).toContainText('待开始')
   await expect(page.getByTestId('plan-add')).toBeDisabled()
   await expect(page.getByTestId('plan-item-at-0')).toBeDisabled()
   await expect(page.getByTestId('plan-item-mode-0')).toBeDisabled()
@@ -157,6 +157,37 @@ test('a running plan is read-only', async ({ page }) => {
   await expect(page.getByTestId('plan-item-amount-0')).toBeDisabled()
   await expect(page.getByTestId('plan-item-remove-0')).toBeHidden()
   await expect(page.getByTestId('plan-save')).toBeHidden()
+})
+
+test('plan whose window passed shows the expired status', async ({ page }) => {
+  await open(page, '/plan', 'plan-expired')
+  await expect(page.getByTestId('plan-status')).toContainText('已过期')
+  await expect(page.getByTestId('plan-row-0')).toContainText('已过期')
+  await expect(page.getByTestId('plan-start')).toBeDisabled()
+})
+
+test('plan page switches between continuous timeline and a 7-day week', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  await expect(page.getByTestId('plan-timeline')).toBeVisible()
+  await expect(page.getByRole('radio', { name: '时间线' })).toBeChecked()
+
+  await page.getByRole('radio', { name: '周视图' }).click()
+  const week = page.getByTestId('plan-week')
+  await expect(week).toBeVisible()
+  await expect(page.getByTestId('plan-week-day-0')).toHaveAttribute('data-today', 'true')
+  const firstRange = await week.getByText(/–/).first().textContent()
+  await page.getByTestId('plan-week-next').click()
+  await expect(week.getByText(/–/).first()).not.toHaveText(firstRange ?? '')
+  await page.getByTestId('plan-week-today').click()
+  await expect(week.getByText(/–/).first()).toHaveText(firstRange ?? '')
+
+  // The week columns must fit without an inner scrollbar.
+  const overflow = await week.evaluate((el) => ({
+    x: el.scrollWidth - el.clientWidth,
+    y: el.scrollHeight - el.clientHeight,
+  }))
+  expect(overflow.x).toBeLessThanOrEqual(0)
+  expect(overflow.y).toBeLessThanOrEqual(0)
 })
 
 test('finished plan keeps per-item results and can be copied into a draft', async ({ page }) => {

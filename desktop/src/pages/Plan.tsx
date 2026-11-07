@@ -8,7 +8,7 @@ import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint, Metric, MetricGrid } from '../components/ui/card'
 import { Dialog } from '../components/ui/dialog'
-import { Checkbox, Field, Input, Select, Switch } from '../components/ui/form'
+import { Checkbox, Field, Input, Segmented, Select, Switch } from '../components/ui/form'
 import {
   countdownText,
   draftFromPlan,
@@ -17,18 +17,50 @@ import {
   emptyDraftItem,
   isoClock,
   itemInputToISO,
-  itemStateName,
-  itemStateTone,
+  itemStatus,
   nextItem,
   PLAN_MAX_ITEMS,
   type PlanDraftItem,
   planDirty,
-  planPhaseName,
-  planPhaseTone,
+  planStatus,
   planTotals,
+  statusPrimaryName,
+  statusPrimaryTone,
+  statusSecondaryName,
 } from '../lib/plan'
-import { cn } from '../lib/utils'
+import { cn, parseLocal, toneBg } from '../lib/utils'
 import { useUI } from '../store'
+
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const pad2 = (value: number) => String(value).padStart(2, '0')
+
+function startOfDay(value: Date) {
+  const copy = new Date(value)
+  copy.setHours(0, 0, 0, 0)
+  return copy
+}
+
+function addDays(value: Date, days: number) {
+  const copy = new Date(value)
+  copy.setDate(copy.getDate() + days)
+  return copy
+}
+
+function sameDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  )
+}
+
+function dayLabel(value: Date) {
+  return `${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`
+}
+
+function weekdayLabel(value: Date) {
+  return WEEKDAYS[value.getDay()]
+}
 
 /**
  * Plan mode: one saved plan is a list of purchase times. The backend computes
@@ -47,6 +79,8 @@ export function PlanPage() {
   const [confirmation, setConfirmation] = useState<PlanView | null>(null)
   const [now, setNow] = useState(() => new Date())
   const [editingTerminal, setEditingTerminal] = useState(false)
+  const [viewMode, setViewMode] = useState<'timeline' | 'week'>('timeline')
+  const [weekStart, setWeekStart] = useState(() => startOfDay(new Date()))
 
   // The status card shows a countdown; a one-second tick is enough.
   useEffect(() => {
@@ -68,6 +102,8 @@ export function PlanPage() {
   const heartbeatStale = view?.heartbeat_stale === true
   const settingsChanged = view?.settings_changed === true
   const phase = plan?.phase ?? null
+  const status = view?.status ?? plan?.status ?? planStatus(plan, now)
+  const secondary = statusSecondaryName(status)
   const terminal =
     !!plan && !running && !stale && (phase === 'done' || phase === 'aborted' || phase === 'disarmed')
   const resultView = terminal && !editingTerminal
@@ -82,6 +118,31 @@ export function PlanPage() {
   const rows = resultView ? draftFromPlan(plan) : (draft ?? [])
   const localProblems = resultView ? [] : draftProblems(draft ?? [])
   const dirty = resultView ? false : planDirty(draft ?? [], dryRun, plan)
+  const datedRows = rows.map((row, index) => ({
+    row,
+    index,
+    at: parseLocal(itemInputToISO(row.at)),
+  }))
+  const timelineGroups = new Map<string, { date: Date | null; rows: typeof datedRows }>()
+  for (const entry of datedRows) {
+    const key = entry.at
+      ? `${entry.at.getFullYear()}-${pad2(entry.at.getMonth() + 1)}-${pad2(entry.at.getDate())}`
+      : 'undated'
+    const group = timelineGroups.get(key) ?? { date: entry.at, rows: [] }
+    group.rows.push(entry)
+    timelineGroups.set(key, group)
+  }
+  const orderedTimeline = [...timelineGroups.entries()].sort(([left, a], [right, b]) => {
+    if (left === 'undated') return 1
+    if (right === 'undated') return -1
+    return (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0)
+  })
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
+  const weekEnd = addDays(weekStart, 7)
+  const weekRows = datedRows.filter(
+    (entry) =>
+      entry.at && entry.at.getTime() >= weekStart.getTime() && entry.at.getTime() < weekEnd.getTime(),
+  )
   // The backend always recomputes `problems` against "now", so after the first
   // item's purchase time they would read "已过" while the plan is running fine.
   // They only block starting, so the page treats them as blockers while idle.
@@ -211,22 +272,27 @@ export function PlanPage() {
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div data-testid="plan-status" className="flex flex-wrap items-center gap-2">
-            <Badge tone={planPhaseTone(phase)}>{planPhaseName(phase)}</Badge>
+            <Badge tone={statusPrimaryTone(status)}>{statusPrimaryName(status)}</Badge>
+            {secondary && <Badge tone="muted">{secondary}</Badge>}
             {plan && (
               <Badge tone={plan.dry_run ? 'purple' : 'accent'}>
                 {plan.dry_run ? '演练计划' : '真实计划'}
               </Badge>
             )}
-            {stale && <Badge tone="warn">进程已退出</Badge>}
-            {!stale && running && heartbeatStale && <Badge tone="warn">心跳超时</Badge>}
           </div>
           <span className="text-[11px] text-muted">
-            {next
-              ? `${running ? '当前项' : '下一项'} ${next.code} · ${countdownText(next.at, now)}`
-              : plan
-                ? (plan.result ?? '没有待执行的布防')
-                : '还没有计划'}
+            {status?.description ??
+              (next
+                ? `${running ? '当前项' : '下一项'} ${next.code} · ${countdownText(next.at, now)}`
+                : plan
+                  ? '没有待执行的布防'
+                  : '还没有计划')}
           </span>
+          {next && status?.description && (
+            <span className="text-[11px] text-muted">
+              {running ? '当前项' : '下一项'} {next.code} · {countdownText(next.at, now)}
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-2">
             {terminal && resultView && (
               <Button data-testid="plan-edit" disabled={busy} onClick={editTerminal}>
@@ -318,78 +384,110 @@ export function PlanPage() {
       )}
 
       <Card
-        title={resultView ? '执行结果' : '布防列表'}
+        title={resultView ? '执行结果' : '计划视图'}
         subtitle={
           resultView
             ? '逐项结果与时间来自开始时的计划快照。'
-            : `最多 ${PLAN_MAX_ITEMS} 项；程序严格按购买时间先后串行执行，一项结束后才开始下一项。`
+            : `最多 ${PLAN_MAX_ITEMS} 项、14 天内；程序严格按购买时间先后串行执行。`
         }
         badge={
           <Button
             data-testid="plan-add"
             size="compact"
             disabled={readOnly || busy || rows.length >= PLAN_MAX_ITEMS}
-            onClick={add}
+            onClick={() => {
+              setViewMode('timeline')
+              add()
+            }}
           >
             添加布防
           </Button>
         }
       >
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-[220px]">
+            <Segmented
+              label="计划视图"
+              value={viewMode}
+              options={[
+                { value: 'timeline', label: '时间线' },
+                { value: 'week', label: '周视图' },
+              ]}
+              onChange={setViewMode}
+            />
+          </div>
+          <Hint className="text-[10px]">
+            {viewMode === 'week'
+              ? '周视图只读；左右切换查看全部时间段，不出现滚动条。'
+              : '连续时间线；任务多时在时间线内纵向滚动。'}
+          </Hint>
+        </div>
+
         {rows.length === 0 ? (
           <p className="text-muted text-xs">
             {plan
               ? '这份计划还没有布防项。点「添加布防」添加第一项。'
               : '还没有计划。点「添加布防」填好购买时间，保存后即可开始。'}
           </p>
+        ) : viewMode === 'timeline' ? (
+          <TimelineView
+            groups={orderedTimeline}
+            readOnly={readOnly}
+            resultMode={resultView}
+            busy={busy}
+            now={now}
+            onPatch={patch}
+            onRemove={remove}
+          />
         ) : (
-          <div className="flex flex-col gap-2">
-            {rows.map((row, index) => (
-              <PlanRow
-                key={row.key}
-                index={index}
-                row={row}
-                readOnly={readOnly}
-                resultMode={resultView}
-                busy={busy}
-                onPatch={patch}
-                onRemove={remove}
-              />
-            ))}
-          </div>
+          <WeekView
+            days={weekDays}
+            rows={weekRows}
+            now={now}
+            weekStart={weekStart}
+            onChangeWeek={(days) => setWeekStart(addDays(weekStart, days))}
+            onToday={() => setWeekStart(startOfDay(new Date()))}
+          />
         )}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {readOnly ? (
-            <Hint>
-              {resultView
-                ? '这是执行结果；点「编辑 / 复制为新计划」可基于它新建草稿。'
-                : '运行中不能修改；需要调整请先取消计划。'}
+
+        {viewMode === 'timeline' && (
+          <>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              {readOnly ? (
+                <Hint>
+                  {resultView
+                    ? '这是执行结果；点「编辑 / 复制为新计划」可基于它新建草稿。'
+                    : '运行中不能修改；需要调整请先取消计划。'}
+                </Hint>
+              ) : (
+                <>
+                  <Switch
+                    label="演练计划：输完交易密码不提交"
+                    checked={dryRun}
+                    onChange={setDryRun}
+                    disabled={busy}
+                  />
+                  <div className="ml-auto flex items-center gap-2">
+                    {dirty && <Hint>列表有未保存的修改，保存后才能开始。</Hint>}
+                    <Button
+                      data-testid="plan-save"
+                      variant="primary"
+                      disabled={busy || localProblems.length > 0}
+                      onClick={save}
+                    >
+                      保存计划
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+            {!readOnly && localProblems.length > 0 && <Hint tone="warn">{localProblems[0]}</Hint>}
+            <Hint className="text-[10px]">
+              演练计划只输密码、不点确定、不提交；真实计划到点会按填写金额实际付款，开始前需勾选确认。
             </Hint>
-          ) : (
-            <>
-              <Switch
-                label="演练计划：输完交易密码不提交"
-                checked={dryRun}
-                onChange={setDryRun}
-                disabled={busy}
-              />
-              <div className="ml-auto flex items-center gap-2">
-                {dirty && <Hint>列表有未保存的修改，保存后才能开始。</Hint>}
-                <Button
-                  data-testid="plan-save"
-                  variant="primary"
-                  disabled={busy || localProblems.length > 0}
-                  onClick={save}
-                >
-                  保存计划
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-        {!readOnly && localProblems.length > 0 && <Hint tone="warn">{localProblems[0]}</Hint>}
-        <Hint className="text-[10px]">
-          演练计划只输密码、不点确定、不提交；真实计划到点会按填写金额实际付款，开始前需勾选确认。
-        </Hint>
+          </>
+        )}
+        {viewMode === 'week' && <Hint className="text-[10px]">周视图只读；需要修改时切回「时间线」。</Hint>}
       </Card>
 
       {plan && (
@@ -493,12 +591,161 @@ function prepLabel(item: PlanItem | null | undefined) {
   return prepActual(item) ?? prepEstimate(item)
 }
 
+type TimelineEntry = { row: PlanDraftItem; index: number; at: Date | null }
+
+function TimelineView({
+  groups,
+  readOnly,
+  resultMode,
+  busy,
+  now,
+  onPatch,
+  onRemove,
+}: {
+  groups: [string, { date: Date | null; rows: TimelineEntry[] }][]
+  readOnly: boolean
+  resultMode: boolean
+  busy: boolean
+  now: Date
+  onPatch: (index: number, changes: Partial<PlanDraftItem>) => void
+  onRemove: (index: number) => void
+}) {
+  return (
+    <div
+      data-testid="plan-timeline"
+      className="relative flex max-h-[54vh] min-h-[140px] flex-col gap-3 overflow-y-auto pl-5 pr-1"
+    >
+      <span aria-hidden className="absolute top-1 bottom-1 left-[7px] w-px bg-white/10" />
+      {groups.map(([key, group]) => (
+        <div key={key} className="flex flex-col gap-2">
+          <div className="sticky top-0 z-10 -ml-1 w-fit rounded bg-bg/95 px-1.5 py-0.5 font-medium text-[10px] text-muted backdrop-blur">
+            {group.date
+              ? `${group.date.getMonth() + 1} 月 ${group.date.getDate()} 日 · ${weekdayLabel(group.date)}`
+              : '未设置购买时间'}
+          </div>
+          {group.rows.map((entry) => {
+            const status = itemStatus(entry.row.saved, now)
+            const tone = statusPrimaryTone(status)
+            return (
+              <div key={entry.row.key} className="relative">
+                <span
+                  aria-hidden
+                  className={cn(
+                    'absolute top-[18px] -left-[14px] size-2 rounded-full ring-2 ring-bg',
+                    toneBg[tone],
+                  )}
+                />
+                <PlanRow
+                  index={entry.index}
+                  row={entry.row}
+                  readOnly={readOnly}
+                  resultMode={resultMode}
+                  busy={busy}
+                  now={now}
+                  onPatch={onPatch}
+                  onRemove={onRemove}
+                />
+              </div>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function WeekView({
+  days,
+  rows,
+  now,
+  onChangeWeek,
+  onToday,
+}: {
+  days: Date[]
+  rows: TimelineEntry[]
+  now: Date
+  weekStart: Date
+  onChangeWeek: (days: number) => void
+  onToday: () => void
+}) {
+  const total = rows.length
+  return (
+    <div data-testid="plan-week" className="flex flex-col gap-2 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button data-testid="plan-week-prev" size="icon" aria-label="上一周" onClick={() => onChangeWeek(-7)}>
+          ‹
+        </Button>
+        <span className="font-medium text-xs">
+          {dayLabel(days[0])} – {dayLabel(days[days.length - 1])}
+        </span>
+        <Button data-testid="plan-week-next" size="icon" aria-label="下一周" onClick={() => onChangeWeek(7)}>
+          ›
+        </Button>
+        <Button data-testid="plan-week-today" size="compact" onClick={onToday}>
+          回到今天
+        </Button>
+        <span className="ml-auto text-[10px] text-muted">{total} 项</span>
+      </div>
+      <div className="grid h-[42vh] max-h-[420px] min-h-[240px] grid-cols-7 gap-1.5 overflow-hidden">
+        {days.map((day) => {
+          const dayRows = rows.filter((entry) => entry.at && sameDay(entry.at, day))
+          const isToday = sameDay(day, new Date())
+          return (
+            <div
+              key={day.toISOString()}
+              data-testid={`plan-week-day-${days.indexOf(day)}`}
+              data-today={isToday ? 'true' : 'false'}
+              className={cn(
+                'flex min-h-0 flex-col gap-1 overflow-hidden rounded-lg p-1.5',
+                isToday ? 'bg-accent/10 ring-1 ring-accent/20' : 'bg-field/60',
+              )}
+            >
+              <div className="flex shrink-0 items-center justify-between text-[10px]">
+                <span className={isToday ? 'font-semibold text-accent' : 'text-muted'}>
+                  {weekdayLabel(day)}
+                </span>
+                <span className="text-muted">{dayLabel(day)}</span>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden">
+                {dayRows.map((entry) => {
+                  const status = itemStatus(entry.row.saved, now)
+                  const tone = statusPrimaryTone(status)
+                  return (
+                    <div
+                      key={`${entry.row.key}-${entry.index}`}
+                      className="rounded-md bg-card/70 px-1.5 py-1 text-[9px] leading-tight"
+                    >
+                      <div className="flex items-center gap-1 text-muted">
+                        <span className={cn('size-1.5 shrink-0 rounded-full', toneBg[tone])} />
+                        <span>
+                          {entry.at ? `${pad2(entry.at.getHours())}:${pad2(entry.at.getMinutes())}` : '--:--'}
+                        </span>
+                      </div>
+                      <div className="truncate font-medium text-[10px] text-fg">
+                        {entry.row.code || '未填代码'}
+                      </div>
+                      <div className="truncate text-muted">
+                        ¥ {entry.row.amount || '—'} · {statusPrimaryName(status)}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function PlanRow({
   index,
   row,
   readOnly,
   resultMode,
   busy,
+  now,
   onPatch,
   onRemove,
 }: {
@@ -507,6 +754,7 @@ function PlanRow({
   readOnly: boolean
   resultMode: boolean
   busy: boolean
+  now: Date
   onPatch: (index: number, changes: Partial<PlanDraftItem>) => void
   onRemove: (index: number) => void
 }) {
@@ -514,8 +762,9 @@ function PlanRow({
   const touched = row.code.trim() !== '' || row.amount.trim() !== '' || row.at !== ''
   const problem = !readOnly && touched ? draftItemProblem(row) : null
   if (resultMode) {
-    const state = saved?.state ?? 'pending'
-    const result = saved?.result ?? (state === 'pending' ? '未执行' : '—')
+    const status = itemStatus(saved, now)
+    const secondary = statusSecondaryName(status)
+    const result = status?.description ?? saved?.result ?? (status?.primary === 'pending' ? '未执行' : '—')
     return (
       <div
         data-testid={`plan-row-${index}`}
@@ -526,7 +775,8 @@ function PlanRow({
           <span className="font-semibold text-xs">
             {row.code} · ¥ {row.amount}
           </span>
-          <Badge tone={itemStateTone(state)}>{itemStateName(state)}</Badge>
+          <Badge tone={statusPrimaryTone(status)}>{statusPrimaryName(status)}</Badge>
+          {secondary && <span className="text-[10px] text-muted">{secondary}</span>}
           <span className="text-[10px] text-muted">
             {row.mode === 'redemption' ? '不定时抢购' : '首发模式'} · 购买 {row.at.replace('T', ' ')}
           </span>
@@ -545,7 +795,9 @@ function PlanRow({
           data-testid={`plan-result-${index}`}
           className={cn(
             'text-[11px]',
-            state === 'failed' || state === 'skipped' ? 'text-warn' : 'text-muted',
+            status?.primary === 'failed' || status?.primary === 'expired' || status?.primary === 'skipped'
+              ? 'text-warn'
+              : 'text-muted',
           )}
         >
           结果：{result}
@@ -638,8 +890,15 @@ function PlanRow({
               冷启动 {prepLabel(saved)} · 购买 {isoClock(saved.at)} · 预计结束 {isoClock(saved.end_at)}
             </span>
           )}
-          {readOnly && saved && <Badge tone={itemStateTone(saved.state)}>{itemStateName(saved.state)}</Badge>}
-          {readOnly && saved?.result && <span className="text-[10px] text-muted">{saved.result}</span>}
+          {saved && (
+            <Badge tone={statusPrimaryTone(itemStatus(saved, now))}>
+              {statusPrimaryName(itemStatus(saved, now))}
+            </Badge>
+          )}
+          {saved && statusSecondaryName(itemStatus(saved, now)) && (
+            <span className="text-[10px] text-muted">{statusSecondaryName(itemStatus(saved, now))}</span>
+          )}
+          {saved?.result && <span className="text-[10px] text-muted">{saved.result}</span>}
           {problem && (
             <Hint tone="warn" className="text-[10px]">
               {problem}

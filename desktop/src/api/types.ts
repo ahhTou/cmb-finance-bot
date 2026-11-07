@@ -156,6 +156,23 @@ export interface CommandResult {
 export type PlanPhase = 'idle' | 'running' | 'done' | 'aborted' | 'disarmed'
 export type PlanItemState = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
+export type PlanPrimaryStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'expired'
+  | 'unknown'
+
+/** Primary determines the badge color; secondary expands the current state. */
+export interface PlanStatus {
+  primary: PlanPrimaryStatus
+  secondary: string
+  description?: string | null
+}
+
 export interface PlanItem {
   item_id?: string
   code: string
@@ -166,6 +183,7 @@ export interface PlanItem {
   state?: PlanItemState
   outcome?: 'success' | 'failed' | 'dry_run' | 'unknown' | null
   task_id?: string | null
+  status?: PlanStatus
   result?: string | null
   armed_at?: string | null
   ended_at?: string | null
@@ -193,12 +211,14 @@ export interface Plan {
   settings_revision?: string | null
   /** Purchase settings frozen when the plan started. */
   settings_snapshot?: Record<string, number> | null
+  status?: PlanStatus
   result?: string | null
   items: PlanItem[]
 }
 
 export interface PlanView {
   plan: Plan | null
+  status?: PlanStatus | null
   running: boolean
   stale: boolean
   heartbeat_stale: boolean

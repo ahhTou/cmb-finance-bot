@@ -255,7 +255,16 @@ def alive(pid):
     return True
 
 
-def parse_target(value, now=None, prep_minutes=PREP_MINUTES, label="开售时间"):
+def _lead_text(value):
+    if value == timedelta(hours=24):
+        return "24 小时"
+    if value >= timedelta(days=1) and value.total_seconds() % 86400 == 0:
+        return f"{value.days} 天"
+    return f"{int(value.total_seconds() // 3600)} 小时"
+
+
+def parse_target(value, now=None, prep_minutes=PREP_MINUTES, label="开售时间",
+                 max_lead=MAX_LEAD):
     if "T" not in value:
         raise Abort(f"{label}必须写完整时间，例如 2026-11-03T09:00:00。")
     try:
@@ -272,14 +281,14 @@ def parse_target(value, now=None, prep_minutes=PREP_MINUTES, label="开售时间
         # whether the remaining time is enough — start immediately and take
         # whatever the sale window still allows. A late failure is reported,
         # never retried.
-        if lead > MAX_LEAD:
-            raise Abort(f"{label}不能超过 24 小时之后。")
+        if lead > max_lead:
+            raise Abort(f"{label}不能超过 {_lead_text(max_lead)}之后。")
         return when
     min_lead = timedelta(minutes=prep_minutes) + ARM_SLACK
     if lead < min_lead:
         raise Abort(f"{label}至少要在 {min_lead.seconds // 60} 分钟之后，留给登录和打开购买页。")
-    if lead > MAX_LEAD:
-        raise Abort(f"{label}不能超过 24 小时之后。")
+    if lead > max_lead:
+        raise Abort(f"{label}不能超过 {_lead_text(max_lead)}之后。")
     return when
 
 
@@ -315,12 +324,13 @@ def arm(args):
 
 def arm_task(code, amount, at=None, dry_run=False, prep_minutes=None, now=False,
              mode="first_launch", window_minutes=None, until=None, settings_revision=None,
-             plan_id=None, plan_item=None):
+             plan_id=None, plan_item=None, max_lead=MAX_LEAD):
     return arm(argparse.Namespace(code=code, amount=amount, at=at, dry_run=dry_run,
                                   prep_minutes=prep_minutes, now=now, mode=mode,
                                   window_minutes=window_minutes, until=until,
                                   settings_revision=settings_revision,
-                                  plan_id=plan_id, plan_item=plan_item))
+                                  plan_id=plan_id, plan_item=plan_item,
+                                  max_lead=max_lead))
 
 
 def _arm(args):
@@ -356,7 +366,8 @@ def _arm(args):
         when = datetime.now().replace(microsecond=0) + NOW_LEAD
     else:
         when = parse_target(args.at, prep_minutes=args.prep_minutes,
-                            label="额度放出时间" if mode == "redemption" else "开售时间")
+                            label="额度放出时间" if mode == "redemption" else "开售时间",
+                            max_lead=getattr(args, "max_lead", MAX_LEAD))
     start, query_end = query_gate.schedule(when, mode, retry_settings)
     end = window = None
     if mode == "redemption":

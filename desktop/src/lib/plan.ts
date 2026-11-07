@@ -1,4 +1,4 @@
-import type { Mode, Plan, PlanItem } from '../api/types'
+import type { Mode, Plan, PlanItem, PlanStatus } from '../api/types'
 import { formatAmount, parseLocal, type Tone } from './utils'
 
 /** Same cap as src/watch_plan.py MAX_ITEMS. */
@@ -45,6 +45,125 @@ export function planPhaseTone(phase: string | null | undefined): Tone {
   if (phase === 'aborted') return 'warn'
   if (phase === 'idle') return 'blue'
   return 'muted'
+}
+
+const PRIMARY_NAMES: Record<string, string> = {
+  pending: '待开始',
+  running: '运行中',
+  done: '已完成',
+  failed: '失败',
+  skipped: '已跳过',
+  cancelled: '已取消',
+  expired: '已过期',
+  unknown: '未知',
+}
+
+const PRIMARY_TONES: Record<string, Tone> = {
+  pending: 'blue',
+  running: 'accent',
+  done: 'good',
+  failed: 'warn',
+  skipped: 'muted',
+  cancelled: 'muted',
+  expired: 'warn',
+  unknown: 'warn',
+}
+
+const SECONDARY_NAMES: Record<string, string> = {
+  scheduled: '已排程',
+  immediate: '立即准备',
+  partially_expired: '部分过期',
+  time_passed: '时间已过',
+  preparing: '准备中',
+  waiting: '等待查询',
+  submitting: '提交中',
+  starting: '准备中',
+  heartbeat_timeout: '心跳超时',
+  process_exited: '进程已退出',
+  success: '成功',
+  dry_run: '演练完成',
+  completed: '已完成',
+  result_unknown: '结果未知',
+  config_changed: '配置已变',
+  timeout: '超时',
+  no_quota: '无额度',
+  purchase_failed: '购买失败',
+  manual_cancel: '手动取消',
+  skipped: '已跳过',
+  aborted: '已中止',
+}
+
+/** Primary status text; also used for the plan-level badge. */
+export function statusPrimaryName(status: PlanStatus | null | undefined) {
+  return status ? (PRIMARY_NAMES[status.primary] ?? status.primary) : '未计划'
+}
+
+/** Primary status determines the badge color. */
+export function statusPrimaryTone(status: PlanStatus | null | undefined): Tone {
+  return status ? (PRIMARY_TONES[status.primary] ?? 'muted') : 'muted'
+}
+
+export function statusSecondaryName(status: PlanStatus | null | undefined) {
+  return status?.secondary ? (SECONDARY_NAMES[status.secondary] ?? status.secondary) : null
+}
+
+/** Fallback for mock/legacy responses that predate the explicit status object. */
+export function itemStatus(item: PlanItem | null | undefined, now: Date = new Date()): PlanStatus | null {
+  if (!item) return null
+  if (item.status) return item.status
+  const state = item.state ?? 'pending'
+  if (state === 'done') {
+    const outcome = item.outcome
+    return {
+      primary: 'done',
+      secondary: outcome === 'dry_run' ? 'dry_run' : outcome === 'success' ? 'success' : 'completed',
+      description: item.result,
+    }
+  }
+  if (state === 'running') return { primary: 'running', secondary: 'starting' }
+  if (state === 'failed') {
+    return {
+      primary: 'failed',
+      secondary: item.outcome === 'unknown' ? 'result_unknown' : 'purchase_failed',
+      description: item.result,
+    }
+  }
+  if (state === 'skipped') {
+    return { primary: 'skipped', secondary: 'skipped', description: item.result }
+  }
+  const at = parseLocal(item.at)
+  if (at && at.getTime() <= now.getTime()) {
+    return {
+      primary: 'expired',
+      secondary: 'time_passed',
+      description: '计划时间已过，未在应用运行期间执行',
+    }
+  }
+  return { primary: 'pending', secondary: item.prep_mode === 'immediate' ? 'immediate' : 'scheduled' }
+}
+
+/** Fallback plan status when the backend has not supplied one. */
+export function planStatus(plan: Plan | null | undefined, now: Date = new Date()): PlanStatus | null {
+  if (!plan) return null
+  if (plan.status) return plan.status
+  const phase = plan.phase ?? 'idle'
+  if (phase === 'running') return { primary: 'running', secondary: 'waiting' }
+  if (phase === 'done') return { primary: 'done', secondary: 'completed', description: plan.result }
+  if (phase === 'aborted') return { primary: 'failed', secondary: 'aborted', description: plan.result }
+  if (phase === 'disarmed')
+    return { primary: 'cancelled', secondary: 'manual_cancel', description: plan.result }
+  const items = plan.items ?? []
+  const expired = items.filter((item) => itemStatus(item, now)?.primary === 'expired').length
+  if (items.length && expired === items.length) {
+    return {
+      primary: 'expired',
+      secondary: 'time_passed',
+      description: '计划时间已过，未在应用运行期间执行',
+    }
+  }
+  if (expired)
+    return { primary: 'pending', secondary: 'partially_expired', description: `有 ${expired} 项已过期` }
+  return { primary: 'pending', secondary: 'scheduled' }
 }
 
 /** The item the plan is on: the running one, else the first still pending. */

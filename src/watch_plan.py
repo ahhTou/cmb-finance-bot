@@ -44,7 +44,7 @@ import purchase_settings
 import query_gate
 
 MAX_ITEMS = 20                        # 一份计划最多几项（先例：favorites.MAX_ITEMS）
-MAX_LEAD = timedelta(hours=24)        # 与 night_watch.MAX_LEAD 一致
+MAX_LEAD = timedelta(days=14)         # 计划最长 14 天
 LOG_LINES = 15                        # view 返回的 plan.log 行数
 CODE = re.compile(r"[A-Za-z0-9]{4,20}")
 ACTIVE_PHASES = ("armed", "preparing", "waiting", "firing")
@@ -236,7 +236,7 @@ def schedule(plan, settings, now, runtime=None):
         if at <= now:
             problems.append(f"第 {index} 项购买时间已过（{at:%H:%M}）。")
         elif at > now + MAX_LEAD:
-            problems.append(f"第 {index} 项购买时间超过 24 小时。")
+            problems.append(f"第 {index} 项购买时间超过 14 天。")
     for index in range(1, len(items)):
         prev_at = _plan_at(items[index - 1])
         prev_end = datetime.fromisoformat(enriched[index - 1]["end_at"])
@@ -258,6 +258,102 @@ def schedule(plan, settings, now, runtime=None):
         if now > prep_at - arm_gap and _plan_at(items[0]) > now:
             warnings.append("第一项已进入冷启动时间，开始后将立即冷启动。")
     return {"items": enriched, "problems": problems, "warnings": warnings}
+
+
+def _status(primary, secondary, description=None):
+    return {"primary": primary, "secondary": secondary, "description": description}
+
+
+_TASK_SECONDARY = {
+    "armed": "preparing",
+    "preparing": "preparing",
+    "waiting": "waiting",
+    "firing": "submitting",
+}
+_TASK_DESCRIPTION = {
+    "preparing": "正在冷启动、登录或打开购买页",
+    "waiting": "购买页已就绪，等待到点查询或查询中",
+    "submitting": "已进入提交阶段，等待结果",
+}
+
+
+def _item_status(item, task, now):
+    """Primary · secondary · description for one plan item."""
+    state = item.get("state") or "pending"
+    result = item.get("result") or None
+    if state == "running":
+        linked = task if task and (not item.get("task_id") or task.get("task_id") == item.get("task_id")) else None
+        phase = (linked or {}).get("phase")
+        secondary = _TASK_SECONDARY.get(phase, "starting")
+        return _status("running", secondary, _TASK_DESCRIPTION.get(secondary, "正在准备这一项"))
+    if state == "done":
+        outcome = item.get("outcome")
+        secondary = "dry_run" if outcome == "dry_run" else "success" if outcome == "success" else "completed"
+        return _status("done", secondary, result or "已完成")
+    if state == "failed":
+        text = result or ""
+        if item.get("outcome") == "unknown" or "结果未知" in text:
+            secondary = "result_unknown"
+        elif "配置" in text or "已修改" in text:
+            secondary = "config_changed"
+        elif "超过预计" in text or "超时" in text:
+            secondary = "timeout"
+        elif "没有买到" in text or "额度" in text:
+            secondary = "no_quota"
+        else:
+            secondary = "purchase_failed"
+        return _status("failed", secondary, result or "失败")
+    if state == "skipped":
+        text = result or ""
+        if "取消" in text:
+            return _status("cancelled", "manual_cancel", result)
+        if "购买时间已过" in text:
+            return _status("expired", "time_passed", result or "购买时间已过")
+        return _status("skipped", "skipped", result)
+    # Pending: a past window means it was not executed while the app/plan ran.
+    try:
+        at = _plan_at(item)
+    except nw.Abort:
+        return _status("pending", "scheduled", None)
+    if at <= now:
+        return _status("expired", "time_passed", "计划时间已过，未在应用运行期间执行")
+    secondary = "immediate" if item.get("prep_mode") == "immediate" else "scheduled"
+    return _status("pending", secondary, item.get("prep_text"))
+
+
+def _plan_status(plan, item_statuses, task, running, stale, heartbeat_stale):
+    phase = plan.get("phase")
+    result = plan.get("result") or None
+    if phase == "running":
+        if stale:
+            return _status("unknown", "process_exited", "计划进程已退出，结果未知；请查交易记录")
+        current = next((index for index, item in enumerate(plan.get("items") or [])
+                        if (item.get("state") or "pending") == "running"), None)
+        if current is None:
+            current = next((index for index, item in enumerate(plan.get("items") or [])
+                            if (item.get("state") or "pending") == "pending"), None)
+        if heartbeat_stale:
+            return _status("running", "heartbeat_timeout", "计划进程仍在，但心跳超时；只告警，不自动重试交易")
+        if current is not None:
+            item = plan["items"][current]
+            secondary = item_statuses[current]["secondary"]
+            return _status("running", secondary, f"第 {current + 1} 项 {item.get('code', '')}：{item_statuses[current]['description'] or ''}".strip())
+        return _status("running", "starting", None)
+    if phase == "done":
+        return _status("done", "completed", result or "计划已完成")
+    if phase == "aborted":
+        text = result or ""
+        secondary = "config_changed" if "配置" in text else "result_unknown" if "结果未知" in text else "aborted"
+        return _status("failed", secondary, result or "计划已中止")
+    if phase == "disarmed":
+        return _status("cancelled", "manual_cancel", result or "计划已取消")
+    items = plan.get("items") or []
+    expired = sum(1 for status in item_statuses if status["primary"] == "expired")
+    if items and expired == len(items):
+        return _status("expired", "time_passed", "计划时间已过，未在应用运行期间执行")
+    if expired:
+        return _status("pending", "partially_expired", f"有 {expired} 项已过期")
+    return _status("pending", "scheduled", "计划待开始")
 
 
 def view():
@@ -289,14 +385,21 @@ def view():
             plan.get("phase") == "running"
             and (heartbeat_age is None
                  or heartbeat_age > runtime["heartbeat_timeout_seconds"]))
+    task = nw.load_task()
+    if plan is not None:
+        statuses = [_item_status(item, task, now) for item in plan["items"]]
+        for item, status in zip(plan["items"], statuses):
+            item["status"] = status
+        plan["status"] = _plan_status(plan, statuses, task, running, stale, heartbeat_stale)
     path = log_path()
     logs = (path.read_text(encoding="utf-8", errors="replace").splitlines()[-LOG_LINES:]
             if path.exists() else [])
-    return {"plan": plan, "running": bool(running), "stale": bool(stale),
+    return {"plan": plan, "status": plan.get("status") if plan else None,
+            "running": bool(running), "stale": bool(stale),
             "heartbeat_stale": heartbeat_stale, "heartbeat_age_s": heartbeat_age,
             "heartbeat_timeout_s": runtime["heartbeat_timeout_seconds"],
             "settings_changed": settings_changed,
-            "problems": problems, "warnings": warnings, "task": nw.load_task(),
+            "problems": problems, "warnings": warnings, "task": task,
             "log_path": str(path), "logs": logs, "settings_revision": revision,
             "now": now.isoformat()}
 
@@ -779,7 +882,8 @@ def run(generation):
                                    prep_minutes=prep, mode=item["mode"],
                                    settings_revision=plan.get("settings_revision"),
                                    plan_id=plan.get("plan_id"),
-                                   plan_item=item.get("item_id"))
+                                   plan_item=item.get("item_id"),
+                                   max_lead=MAX_LEAD)
             except Exception as exc:
                 if not _finish_item(plan, index, "failed", str(exc)):
                     return
