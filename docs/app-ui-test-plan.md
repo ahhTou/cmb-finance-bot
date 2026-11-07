@@ -166,6 +166,6 @@
 最近自动化基线（2026-11-07 提交）：
 
 - `pnpm test` 30 项、`pnpm exec tsc --noEmit` 0 错误；`pnpm check` 0 error，仅 1 个既有 warning / 5 个 info。
-- Playwright e2e 74 项（WebKit + Chromium）全过；此前复核曾出现 1 次 WebKit 内嵌日志弹窗不稳定，单测重跑通过，仍未定位根因。
+- Playwright e2e 74 项（WebKit + Chromium）全过；历史日志对话框改为显式等待可见 10 秒，避免冷启动/并行时 WebKit 首次挂载超过默认 5 秒的偶发失败。
 - Python 全量 348 项（约 3.7 秒）：332 通过、15 跳过、1 个既有 `test_timed_buy` 错误；`.venv/bin/python -m unittest tests.test_admin_server` 15 项通过。
 - 管理 App 已重建并重启；真实计划窗口、真实设备与推送通知仍待账户持有人验收。

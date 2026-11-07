@@ -273,9 +273,13 @@ test('inline log areas never scroll; the full log opens in a dialog', async ({ p
   expect(await historyLog.locator('div').count()).toBeGreaterThan(1)
   expect(await scrollbarsIn(detail)).toEqual([])
 
-  // Full log is still reachable through the dialog.
+  // Full log is still reachable through the dialog. The first cold WebKit run
+  // can take several seconds to mount the Radix portal under parallel load;
+  // wait for visibility explicitly instead of racing the default 5 s timeout.
   await detail.getByRole('button', { name: '查看全部' }).click()
-  await expect(page.getByRole('dialog')).toContainText('全局 watch.log')
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible({ timeout: 10_000 })
+  await expect(dialog).toContainText('全局 watch.log', { timeout: 10_000 })
 })
 
 test('drill buy shows command output', async ({ page }) => {
