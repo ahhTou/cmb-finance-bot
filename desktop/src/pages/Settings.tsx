@@ -839,7 +839,7 @@ function PushCard() {
             value={server}
             disabled={disabled}
             autoComplete="off"
-            placeholder="https://ahhtou.wang/api/push/ntfy"
+            placeholder="https://ntfy.example.com/"
             onChange={(e) => {
               setServer(e.target.value)
               setResult(null)
@@ -876,7 +876,7 @@ function PushCard() {
         />
       </Field>
 
-      <Hint>令牌在 ahhtou.wang 的「推送通知」页新建，只勾选这个频道。这里保存后不会回显。</Hint>
+      <Hint>令牌在推送服务的管理页面新建，只授权这个频道。这里保存后不会回显。</Hint>
       {result && <Hint tone={result.tone}>{result.text}</Hint>}
 
       <div className="flex items-center gap-2">
