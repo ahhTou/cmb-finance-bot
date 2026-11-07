@@ -552,7 +552,7 @@ function CredentialSettings() {
       <Card title="凭据状态" subtitle="这里只同步脚本保存的值，不会修改银行 App 里的设置。">
         <div className="flex gap-6">
           <Status label="登录与交易凭据" value={w.credentialState} good={stored} />
-          <Status label="邮件通知" value={w.mailConfigured ? '已配置' : '未配置'} good={w.mailConfigured} />
+          <Status label="推送通知" value={w.pushConfigured ? '已配置' : '未配置'} good={w.pushConfigured} />
         </div>
         {w.credentialsDisabled && <Hint tone="warn">值守进行中，暂时不能修改凭据。</Hint>}
       </Card>

@@ -2,13 +2,13 @@
 name: naming
 description: 仓库、钥匙串条目、管理 App、Skill 的命名约定，以及为什么项目不改名
 type: project
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 | 用在哪 | 名字 |
 |---|---|
 | 仓库、目录 | `cmb-finance-bot` |
-| 钥匙串条目 | `cmb-finance-bot.credentials.v1`、`cmb-finance-bot.smtp.v1` |
+| 钥匙串条目 | `cmb-finance-bot.credentials.v1`、`cmb-finance-bot.push.v1`（旧的 `cmb-finance-bot.smtp.v1` 已停用） |
 | README 标题 | 自用招行理财脚本 |
 | 管理 App | `desktop/`，Tauri 标识 `local.cmb-finance-bot.desktop`，Rust 包 `cmb-desktop`，显示名"招行理财值守"（原生版的 `CMBFinanceBot` 已移除） |
 | Agent 监听 Skill | `cmb-watch` |

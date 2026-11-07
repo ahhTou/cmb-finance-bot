@@ -176,7 +176,7 @@ export function makeStatus(task: Task | null, favorites: Favorite[], logs: strin
     logs: logs.slice(-40),
     agent: live ? { state: 'watching', session: 'mock', last_seen: localISO(new Date()) } : { state: 'none' },
     credentials: { state: 'configured' },
-    mail_configured: true,
+    push_configured: true,
     log_path: '/mock/var/night/watch.log',
     favorites,
     test_item: test?.test_amount ? { code: test.code, amount: test.test_amount, title: test.title } : null,

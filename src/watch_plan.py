@@ -527,7 +527,7 @@ def _abort(plan, message, item_index=None, item_state="skipped", item_result=Non
     if not _save_running(plan):
         return False
     log(f"计划已中止：{message}")
-    nw.alert("计划已中止", message)
+    nw.alert("计划已中止", message, 5)
     return True
 
 
@@ -573,7 +573,7 @@ def _safe_abort(plan, message):
                        last_tick=now)
         save_plan(current)
     log(f"计划异常中止：{result}")
-    nw.alert("计划已中止", result)
+    nw.alert("计划已中止", result, 5)
 
 
 def _wait_item(plan, index, end_at):
@@ -683,7 +683,7 @@ def run(generation):
                 if not _finish_item(plan, index, "failed", str(exc)):
                     return
                 log(f"第 {index + 1} 项布防失败：{exc}")
-                nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{exc}")
+                nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{exc}", 5)
                 continue
             item["task_id"] = task.get("task_id") if isinstance(task, dict) else None
             plan["last_tick"] = _now_iso()
@@ -706,13 +706,14 @@ def run(generation):
                     return
                 log(f"第 {index + 1} 项完成：{result or '已提交'}")
                 nw.alert(f"计划第 {index + 1} 项完成",
-                         f"{item['code']}：{result or '已提交'}")
+                         f"{item['code']}：{result or '已提交'}",
+                         3 if plan.get("dry_run") else 5)
             else:
                 if not _finish_item(plan, index, "failed", result):
                     return
                 log(f"第 {index + 1} 项失败：{result or '未知'}")
                 nw.alert(f"计划第 {index + 1} 项失败",
-                         f"{item['code']}：{result or '未知原因'}")
+                         f"{item['code']}：{result or '未知原因'}", 5)
     except Exception as exc:
         _safe_abort(plan, f"{type(exc).__name__}: {exc}")
 

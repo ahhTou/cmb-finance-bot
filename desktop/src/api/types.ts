@@ -48,7 +48,7 @@ export interface Status {
   logs?: string[]
   agent: { state: 'none' | 'watching' | 'stale'; session?: string; last_seen?: string }
   credentials: { state?: string }
-  mail_configured: boolean
+  push_configured: boolean
   log_path: string
   favorites: Favorite[]
   /** The test item, if one is set. */

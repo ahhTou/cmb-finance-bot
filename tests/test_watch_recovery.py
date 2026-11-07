@@ -26,7 +26,7 @@ def race_arm(state, start, results):
         with (nw.STATE / 'spawn-count').open('a') as out: out.write('one\n')
     start.wait()
     try:
-        with patch.object(nw.keychain_store, 'load'), patch.object(nw.notify, 'configured', return_value=True), \
+        with patch.object(nw.keychain_store, 'load'), patch.object(nw.push, 'configured', return_value=True), \
              patch.object(nw, 'emulator_running', return_value=True), patch.object(nw, 'booted', return_value=True), \
              patch.object(nw, 'adb'), patch.object(nw, 'spawn_watch', side_effect=spawn), \
              patch.object(nw.subprocess, 'run'):

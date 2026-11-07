@@ -52,7 +52,7 @@ export function useWatch() {
           : credentials === 'unavailable'
             ? '未设置或无法读取'
             : '未知',
-    mailConfigured: status?.mail_configured === true,
+    pushConfigured: status?.push_configured === true,
     agentShort:
       status?.agent?.state === 'watching' ? '监听中' : status?.agent?.state === 'stale' ? '已失联' : '未监听',
     favorites: status?.favorites ?? [],

@@ -97,7 +97,7 @@ python3 -B src/admin_cli.py plan-disarm   # 取消计划并停止当前布防
 | 连续购买测速 | 连续 N 笔 0.01 元，逐步计时 | `src/buy_timed.py` |
 | 批量撤单 | 从交易记录逐笔撤销可撤单的订单 | `src/cancel_orders.py` |
 | 自动登录 | 九宫格图案存在 macOS 钥匙串，最多试 3 次防锁定 | `src/secure_input.py`、`src/keychain_store.py` |
-| 邮件通知 | 可选，QQ 邮箱 SMTP，只发时间线和状态 | `src/notify.py` |
+| 手机推送 | 可选，ntfy（任意自建或公共服务器），只发时间线和状态 | `src/push.py` |
 | 管理 App | 前台窗口、状态、布防、凭据同步 | `desktop/`、`src/admin_server.py`、`src/admin_cli.py` |
 | Agent 监听 | 心跳、故障通知、提交前按原任务恢复 | `skills/cmb-watch/SKILL.md` |
 | 模拟器管理 | 启动 / 停止 / 状态、截图 | `scripts/project`、`scripts/capture` |
@@ -116,7 +116,7 @@ python3 -B src/admin_cli.py plan-disarm   # 取消计划并停止当前布防
  │     ├─ secure_input.py ───── 九宫格登录（图案取自 macOS 钥匙串）
  │     ├─ query_gate.py / .js ── 提前进入购买页，挂起首个查询并在同页串行轮询
 │     ├─ fast_buy_uia2.py ──── 打开购买页 / 接入已准备表单 → 风险弹窗 → 密码 → 确定
- │     └─ notify.py ─────────── 邮件通知（可选）
+ │     └─ push.py ───────────── 手机推送（可选）
  │
  └─ Android 模拟器 (Google APIs arm64, 320×640)
        └─ 招行 App
@@ -168,7 +168,8 @@ var/                 SDK、虚拟设备、日志、运行状态（Git 忽略，�
 4. 在模拟器里安装招行 App 并手动登录一次，然后把凭据存进 macOS 钥匙串：
    - 首次：在 `config/credentials.json` 写入 `{"login_pattern": "<九宫格点位编号>", "payment_password": "<6 位交易密码>"}`，权限设为 `chmod 600`，再运行 `python3 src/keychain_store.py`。写入钥匙串并回读验证后，明文文件会被删除。
    - 以后改九宫格图案：`python3 src/keychain_store.py update-login`（不改交易密码）。
-   - 可选的邮件通知：`python3 src/notify.py setup`，输入 QQ 邮箱的 SMTP 授权码。
+   - 可选的手机推送（ntfy）：在自己的终端运行 `python3 src/push.py setup`，依次输入 ntfy 服务器地址（必须 https，例如 `https://ntfy.example.com/`）、频道名（topic）和访问令牌（输入不显示）。保存后会发一条测试推送；之后可用 `python3 src/push.py test` 再测一次。服务器、频道和令牌一起存在钥匙串条目 `cmb-finance-bot.push.v1`。
+   - 旧钥匙串条目 `cmb-finance-bot.smtp.v1`（原 QQ 邮箱通知）已不再使用，请自己在「钥匙串访问」里删除。
 
    这些只改项目的钥匙串条目，不改银行 App 里的设置。
 

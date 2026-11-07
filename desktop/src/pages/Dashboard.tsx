@@ -284,9 +284,9 @@ export function DashboardPage() {
             tone={w.credentialState === '已设置' ? 'good' : 'warn'}
           />
           <Metric
-            title="邮件通知"
-            value={w.mailConfigured ? '已配置' : '未配置'}
-            tone={w.mailConfigured ? 'good' : undefined}
+            title="推送通知"
+            value={w.pushConfigured ? '已配置' : '未配置'}
+            tone={w.pushConfigured ? 'good' : undefined}
           />
         </MetricGrid>
       </DashboardCard>

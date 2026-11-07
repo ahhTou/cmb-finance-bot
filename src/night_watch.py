@@ -12,7 +12,7 @@ The account holder arms it in their own terminal before bed:
 app and starts a detached `caffeinate -ims ... night_watch.py run`, so the
 Mac stays awake exactly as long as the watch runs while the display may turn
 off on its own. `status` and `disarm` inspect or cancel it. Alerts go out by
-email (see notify.py).
+push (see push.py).
 
 Timeline:
   night      emulator health every 2 min, app stays closed
@@ -71,7 +71,7 @@ REDEEM_GAP = 0.95    # minimum interval after a confirmed fresh error
 import fast_buy
 import keychain_store
 import manage
-import notify
+import push
 import purchase_settings
 import query_gate
 import secure_input
@@ -85,9 +85,15 @@ def log(message):
     print(f"{datetime.now():%m-%d %H:%M:%S} {message}", flush=True)
 
 
-def alert(subject, body=""):
+def alert(subject, body="", priority=3):
+    """Log one alert and push it to the phone.
+
+    `priority` follows ntfy: 5 for a filled order, a failed purchase or an
+    aborted watch (loud), 3 for status updates (armed, starting, ready, ...).
+    """
     log(f"通知：{subject}")
-    notify.send(subject, f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{subject}\n\n{body}".strip())
+    push.send(subject, f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{subject}\n\n{body}".strip(),
+              priority)
 
 
 def load_task():
@@ -360,8 +366,8 @@ def _arm(args):
     if mode == 'redemption':
         retry_settings['irregular_window_minutes'] = window
     keychain_store.load()   # validates credentials exist; values are not kept
-    if not notify.configured():
-        print("邮件未配置：通知只写日志，用 status 查看。")
+    if not push.configured():
+        print("推送未配置：通知只写日志，用 status 查看。")
     if not (emulator_running() and booted()):
         raise Abort("模拟器没有在运行；先 ./scripts/project start。")
     # Arming is the last moment the user is awake to see a dead network.
@@ -991,7 +997,7 @@ def fire(task, when):
         task["phase"] = "done"
         task["result"] = f"停止：{exc}"
         persist(task)
-        alert("购买流程中途停止", f"{exc}\n\n若已出现提交动作，请先查交易记录，不要重试。")
+        alert("购买流程中途停止", f"{exc}\n\n若已出现提交动作，请先查交易记录，不要重试。", 5)
         return
     task["phase"] = "done"
     if task.get("dry_run"):
@@ -1003,9 +1009,9 @@ def fire(task, when):
     task["result"] = result or "结果未知"
     persist(task)
     if result in ("提交成功", "购买成功", "交易委托已接受"):
-        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。")
+        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5)
     else:
-        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。")
+        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5)
 
 
 def redemption_fire(task, start):
@@ -1048,11 +1054,11 @@ def redemption_fire(task, start):
         if task.get("fired_at"):
             task["result"] = f"结果未知：{exc}"
             persist(task)
-            alert("提交后异常，结果需要人工确认", "先查交易记录，不要重试。")
+            alert("提交后异常，结果需要人工确认", "先查交易记录，不要重试。", 5)
         else:
             task["result"] = f"窗口内没有买到：{exc}"
             persist(task)
-            alert("不定时抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。")
+            alert("不定时抢购结束：窗口内没有买到", f"{exc}\n\n没有提交任何交易。", 5)
         return
     task["phase"] = "done"
     if task.get("dry_run"):
@@ -1064,9 +1070,9 @@ def redemption_fire(task, start):
     task["result"] = result or "结果未知"
     persist(task)
     if result in ("提交成功", "购买成功", "交易委托已接受"):
-        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。")
+        alert(f"已提交：{result}", "以银行交易记录和产品管理机构确认为准。", 5)
     else:
-        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。")
+        alert(f"结果需要人工确认：{task['result']}", "请查交易记录，不要重复提交。", 5)
 
 
 QUERY_OUTCOMES = {'E': '售罄', 'ready': '有额度', 'rejected': '被拒绝', 'failed': '失败或超时'}
@@ -1112,7 +1118,8 @@ def gated_fire(task):
         fast_buy_uia2.warm()
         task['phase'] = 'waiting'
         persist(task)
-        # SMTP can block for 20 seconds; never let it expire the page lease.
+        # The push request can block up to 5 seconds; never let it expire
+        # the page lease.
         threading.Thread(target=alert, args=(
             '购买页已就绪，queryBuy 已挂起',
             f"首个查询计划时间：{task['fire_at']}；等待期间不发查询。"), daemon=True).start()
@@ -1149,13 +1156,13 @@ def gated_fire(task):
         persist(task)
         if task.get('dry_run'):
             fast_buy_uia2.close_password_panel()
-        alert(task['result'], '以银行交易记录为准；不要重复提交。' if task.get('fired_at')
-              else '未点确定、未提交。')
+        note = '以银行交易记录为准；不要重复提交。' if task.get('fired_at') else '未点确定、未提交。'
+        alert(task['result'], note, 3 if task.get('dry_run') else 5)
     except Exception as exc:
         task['phase'] = 'done'
         task['result'] = (f'结果未知：{exc}' if task.get('fired_at') else f'未提交：{exc}')
         persist(task)
-        alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'])
+        alert('结果需要人工确认' if task.get('fired_at') else '值守停止，未提交', task['result'], 5)
     finally:
         payment.clear()
         query_gate.finish(task)
@@ -1205,7 +1212,7 @@ def run(_args):
                 ensure_awake()
                 health_network(net)
                 reported = None
-            except Exception as exc:   # keep watching; mail each new problem once
+            except Exception as exc:   # keep watching; push each new problem once
                 log(f"夜间检查异常：{exc}")
                 if str(exc) != reported:
                     reported = str(exc)
@@ -1263,7 +1270,7 @@ def run(_args):
             task["phase"] = "aborted"
             task["result"] = str(exc)
             persist(task)
-        alert("值守中止，未提交", f"{type(exc).__name__}: {exc}")
+        alert("值守中止，未提交", f"{type(exc).__name__}: {exc}", 5)
         raise
 
 

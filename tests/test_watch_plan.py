@@ -74,7 +74,7 @@ class PlanTestBase(unittest.TestCase):
         """真实 _arm() 路径的外部世界：全部 mock，不碰 adb/模拟器/网络/钥匙串。"""
         patches = [
             patch.object(nw.keychain_store, "load"),
-            patch.object(nw.notify, "configured", return_value=False),
+            patch.object(nw.push, "configured", return_value=False),
             patch.object(nw, "emulator_running", return_value=True),
             patch.object(nw, "booted", return_value=True),
             patch.object(nw, "network_state", return_value="up"),

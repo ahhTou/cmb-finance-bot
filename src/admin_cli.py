@@ -21,7 +21,7 @@ import favorites
 import watch_plan
 
 import manage
-import notify
+import push
 
 
 def atomic_json(path, data):
@@ -49,7 +49,7 @@ def status():
     data = nw.status_info()
     data.update(agent=agent_info(data['task']), processes=manage.status_info(),
                 credentials=keychain_store.credential_info(),
-                mail_configured=notify.configured(), log_path=str(nw.LOG),
+                push_configured=push.configured(), log_path=str(nw.LOG),
                 favorites=favorites.load(), test_item=favorites.test_item())
     return data
 

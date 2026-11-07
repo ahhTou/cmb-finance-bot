@@ -26,7 +26,7 @@ class AdminTest(unittest.TestCase):
             self.stack.enter_context(patch.object(nw, name, value))
         self.stack.enter_context(patch.object(admin.keychain_store, 'credential_info', return_value={'state': 'configured'}))
         self.stack.enter_context(patch.object(admin.manage, "status_info", return_value={"emulator": {"running": False}}))
-        self.stack.enter_context(patch.object(admin.notify, 'configured', return_value=False))
+        self.stack.enter_context(patch.object(admin.push, 'configured', return_value=False))
         self.stack.enter_context(patch.object(admin.favorites, 'PATH', state / 'favorites.json'))
 
     def tearDown(self):
@@ -55,6 +55,8 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(data['stale'])
         self.assertEqual(data['credentials'], {'state': 'configured'})
+        self.assertFalse(data['push_configured'])
+        self.assertNotIn('mail_configured', data)
         self.assertNotIn('payment_password', json.dumps(data))
 
     def test_retry_settings_persist_and_reject_invalid_updates(self):

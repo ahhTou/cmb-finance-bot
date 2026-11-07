@@ -46,7 +46,7 @@ CMBFinanceBot.app
       ├─ night_watch：任务、后台值守、恢复与历史
       ├─ manage：项目专用模拟器和 ADB
       ├─ keychain_store：唯一凭据读写方
-      └─ notify：邮件配置状态
+      └─ push：推送配置状态
 ```
 
 ```sh
@@ -78,7 +78,7 @@ open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
 - Mac：电源、合盖、防休眠、网络耗时；刷新和休眠设置 sheet。
 - 模拟器：运行、开机、App 进程、屏幕、插电常亮、锁屏禁用；启动/关闭/恢复常亮/截图/详情。
 - 画面：最近截图预览，可放大。
-- 凭据与通知：登录与交易凭据状态、邮件配置；打开设置。
+- 凭据与通知：登录与交易凭据状态、推送配置；打开设置。
 - 最近日志：最近 6 行，可打开完整日志 sheet。
 
 原来的“当前任务”卡被移除；活动任务的产品、金额、时间只在任务页出现。活动任务 `armed / preparing / firing` 期间禁止启动/关闭模拟器；进入提交后进程退出时，值守卡提示先查交易记录，不补单、不重试。
@@ -100,7 +100,7 @@ open app/CMBFinanceBot/build/Build/Products/Release/CMBFinanceBot.app
 
 ### 设置
 
-项目目录、Python 路径、凭据配置状态和邮件是否配置集中显示。
+项目目录、Python 路径、凭据配置状态和推送是否配置集中显示。
 
 九宫格选择 4–9 个不重复点，画两次一致后保存。交易密码使用当前、新值和确认三个安全输入框，由 Python 核对当前值并校验新值。设置仅同步脚本保存的凭据，不修改银行 App 的设置。准备/提交阶段和操作忙碌时禁用修改，离开设置清空输入。
 

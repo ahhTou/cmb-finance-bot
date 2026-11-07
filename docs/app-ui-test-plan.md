@@ -155,9 +155,9 @@
 - [ ] 940×680 最小窗口下重复上面两项：仍无滚动条，按钮不被裁掉，日志至少能看到 1–2 行。
 - [ ] 值守运行中（任务页专注视图）日志流不受影响，仍是实时滚动。
 
-当前自动化基线（2026-11-06）：
+当前自动化基线（2026-11-07）：
 
-- `pnpm test` 30 项、`pnpm check` 仅基线 1 条既有警告、`pnpm exec tsc --noEmit` 0 错误。
+- `pnpm test` 30 项、`pnpm exec tsc --noEmit` 0 错误；`pnpm check` 仅基线问题（`src/components/shared.tsx` 导入排序错误 1 条、既有警告 1 条，本轮未改该文件）。
 - Playwright e2e 60 项（WebKit + Chromium，含计划页 7 项、内联日志无滚动条 1 项）通过。
-- Python 全量 262 项（1.2 秒），仅既有 `test_timed_buy` 失败；`admin_server` 用 `.venv/bin/python` 跑 11 项通过。
-- 管理 App 已重建并重启；真实计划窗口、真实设备与邮件通知仍待账户持有人验收。
+- Python 全量 281 项（约 1.9 秒），仅既有 `test_timed_buy` 失败；用 `.venv/bin/python` 跑时 `admin_server` 11 项一并通过。
+- 管理 App 已重建并重启；真实计划窗口、真实设备与推送通知仍待账户持有人验收。

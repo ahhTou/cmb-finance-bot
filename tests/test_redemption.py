@@ -21,8 +21,8 @@ class RedemptionTest(unittest.TestCase):
         self.now = datetime.now().replace(microsecond=0)
         keys = MagicMock()
         keys.load.return_value = {"login_pattern": "1235"}
-        notify = MagicMock()
-        notify.configured.return_value = True
+        push = MagicMock()
+        push.configured.return_value = True
         self.patches = [patch.object(nw, "STATE", state),
                         patch.object(nw, "TASK", state / "task.json"),
                         patch.object(nw, "alert"),
@@ -36,7 +36,7 @@ class RedemptionTest(unittest.TestCase):
                         patch.object(nw, "emulator_running", return_value=True),
                         patch.object(nw, "booted", return_value=True),
                         patch.object(nw, "keychain_store", keys),
-                        patch.object(nw, "notify", notify),
+                        patch.object(nw, "push", push),
                         patch.object(nw.subprocess, "run",
                                      return_value=types.SimpleNamespace(stdout="AC Power")),
                         patch("builtins.print")]
