@@ -55,6 +55,8 @@ export interface Favorite {
   title?: string
   /** Set on the one test item; drills use this product and amount by default. */
   test_amount?: string | null
+  /** Reference-only recent annualized yield, already normalised like "2.85%". */
+  recent_annualized?: string | null
   /** Reference-only quota times (首发 / 捡漏 / 常规). */
   quota_times?: QuotaTime[]
 }
@@ -66,6 +68,7 @@ export interface Favorite {
 export interface FavoriteSettingsRequest {
   title?: string
   test_amount?: string | null
+  recent_annualized?: string | null
   quota_times?: QuotaTime[]
 }
 

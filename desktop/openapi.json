@@ -1174,6 +1174,17 @@
       ],
       "title": "Title"
      },
+     "recent_annualized": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recent Annualized"
+     },
      "test_amount": {
       "anyOf": [
        {

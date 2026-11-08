@@ -132,6 +132,8 @@ class FavoritesTest(unittest.TestCase):
         self.assertEqual(favorites.NOTE_MAX, 100)
         self.assertEqual(favorites.KINDS, ("issue", "bargain", "regular"))
         self.assertTrue(favorites.CODE.fullmatch("A123"))
+        self.assertEqual(favorites.ANNUALIZED_MIN, -100)
+        self.assertEqual(favorites.ANNUALIZED_MAX, 1000)
 
     def test_v1_file_without_quota_times_still_loads(self):
         favorites.PATH.write_text(
@@ -436,6 +438,135 @@ class FavoritesTest(unittest.TestCase):
         rows = favorites.save_item({"code": "c0000", "title": "改名"})
         self.assertEqual(len(rows), favorites.MAX_ITEMS)
         self.assertEqual(rows[0]["title"], "改名")
+
+    def test_annualized_text_normalizes_display_values(self):
+        cases = [("3", "3.00%"), (3, "3.00%"), ("3.00%", "3.00%"),
+                 ("2.85%", "2.85%"), (" 2.85 %", "2.85%"),
+                 ("-1.2", "-1.20%"), ("-1.20%", "-1.20%"),
+                 (2.85, "2.85%"), (0, "0.00%"), ("0.5", "0.50%"),
+                 ("3%", "3.00%"), ("-100", "-100.00%"),
+                 (1000, "1000.00%"), ("1000.00%", "1000.00%")]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(favorites.annualized_text(value), expected)
+
+    def test_annualized_text_rejects_invalid_values(self):
+        format_error = "近期年化格式不正确。"
+        range_error = "近期年化须为 -100 到 1000 之间的数字，最多两位小数。"
+        for value in (True, False, "abc", "", "  ", None, [], {}):
+            with self.subTest(value=value), \
+                    self.assertRaises(RuntimeError) as caught:
+                favorites.annualized_text(value)
+            self.assertEqual(str(caught.exception), format_error)
+        for value in ("1.234", "2.855", "-100.01", "1000.01", 1001, -101):
+            with self.subTest(value=value), \
+                    self.assertRaises(RuntimeError) as caught:
+                favorites.annualized_text(value)
+            self.assertEqual(str(caught.exception), range_error)
+
+    def test_recent_annualized_loaded_and_bad_values_dropped(self):
+        favorites.PATH.write_text(json.dumps([
+            {"code": "AA01", "title": "a", "recent_annualized": "2.85%"},
+            {"code": "BB02", "title": "b", "recent_annualized": "3"},
+            {"code": "CC03", "title": "c", "recent_annualized": 2.85},
+            {"code": "DD04", "title": "d", "recent_annualized": "abc"},
+            {"code": "EE05", "title": "e", "recent_annualized": "1.234"},
+            {"code": "FF06", "title": "f", "recent_annualized": "1001"},
+            {"code": "GG07", "title": "g", "recent_annualized": True},
+            {"code": "HH08", "title": "h"},
+            {"code": "II09", "title": "i", "recent_annualized": None},
+            {"code": "JJ10", "title": "j", "recent_annualized": ""},
+        ], ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(favorites.load(), [
+            {"code": "AA01", "title": "a", "recent_annualized": "2.85%"},
+            {"code": "BB02", "title": "b", "recent_annualized": "3.00%"},
+            {"code": "CC03", "title": "c", "recent_annualized": "2.85%"},
+            {"code": "DD04", "title": "d"},
+            {"code": "EE05", "title": "e"},
+            {"code": "FF06", "title": "f"},
+            {"code": "GG07", "title": "g"},
+            {"code": "HH08", "title": "h"},
+            {"code": "II09", "title": "i"},
+            {"code": "JJ10", "title": "j"},
+        ])
+
+    def test_recent_annualized_save_round_trip(self):
+        saved = favorites.save([
+            {"code": "JX040229", "title": "标题", "recent_annualized": " 2.85 %"},
+            {"code": "133045A", "title": "无年化"},
+            {"code": "999999", "title": "非法年化", "recent_annualized": "abc"},
+        ])
+        self.assertEqual(saved, [
+            {"code": "JX040229", "title": "标题", "recent_annualized": "2.85%"},
+            {"code": "133045A", "title": "无年化"},
+            {"code": "999999", "title": "非法年化"},
+        ])
+        self.assertEqual(favorites.load(), saved)
+        self.assertEqual(self.stored(), saved)
+
+    def test_save_item_sets_overwrites_and_clears_recent_annualized(self):
+        rows = favorites.save_item({"code": "JX040229", "title": "标题",
+                                    "recent_annualized": " 2.85 %"})
+        self.assertEqual(rows[0]["recent_annualized"], "2.85%")
+        self.assertEqual(self.stored()[0]["recent_annualized"], "2.85%")
+
+        rows = favorites.save_item({"code": "NEW001", "title": "新收藏",
+                                    "recent_annualized": 3})
+        self.assertEqual(rows[-1], {"code": "NEW001", "title": "新收藏",
+                                    "recent_annualized": "3.00%"})
+
+        rows = favorites.save_item({"code": "JX040229",
+                                    "recent_annualized": "-1.2"})
+        self.assertEqual(rows[0]["recent_annualized"], "-1.20%")
+
+        rows = favorites.save_item({"code": "JX040229", "title": "改名"})
+        self.assertEqual(rows[0]["recent_annualized"], "-1.20%")
+
+        for value in (None, ""):
+            with self.subTest(clear=value):
+                favorites.save([{"code": "JX040229", "title": "标题",
+                                 "recent_annualized": "2.85%"}])
+                rows = favorites.save_item({"code": "JX040229",
+                                            "recent_annualized": value})
+                self.assertNotIn("recent_annualized", rows[0])
+                self.assertNotIn("recent_annualized", self.stored()[0])
+                self.assertEqual(favorites.load()[0]["title"], "标题")
+
+    def test_recent_annualized_is_independent_of_other_settings(self):
+        self.seed_settings()
+        rows = favorites.save_item({"code": "JX040229",
+                                    "recent_annualized": "2.85%"})
+        self.assertEqual(rows[0]["test_amount"], "0.02")
+        self.assertEqual([entry["id"] for entry in rows[0]["quota_times"]],
+                         [entry["id"] for entry in QUOTA_ROWS])
+
+        rows = favorites.save_item({"code": "JX040229",
+                                    "quota_times": [quota(time="10:00")]})
+        self.assertEqual(rows[0]["recent_annualized"], "2.85%")
+        self.assertEqual(rows[0]["test_amount"], "0.02")
+
+        rows = favorites.save_item({"code": "JX040229", "test_amount": "1.5"})
+        self.assertEqual(rows[0]["recent_annualized"], "2.85%")
+        self.assertEqual(rows[0]["title"], "标题")
+
+    def test_save_item_invalid_recent_annualized_keeps_the_file(self):
+        self.seed_settings()
+        before = favorites.PATH.read_text(encoding="utf-8")
+        for value, message in [("abc", "近期年化格式不正确。"),
+                               ("1.234", "近期年化须为 -100 到 1000 之间的"
+                                         "数字，最多两位小数。"),
+                               (True, "近期年化格式不正确。")]:
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeError) as caught:
+                    favorites.save_item({"code": "JX040229", "title": "改名",
+                                         "recent_annualized": value})
+                self.assertEqual(str(caught.exception), message)
+                self.assertEqual(favorites.PATH.read_text(encoding="utf-8"),
+                                 before)
+        with self.assertRaises(RuntimeError):
+            favorites.save_item({"code": "NEW001", "title": "新",
+                                 "recent_annualized": "abc"})
+        self.assertEqual(favorites.PATH.read_text(encoding="utf-8"), before)
 
 
 if __name__ == "__main__":

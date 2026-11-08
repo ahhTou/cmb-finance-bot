@@ -81,6 +81,19 @@ export function validQuotaAmount(value: string | null | undefined): boolean {
   return amount > 0 && amount <= MAX_AMOUNT_WAN
 }
 
+/**
+ * 近期年化 percentage text: empty is allowed (not recorded); otherwise an optional
+ * trailing `%`, at most two decimals, from -100 to 1000.
+ */
+export function validAnnualized(value: string): boolean {
+  const text = value.trim()
+  if (!text) return true
+  const match = /^(-?\d+(?:\.\d{1,2})?)%?$/.exec(text)
+  if (!match) return false
+  const annualized = Number(match[1])
+  return annualized >= -100 && annualized <= 1000
+}
+
 function issueMoment(entry: QuotaTime): Date | null {
   const date = parseQuotaDate(entry.date)
   if (!date || !validQuotaTime(entry.time)) return null

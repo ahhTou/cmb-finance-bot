@@ -139,6 +139,7 @@ class QuotaTimeRequest(BaseModel):
 
 class FavoriteSettingsRequest(BaseModel):
     title: Optional[str] = None
+    recent_annualized: Optional[str] = None
     test_amount: Optional[str] = None
     quota_times: Optional[List[QuotaTimeRequest]] = None
 
@@ -359,6 +360,9 @@ def update_favorite(code: str, body: FavoriteSettingsRequest):
     payload = {'code': code}
     if body.title is not None:
         payload['title'] = body.title
+    if 'recent_annualized' in body.model_fields_set:
+        # An explicit null clears it; omitted keeps the saved value.
+        payload['recent_annualized'] = body.recent_annualized
     if 'test_amount' in body.model_fields_set:
         # An explicit null clears this item's test flag; omitted keeps it.
         payload['test_amount'] = body.test_amount

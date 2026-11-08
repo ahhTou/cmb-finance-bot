@@ -29,7 +29,7 @@
 - `src/favorites.py`：`add` / `remove` / `set_test` / `clear_test` / `test_item`；保留旧文件的未知字段忽略行为。
 - `admin_cli.py`：`favorites --list / --add CODE --title TITLE / --remove CODE / --set-test CODE --test-amount AMOUNT / --clear-test / --test`；`status` 同时带 `favorites` 和 `test_item`。
 - HTTP：`POST /api/favorites/test {code, amount}`、`DELETE /api/favorites/test`；旧的增删改接口不变。
-- **2026-11-08 v2**：数据增加 `quota_times`（`issue` / `bargain` / `regular`；首发 `date` + `time`，周重复 `weekdays` + `time`；`amount_wan` 以万为单位、省略表示「不定额度」；`note`；单条收藏 ≤50 条），由 `save_item` 保存；CLI 增加 `favorites --save`（stdin JSON），HTTP 增加 `PUT /api/favorites/{code}`（管理 App 设置弹窗保存走它）；`test_amount` 和上面旧接口的语义不变。细节见 `README.md` 和 `AGENT_WORKFLOW.md` §1。
+- **2026-11-08 v2**：数据增加 `quota_times`（`issue` / `bargain` / `regular`；首发 `date` + `time`，周重复 `weekdays` + `time`；`amount_wan` 以万为单位、省略表示「不定额度」；`note`；单条收藏 ≤50 条），由 `save_item` 保存；CLI 增加 `favorites --save`（stdin JSON），HTTP 增加 `PUT /api/favorites/{code}`（管理 App 设置弹窗保存走它）；`test_amount` 和上面旧接口的语义不变。同日又加 `recent_annualized`（近期年化，参考值，规范化为 `N.NN%`，可空）和额度时间与标题输入框左对齐。细节见 `README.md` 和 `AGENT_WORKFLOW.md` §1。
 - App：2026-11-08 v2 起，每行用「设置」按钮打开设置弹窗，测试项（Checkbox + 金额）和额度时间都在弹窗里配置，保存走 `PUT /api/favorites/{code}`；保存后代码下方显示「测试 ¥…」Tag。布防（仅演练）和单笔购买演练打开时自动填入测试项；收藏快捷选择里的测试项带 Tag 并排在最前，点它同时填入产品和金额。计划页每个布防项也有收藏快捷选择，点测试项会同时填入产品代码和测试金额；计划项不做自动带入（一份计划有多项）。
 
 ## 不做

@@ -11,6 +11,7 @@ import {
   quotaAmountText,
   quotaEntriesOf,
   quotaTimeText,
+  validAnnualized,
   validQuotaAmount,
   validQuotaDate,
   validQuotaTime,
@@ -165,6 +166,43 @@ describe('validation', () => {
       expect(validQuotaAmount(value)).toBe(true)
     for (const value of ['0', '0.001', '1000001', '-1', 'abc', '', '1.234', null])
       expect(validQuotaAmount(value)).toBe(false)
+  })
+})
+
+describe('validAnnualized', () => {
+  it('allows an empty value (not recorded)', () => {
+    expect(validAnnualized('')).toBe(true)
+    expect(validAnnualized('   ')).toBe(true)
+  })
+
+  it('accepts percentages with an optional trailing % and at most two decimals', () => {
+    for (const value of ['2.85', '2.85%', '3.1', '3.10', '0', '-0.5', '2', ' 2.85% '])
+      expect(validAnnualized(value)).toBe(true)
+  })
+
+  it('accepts the -100..1000 bounds inclusively', () => {
+    for (const value of ['-100', '-100.00%', '1000', '1000.00%']) expect(validAnnualized(value)).toBe(true)
+    for (const value of ['-100.01', '1000.01', '2000', '-101', '1000.1'])
+      expect(validAnnualized(value)).toBe(false)
+  })
+
+  it('rejects malformed numbers', () => {
+    for (const value of [
+      'abc',
+      '3.123',
+      '2.85%%',
+      '%',
+      '.5',
+      '-.5',
+      '+2.85',
+      '2,85',
+      '1e3',
+      '2.85 %',
+      '2.',
+      '-',
+      '--1',
+    ])
+      expect(validAnnualized(value)).toBe(false)
   })
 })
 

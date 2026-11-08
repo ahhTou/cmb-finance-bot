@@ -107,6 +107,7 @@ export const FAVORITES: Favorite[] = [
   {
     code: 'JX040229',
     title: '招睿丰和 30 天',
+    recent_annualized: '2.85%',
     // Demo quota times (contract §5.4): one expired 首发, one 捡漏 and one 常规.
     quota_times: [
       {

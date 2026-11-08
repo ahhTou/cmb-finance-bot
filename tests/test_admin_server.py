@@ -284,6 +284,31 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(r.status_code, 422)
         run.assert_not_called()
 
+    @patch('admin_server.subprocess.run')
+    def test_update_favorite_forwards_recent_annualized(self, run):
+        run.return_value = done({'ok': True, 'favorites': [], 'test_item': None})
+        self.call('PUT', '/api/favorites/JX040229',
+                  json={'recent_annualized': '2.85%'})
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual(payload, {'code': 'JX040229',
+                                   'recent_annualized': '2.85%'})
+
+        self.call('PUT', '/api/favorites/JX040229',
+                  json={'recent_annualized': None})
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertIn('recent_annualized', payload)
+        self.assertIsNone(payload['recent_annualized'])
+
+        self.call('PUT', '/api/favorites/JX040229', json={'test_amount': None})
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertNotIn('recent_annualized', payload)
+
+        run.reset_mock()
+        r = self.call('PUT', '/api/favorites/JX040229',
+                      json={'recent_annualized': 3})
+        self.assertEqual(r.status_code, 422)
+        run.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

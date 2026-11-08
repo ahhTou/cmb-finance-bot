@@ -253,6 +253,34 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(row['quota_times'][1]['weekdays'], [1, 3])
         self.assertIsNone(data['test_item'])
 
+    def test_favorites_save_recent_annualized_and_clear(self):
+        code, data = self.call('favorites', '--save', stdin=json.dumps({
+            'code': 'JX040229', 'title': '标题',
+            'recent_annualized': ' 2.85 %'}))
+        self.assertEqual(code, 0)
+        self.assertEqual(data['favorites'][0]['recent_annualized'], '2.85%')
+        self.assertIsNone(data['test_item'])
+        on_disk = json.loads((nw.STATE / 'favorites.json').read_text(encoding='utf-8'))
+        self.assertEqual(on_disk, data['favorites'])
+
+        for value in (None, ''):
+            with self.subTest(clear=value):
+                self.assertEqual(self.call('favorites', '--save', stdin=json.dumps({
+                    'code': 'JX040229', 'recent_annualized': '2.85%'}))[0], 0)
+                code, data = self.call('favorites', '--save', stdin=json.dumps({
+                    'code': 'JX040229', 'recent_annualized': value}))
+                self.assertEqual(code, 0)
+                self.assertNotIn('recent_annualized', data['favorites'][0])
+                self.assertEqual(data['favorites'][0]['title'], '标题')
+                on_disk = json.loads(
+                    (nw.STATE / 'favorites.json').read_text(encoding='utf-8'))
+                self.assertNotIn('recent_annualized', on_disk[0])
+
+        code, data = self.call('favorites', '--save', stdin=json.dumps({
+            'code': 'JX040229', 'recent_annualized': 'abc'}))
+        self.assertEqual(code, 1)
+        self.assertEqual(data['error'], '近期年化格式不正确。')
+
     def test_credential_payload_not_echoed(self):
         code, data = self.call('set-login-pattern', stdin='invalid-sensitive-text')
         self.assertEqual(code, 1)

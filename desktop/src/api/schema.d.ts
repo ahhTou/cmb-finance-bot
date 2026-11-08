@@ -613,6 +613,8 @@ export interface components {
         FavoriteSettingsRequest: {
             /** Title */
             title?: string | null;
+            /** Recent Annualized */
+            recent_annualized?: string | null;
             /** Test Amount */
             test_amount?: string | null;
             /** Quota Times */

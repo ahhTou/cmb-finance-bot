@@ -74,6 +74,18 @@ function normalizeQuotaTime(entry: QuotaTime, used: Set<string>): QuotaTime {
   return normalized
 }
 
+/**
+ * Mock counterpart of the server's 近期年化 normalisation: numeric text becomes
+ * two decimals plus '%' (`3.1` → `3.10%`); other text is kept verbatim so a bad
+ * test payload is not silently rewritten.
+ */
+function annualizedText(value: string): string {
+  const match = /^(-?\d+)(?:\.(\d{1,2}))?%?$/.exec(value.trim())
+  if (!match) return value.trim()
+  const number = Number(`${match[1]}${match[2] ? `.${match[2]}` : ''}`)
+  return `${number.toFixed(2)}%`
+}
+
 const status = () => ({
   ...makeStatus(state.task, state.favorites, state.logs),
   push_configured: state.push.configured,
@@ -390,6 +402,11 @@ export const handlers = [
         for (const favorite of state.favorites) delete favorite.test_amount
         row.test_amount = amount
       }
+    }
+    if ('recent_annualized' in body) {
+      const raw = (body.recent_annualized ?? '').trim()
+      if (!raw) delete row.recent_annualized
+      else row.recent_annualized = annualizedText(raw)
     }
     if ('quota_times' in body) {
       const entries = body.quota_times

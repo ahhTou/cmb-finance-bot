@@ -2,9 +2,10 @@
 
 One row may be marked as the test item with an amount; drills use it as the
 default product and amount instead of asking every time. At most one row is
-the test item. Quota-time entries are reference notes for the account holder
-and the Agent: they never drive a purchase, a watch task or a plan. The file
-is 0600 and ignored by Git; entries are unique by case-insensitive code.
+the test item. Quota-time entries and the recent annualized yield are reference
+notes for the account holder and the Agent: they never drive a purchase, a
+watch task or a plan. The file is 0600 and ignored by Git; entries are unique
+by case-insensitive code.
 """
 import json
 import re
@@ -26,6 +27,9 @@ DAY = re.compile(r'\d{4}-\d{2}-\d{2}')
 QUOTA_ID = re.compile(r'[A-Za-z0-9_-]{1,24}')
 # 额度数默认单位万；100 亿是个人理财场景下足够宽的上限。
 QUOTA_MAX_WAN = Decimal(1_000_000)
+# 近期年化只是参考值：允许负收益，上限给足，单位是百分数。
+ANNUALIZED_MIN = Decimal(-100)
+ANNUALIZED_MAX = Decimal(1000)
 
 
 def amount_text(value):
@@ -40,6 +44,27 @@ def amount_text(value):
     if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
         raise RuntimeError('测试金额必须是正数，最多两位小数。')
     return f'{amount:.2f}'
+
+
+def annualized_text(value):
+    """Validate the reference-only recent annualized yield and format 'N.NN%'.
+
+    Accepts a number or a string with an optional trailing '%'. The value is
+    display-only: nothing schedules or trades from it.
+    """
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise RuntimeError('近期年化格式不正确。')
+    text = str(value).strip()
+    if text.endswith('%'):
+        text = text[:-1].strip()
+    try:
+        percent = Decimal(text)
+    except InvalidOperation:
+        raise RuntimeError('近期年化格式不正确。')
+    if not percent.is_finite() or percent < ANNUALIZED_MIN or percent > ANNUALIZED_MAX \
+            or percent.as_tuple().exponent < -2:
+        raise RuntimeError('近期年化须为 -100 到 1000 之间的数字，最多两位小数。')
+    return f'{percent:.2f}%'
 
 
 def quota_amount_text(value):
@@ -169,6 +194,12 @@ def _normalize_rows(raw):
                 and isinstance(title, str) and 1 <= len(title) <= TITLE_MAX):
             continue
         item = {'code': code, 'title': title}
+        annualized = row.get('recent_annualized')
+        if isinstance(annualized, (str, int, float)) and not isinstance(annualized, bool):
+            try:
+                item['recent_annualized'] = annualized_text(annualized)
+            except RuntimeError:
+                pass
         amount = row.get('test_amount')
         if not seen_test and isinstance(amount, (str, int, float)) \
                 and not isinstance(amount, bool):
@@ -258,8 +289,9 @@ def save_item(payload):
     """Upsert one favourite from an Agent/App settings payload.
 
     Keys are applied only when present, so a partial update keeps the rest:
-    `title` (new items require it), `test_amount` (null/'' clears this item
-    only), and `quota_times` (a full replacement list, `[]` clears it).
+    `title` (new items require it), `recent_annualized` (null/'' clears it),
+    `test_amount` (null/'' clears this item only), and `quota_times` (a full
+    replacement list, `[]` clears it).
     """
     if not isinstance(payload, dict):
         raise RuntimeError('收藏设置格式无效。')
@@ -280,6 +312,12 @@ def save_item(payload):
             raise RuntimeError('收藏数量已达上限。')
         match = {'code': code, 'title': title}
         rows.append(match)
+    if 'recent_annualized' in payload:
+        annualized = payload.get('recent_annualized')
+        if annualized is None or annualized == '':
+            match.pop('recent_annualized', None)
+        else:
+            match['recent_annualized'] = annualized_text(annualized)
     if 'quota_times' in payload:
         entries = _quota_list(payload.get('quota_times'))
         if entries:

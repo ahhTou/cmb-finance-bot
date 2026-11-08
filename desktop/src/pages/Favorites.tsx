@@ -19,6 +19,7 @@ import {
   quotaAmountText,
   quotaEntriesOf,
   quotaTimeText,
+  validAnnualized,
   validQuotaAmount,
   validQuotaDate,
   validQuotaTime,
@@ -47,6 +48,7 @@ interface QuotaDraftRow {
 
 interface SettingsDraft {
   row: Favorite
+  annualized: string
   testChecked: boolean
   testAmount: string
   quota: QuotaDraftRow[]
@@ -111,6 +113,9 @@ export function FavoritesPage() {
 
   const problems: string[] = []
   if (settings) {
+    if (!validAnnualized(settings.annualized)) {
+      problems.push('近期年化须为 -100 到 1000 之间的数字，最多两位小数，可带尾部 %。')
+    }
     if (settings.testChecked && !validAmount(settings.testAmount.trim())) {
       problems.push('测试金额须为大于 0 的数字，最多两位小数。')
     }
@@ -133,6 +138,7 @@ export function FavoritesPage() {
   function openSettings(row: Favorite) {
     setSettings({
       row,
+      annualized: row.recent_annualized ?? '',
       testChecked: Boolean(row.test_amount),
       testAmount: row.test_amount ?? '0.01',
       quota: quotaEntriesOf(row).map((entry) => quotaDraft(entry, newKey())),
@@ -169,6 +175,7 @@ export function FavoritesPage() {
     if (!draft || problems.length > 0) return
     const body: FavoriteSettingsRequest = {
       test_amount: draft.testChecked ? draft.testAmount.trim() : null,
+      recent_annualized: draft.annualized.trim() ? draft.annualized.trim() : null,
       quota_times: draft.quota.map(quotaPayload),
     }
     const ok = await action('保存收藏设置', () =>
@@ -245,6 +252,22 @@ export function FavoritesPage() {
             {/* -ml-[2px] + pl-[2px]：滚动容器会把横向溢出裁掉，给复选框 1px 外描边留出空间，
                 否则贴左边缘时左侧竖线和圆角会被切掉；负外边距保证内容仍与弹窗标题左对齐。 */}
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 pl-[2px] -ml-[2px]">
+              <section className="flex flex-col gap-2">
+                <h3 className="font-medium text-xs">产品信息</h3>
+                <div className="flex items-center gap-2">
+                  <Input
+                    data-testid="annualized-input"
+                    className="h-[32px] w-40"
+                    placeholder="如 2.85%"
+                    value={settings.annualized}
+                    disabled={busy}
+                    onChange={(event) => patchSettings({ annualized: event.target.value })}
+                  />
+                  <span className="text-[10px] text-muted">
+                    近期年化按百分比填写（如 2.85%），仅供参考，可以留空。
+                  </span>
+                </div>
+              </section>
               <section className="flex flex-col gap-2">
                 <h3 className="font-medium text-xs">测试项</h3>
                 <Checkbox
@@ -362,8 +385,19 @@ function FavoriteRow({
     <div className="flex flex-col gap-1.5 py-2">
       <div className="flex items-center gap-3">
         <div className="flex w-24 shrink-0 flex-col items-start gap-[3px]">
-          <span className="font-medium font-mono text-xs">{row.code}</span>
+          <span data-testid={`favorite-code-${row.code}`} className="font-medium font-mono text-xs">
+            {row.code}
+          </span>
           {row.test_amount && <TestTag amount={row.test_amount} testId={`test-tag-${row.code}`} />}
+          {row.recent_annualized && (
+            <span
+              data-testid={`annualized-${row.code}`}
+              title={`近期年化 ${row.recent_annualized}`}
+              className="max-w-[96px] truncate text-[9px] text-muted leading-tight"
+            >
+              近期年化 {row.recent_annualized}
+            </span>
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <Input
@@ -388,41 +422,45 @@ function FavoriteRow({
           删除
         </Button>
       </div>
-      <div data-testid={`quota-times-${row.code}`} className="pl-[108px]">
-        {entries.length === 0 ? (
-          <p className="text-[11px] text-muted">未设置额度时间</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {entries.map((entry, index) => (
-              <li
-                key={
-                  entry.id ?? `${entry.kind}-${entry.time}-${entry.date ?? entry.weekdays?.join('-') ?? ''}`
-                }
-                data-testid={`quota-entry-${row.code}-${index}`}
-                className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
-              >
-                <Badge tone={KIND_TONE[entry.kind]}>
-                  {entry.kind === 'issue' ? (
-                    <span className="flex items-center gap-1">
-                      <Star className="size-2.5 fill-current" strokeWidth={2.5} />
-                      {KIND_TEXT[entry.kind]}
+      {/* 与标题输入框左对齐：同样的左侧固定列宽 + 行内 gap，不贴齐产品代码。 */}
+      <div className="flex gap-3">
+        <div aria-hidden className="w-24 shrink-0" />
+        <div data-testid={`quota-times-${row.code}`} className="min-w-0 flex-1">
+          {entries.length === 0 ? (
+            <p className="text-[11px] text-muted">未设置额度时间</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {entries.map((entry, index) => (
+                <li
+                  key={
+                    entry.id ?? `${entry.kind}-${entry.time}-${entry.date ?? entry.weekdays?.join('-') ?? ''}`
+                  }
+                  data-testid={`quota-entry-${row.code}-${index}`}
+                  className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+                >
+                  <Badge tone={KIND_TONE[entry.kind]}>
+                    {entry.kind === 'issue' ? (
+                      <span className="flex items-center gap-1">
+                        <Star className="size-2.5 fill-current" strokeWidth={2.5} />
+                        {KIND_TEXT[entry.kind]}
+                      </span>
+                    ) : (
+                      KIND_TEXT[entry.kind]
+                    )}
+                  </Badge>
+                  <span className="tabular-nums">{quotaTimeText(entry)}</span>
+                  <span className="text-[#ebebeb]">{quotaAmountText(entry)}</span>
+                  {entry.note && (
+                    <span className="min-w-0 max-w-full truncate text-muted" title={entry.note}>
+                      {entry.note}
                     </span>
-                  ) : (
-                    KIND_TEXT[entry.kind]
                   )}
-                </Badge>
-                <span className="tabular-nums">{quotaTimeText(entry)}</span>
-                <span className="text-[#ebebeb]">{quotaAmountText(entry)}</span>
-                {entry.note && (
-                  <span className="min-w-0 max-w-full truncate text-muted" title={entry.note}>
-                    {entry.note}
-                  </span>
-                )}
-                {isQuotaExpired(entry) && <Badge tone="warn">已过期</Badge>}
-              </li>
-            ))}
-          </ul>
-        )}
+                  {isQuotaExpired(entry) && <Badge tone="warn">已过期</Badge>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )

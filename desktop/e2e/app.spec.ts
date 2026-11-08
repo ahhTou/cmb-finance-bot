@@ -328,6 +328,83 @@ test('favourite settings remove and clear quota times', async ({ page }) => {
   await expect(list).toContainText('未设置额度时间')
 })
 
+test('favourite row shows the recorded recent annualized yield', async ({ page }) => {
+  await open(page, '/favorites', 'idle')
+  const annualized = page.getByTestId('annualized-JX040229')
+  await expect(annualized).toHaveText('近期年化 2.85%')
+  await expect(annualized).toHaveAttribute('title', '近期年化 2.85%')
+})
+
+test('favourite recent annualized can be recorded and cleared in the settings dialog', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await expect(page.getByTestId('annualized-AB1234')).toBeHidden()
+
+  await page.getByTestId('favorite-settings-AB1234').click()
+  let dialog = page.getByTestId('favorite-settings-dialog')
+  await expect(dialog.getByTestId('annualized-input')).toHaveValue('')
+  await dialog.getByTestId('annualized-input').fill('3.1')
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('favorite-settings-dialog')).toBeHidden()
+  await expect(page.getByTestId('annualized-AB1234')).toHaveText('近期年化 3.10%')
+
+  await page.getByTestId('favorite-settings-AB1234').click()
+  dialog = page.getByTestId('favorite-settings-dialog')
+  await expect(dialog.getByTestId('annualized-input')).toHaveValue('3.10%')
+  await dialog.getByTestId('annualized-input').fill('')
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('favorite-settings-dialog')).toBeHidden()
+  await expect(page.getByTestId('annualized-AB1234')).toBeHidden()
+})
+
+test('invalid favourite recent annualized disables saving', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const dialog = page.getByTestId('favorite-settings-dialog')
+  const save = dialog.getByTestId('save-favorite-settings')
+  const input = dialog.getByTestId('annualized-input')
+
+  for (const value of ['abc', '3.123', '2000']) {
+    await input.fill(value)
+    await expect(save).toBeDisabled()
+    await expect(dialog).toContainText('近期年化须为 -100 到 1000 之间的数字，最多两位小数，可带尾部 %。')
+  }
+
+  await input.fill('-100')
+  await expect(save).toBeEnabled()
+  await input.fill('1000.00%')
+  await expect(save).toBeEnabled()
+  await input.fill('')
+  await expect(save).toBeEnabled()
+})
+
+test('favourite quota entries align with the title input', async ({ page }) => {
+  await open(page, '/favorites', 'idle')
+  const input = page.getByLabel('JX040229 标题')
+  const entry = page.getByTestId('quota-entry-JX040229-0')
+  await expect(entry).toBeVisible()
+  const inputBox = await input.boundingBox()
+  const entryBox = await entry.boundingBox()
+  if (!inputBox || !entryBox) throw new Error('missing alignment boxes')
+  expect(Math.abs(entryBox.x - inputBox.x)).toBeLessThanOrEqual(1)
+
+  // A favourite without quota times starts at the same left edge too.
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  const empty = page.getByTestId('quota-times-AB1234')
+  await expect(empty).toContainText('未设置额度时间')
+  const emptyInput = await page.getByLabel('AB1234 标题').boundingBox()
+  const emptyBox = await empty.boundingBox()
+  if (!emptyInput || !emptyBox) throw new Error('missing empty-state boxes')
+  expect(Math.abs(emptyBox.x - emptyInput.x)).toBeLessThanOrEqual(1)
+})
+
 test('real single buy needs the amount checkbox', async ({ page }) => {
   await open(page, '/drill', 'empty')
   await page.getByPlaceholder('如 JX040229').fill('JX040229')
