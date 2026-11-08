@@ -11,3 +11,4 @@ app/**/build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
+/analysis/
