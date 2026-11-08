@@ -1,6 +1,6 @@
 # Agent 执行手册
 
-最后更新：2026-11-07。
+最后更新：2026-11-08。
 
 这是本项目的操作手册。接手时先读 §0 和 §1，再按要做的事跳到对应流程：
 
@@ -31,6 +31,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 - **一笔交易只提交一次。** 结果不明时先查交易记录，绝不补单或重试提交。
 
 ## 1. 当前状态
+
+- **2026-11-08 收藏 v2：额度时间与设置弹窗**：收藏每项在「产品代码 + 标题」之外可记录额度时间列表，数据仍在 `var/favorites.json`（0600、原子替换、Git 忽略），单条收藏最多 50 条额度时间。每条额度时间：`kind` 为 `issue` / `bargain` / `regular`（首发 / 捡漏 / 常规）；`issue` 必填 `date`（`YYYY-MM-DD`）和 `time`（`HH:MM`），`bargain` / `regular` 必填 `weekdays`（ISO 1=周一…7=周日）和 `time`；`amount_wan` 以万为单位，缺省即「不定额度」；`note` 可选、≤100 字符。测试项语义不变：全表最多一项，仍是演练布防和单笔购买演练的默认参数（计划页快捷选择也可带入），不构成付款授权。服务端不计算过期，前端按本机时间判断：首发 Badge 带星标，时间已过显示「已过期」并继续展示。管理 App 收藏页每行显示只读额度时间列表，行内「设置」打开弹窗（勾测试项、填测试金额、增删改额度时间、选「不定额度」），保存走 `PUT /api/favorites/{code}`；Agent 可读 `favorites --list`，用 stdin JSON 调 `favorites --save`（`--add/--remove/--set-test/--clear-test/--test` 行为不变）。范围边界：额度时间只是记录与参考，未接入购买、值守或计划，本轮未执行真实交易；字段级规则（id、上限、报错文案）以 `src/favorites.py` 为准。验证：Python 全量 392 项通过（18 项跳过，为系统 Python 无 fastapi 的 server 用例），约 1.4 秒；`.venv/bin/python -m unittest tests.test_admin_server` 18 项通过；前端 `pnpm check`、`pnpm test`（54 项）、`pnpm build` 通过，`pnpm e2e` 88 项（WebKit + Chromium）通过；Tauri Release 构建通过，管理 App 已重建并重启（`var/push.log` 记录 `app_started 已发送`）。
 
 - **2026-11-07 管理 App 启动/退出推送**：推送新增「应用」组 `app_started` / `app_exited` 两个场景（总 25 类，默认开启、可单独关闭）。Tauri 壳启动时拉起 `src/push.py app-watch` 看门狗：先发「管理 App 已启动」，再阻塞读一条由壳持有的 stdin 管道；Cmd-Q、`pkill`、崩溃或 SIGKILL 都会让内核关闭写端，看门狗读到 EOF 后补发「管理 App 已退出」（含本次运行时长，失败按 2/5 秒最多重试 3 次），因此退出通知不依赖 `RunEvent::Exit`，也不阻塞退出；SIGTERM/SIGINT/SIGHUP 另作关机兜底。执行记录在 `var/push.log`，`pgrep -fl "push.py app-watch"` 可确认看门狗。验证：Python 全量 370 项通过（15 项跳过），`admin_server` 15 项通过；前端单元 33 项、e2e 80 项（WebKit + Chromium）、tsc、Biome（仅 1 个既有 warning）、Tauri Release 构建通过；重建重启 App 后 `var/push.log` 记录 `app_started 已发送`，`pkill` 退出后由看门狗补记 `app_exited 已发送`，再次启动正常；Cmd-Q 未直接实测（`osascript quit` 被 macOS 自动化权限拒绝），与 SIGTERM 同走管道 EOF。通知场景截图已重拍；真实手机端验收待账户持有人完成。
 

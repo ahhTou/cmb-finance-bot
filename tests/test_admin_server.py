@@ -223,6 +223,67 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['timeout'], 30)
         self.assertEqual(self.call('PUT', '/api/settings/other', json={'--yes': 1}).status_code, 400)
 
+    @patch('admin_server.subprocess.run')
+    def test_update_favorite_forwards_settings_to_cli(self, run):
+        run.return_value = done({'ok': True, 'favorites': [], 'test_item': None})
+        r = self.call('PUT', '/api/favorites/JX040229', json={
+            'test_amount': None, 'quota_times': []})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['favorites', '--save'])
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual(payload, {'code': 'JX040229', 'test_amount': None,
+                                   'quota_times': []})
+        # null 表示清除测试项；空表表示清空额度时间，两者都必须原样保留。
+        self.assertIn('test_amount', payload)
+        self.assertIsNone(payload['test_amount'])
+        self.assertEqual(payload['quota_times'], [])
+        self.assertNotIn('title', payload)
+
+    @patch('admin_server.subprocess.run')
+    def test_update_favorite_serializes_quota_times_and_optional_title(self, run):
+        run.return_value = done({'ok': True, 'favorites': [], 'test_item': None})
+        r = self.call('PUT', '/api/favorites/JX040229', json={
+            'quota_times': [
+                {'kind': 'issue', 'date': '2026-11-07', 'time': '09:00',
+                 'amount_wan': '5000', 'note': '首发'},
+                {'kind': 'bargain', 'weekdays': [1, 2], 'time': '00:15'},
+            ]})
+        self.assertEqual(r.status_code, 200)
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual(payload['code'], 'JX040229')
+        self.assertNotIn('title', payload)
+        self.assertNotIn('test_amount', payload)
+        issue, bargain = payload['quota_times']
+        self.assertEqual((issue['kind'], issue['date'], issue['time'],
+                          issue['amount_wan'], issue['note']),
+                         ('issue', '2026-11-07', '09:00', '5000', '首发'))
+        self.assertNotIn('id', issue)
+        self.assertEqual(bargain['kind'], 'bargain')
+        self.assertEqual(bargain['weekdays'], [1, 2])
+        self.assertNotIn('date', bargain)
+        self.assertNotIn('amount_wan', bargain)
+
+        self.call('PUT', '/api/favorites/JX040229', json={'title': '改名'})
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual(payload, {'code': 'JX040229', 'title': '改名'})
+        self.call('PUT', '/api/favorites/JX040229', json={'title': None})
+        payload = json.loads(run.call_args.kwargs['input'])
+        self.assertNotIn('title', payload)
+
+    @patch('admin_server.subprocess.run')
+    def test_update_favorite_rejects_invalid_quota_times(self, run):
+        run.return_value = done({'ok': True, 'favorites': [], 'test_item': None})
+        for entries in ([{'kind': 'daily', 'time': '09:00'}],
+                        [{'kind': 'issue'}],
+                        [{'kind': 'regular', 'time': '09:00',
+                          'amount_wan': 5000}]):
+            with self.subTest(entries=entries):
+                r = self.call('PUT', '/api/favorites/JX040229',
+                              json={'quota_times': entries})
+                self.assertEqual(r.status_code, 422)
+        run.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

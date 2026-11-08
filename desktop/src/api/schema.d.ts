@@ -384,6 +384,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/favorites/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Favorite
+         * @description Save one favourite's settings; only explicitly sent keys are applied.
+         */
+        put: operations["update_favorite_api_favorites__code__put"];
+        post?: never;
+        /** Remove Favorite */
+        delete: operations["remove_favorite_api_favorites__code__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/favorites/test": {
         parameters: {
             query?: never;
@@ -397,23 +418,6 @@ export interface paths {
         post: operations["set_favorite_test_api_favorites_test_post"];
         /** Clear Favorite Test */
         delete: operations["clear_favorite_test_api_favorites_test_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/favorites/{code}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Remove Favorite */
-        delete: operations["remove_favorite_api_favorites__code__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -605,6 +609,15 @@ export interface components {
              */
             title: string;
         };
+        /** FavoriteSettingsRequest */
+        FavoriteSettingsRequest: {
+            /** Title */
+            title?: string | null;
+            /** Test Amount */
+            test_amount?: string | null;
+            /** Quota Times */
+            quota_times?: components["schemas"]["QuotaTimeRequest"][] | null;
+        };
         /** FavoriteTestRequest */
         FavoriteTestRequest: {
             /** Code */
@@ -691,6 +704,29 @@ export interface components {
              * @default
              */
             token: string;
+        };
+        /** QuotaTimeRequest */
+        QuotaTimeRequest: {
+            /** Id */
+            id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "bargain" | "regular";
+            /** Date */
+            date?: string | null;
+            /** Time */
+            time: string;
+            /** Weekdays */
+            weekdays?: number[];
+            /** Amount Wan */
+            amount_wan?: string | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1428,6 +1464,72 @@ export interface operations {
             };
         };
     };
+    update_favorite_api_favorites__code__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FavoriteSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_favorite_api_favorites__code__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_favorite_test_api_favorites_test_post: {
         parameters: {
             query?: never;
@@ -1477,37 +1579,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    remove_favorite_api_favorites__code__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                code: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

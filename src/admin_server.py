@@ -127,6 +127,22 @@ class FavoriteTestRequest(BaseModel):
     amount: str
 
 
+class QuotaTimeRequest(BaseModel):
+    id: Optional[str] = None
+    kind: Literal['issue', 'bargain', 'regular']
+    date: Optional[str] = None
+    time: str
+    weekdays: List[int] = Field(default_factory=list)
+    amount_wan: Optional[str] = None
+    note: str = ''
+
+
+class FavoriteSettingsRequest(BaseModel):
+    title: Optional[str] = None
+    test_amount: Optional[str] = None
+    quota_times: Optional[List[QuotaTimeRequest]] = None
+
+
 class PatternRequest(BaseModel):
     new: str
 
@@ -335,6 +351,22 @@ def favorites():
 @app.post('/api/favorites')
 def add_favorite(body: FavoriteRequest):
     return run(['favorites', '--add', body.code, '--title', body.title])
+
+
+@app.put('/api/favorites/{code}')
+def update_favorite(code: str, body: FavoriteSettingsRequest):
+    """Save one favourite's settings; only explicitly sent keys are applied."""
+    payload = {'code': code}
+    if body.title is not None:
+        payload['title'] = body.title
+    if 'test_amount' in body.model_fields_set:
+        # An explicit null clears this item's test flag; omitted keeps it.
+        payload['test_amount'] = body.test_amount
+    if body.quota_times is not None:
+        payload['quota_times'] = [
+            entry.model_dump(exclude_none=True) for entry in body.quota_times
+        ]
+    return run(['favorites', '--save'], payload)
 
 
 # Declared before /api/favorites/{code}: a DELETE to /api/favorites/test must

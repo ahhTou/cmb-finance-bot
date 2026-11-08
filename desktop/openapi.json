@@ -698,6 +698,89 @@
     }
    }
   },
+  "/api/favorites/{code}": {
+   "put": {
+    "summary": "Update Favorite",
+    "description": "Save one favourite's settings; only explicitly sent keys are applied.",
+    "operationId": "update_favorite_api_favorites__code__put",
+    "parameters": [
+     {
+      "name": "code",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Code"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FavoriteSettingsRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Remove Favorite",
+    "operationId": "remove_favorite_api_favorites__code__delete",
+    "parameters": [
+     {
+      "name": "code",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Code"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/favorites/test": {
    "post": {
     "summary": "Set Favorite Test",
@@ -742,43 +825,6 @@
       "content": {
        "application/json": {
         "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/favorites/{code}": {
-   "delete": {
-    "summary": "Remove Favorite",
-    "operationId": "remove_favorite_api_favorites__code__delete",
-    "parameters": [
-     {
-      "name": "code",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Code"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
        }
       }
      }
@@ -1115,6 +1161,48 @@
     ],
     "title": "FavoriteRequest"
    },
+   "FavoriteSettingsRequest": {
+    "properties": {
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     },
+     "test_amount": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Test Amount"
+     },
+     "quota_times": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/components/schemas/QuotaTimeRequest"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Quota Times"
+     }
+    },
+    "type": "object",
+    "title": "FavoriteSettingsRequest"
+   },
    "FavoriteTestRequest": {
     "properties": {
      "code": {
@@ -1299,6 +1387,74 @@
      "topic"
     ],
     "title": "PushRequest"
+   },
+   "QuotaTimeRequest": {
+    "properties": {
+     "id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Id"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "issue",
+       "bargain",
+       "regular"
+      ],
+      "title": "Kind"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "time": {
+      "type": "string",
+      "title": "Time"
+     },
+     "weekdays": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Weekdays"
+     },
+     "amount_wan": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Amount Wan"
+     },
+     "note": {
+      "type": "string",
+      "title": "Note",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "time"
+    ],
+    "title": "QuotaTimeRequest"
    },
    "ValidationError": {
     "properties": {

@@ -52,6 +52,9 @@ export function scenario(): Scenario {
 
 const inMinutes = (minutes: number) => localISO(new Date(Date.now() + minutes * 60_000))
 
+/** Local YYYY-MM-DD relative to today; the demo 首发 stays in the past for good. */
+const dateAgo = (days: number) => localISO(new Date(Date.now() - days * 86_400_000)).slice(0, 10)
+
 const stamp = () => localISO(new Date()).slice(5).replace('T', ' ')
 
 /**
@@ -101,7 +104,29 @@ export const LOG_LINES = [
 ]
 
 export const FAVORITES: Favorite[] = [
-  { code: 'JX040229', title: '招睿丰和 30 天' },
+  {
+    code: 'JX040229',
+    title: '招睿丰和 30 天',
+    // Demo quota times (contract §5.4): one expired 首发, one 捡漏 and one 常规.
+    quota_times: [
+      {
+        id: 'q1a2b3c4d5',
+        kind: 'issue',
+        date: dateAgo(3),
+        time: '09:00',
+        amount_wan: '5000',
+        note: '首发 5000 万',
+      },
+      {
+        id: 'q6f7a8b9c0',
+        kind: 'bargain',
+        weekdays: [1, 2, 3, 4, 5, 6],
+        time: '00:15',
+        note: '额度不定',
+      },
+      { id: 'q0d1e2f3a4', kind: 'regular', weekdays: [1, 2, 3, 4], time: '09:00', amount_wan: '100' },
+    ],
+  },
   { code: '133045A', title: '日日金 1 号' },
   { code: 'GS110021', title: '季季宝' },
 ]

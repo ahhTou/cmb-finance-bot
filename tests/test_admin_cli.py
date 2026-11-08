@@ -191,6 +191,68 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIsNone(data['test_item'])
 
+    def test_favorites_save_reads_stdin_and_persists_settings(self):
+        payload = {
+            'code': 'JX040229', 'title': '标题', 'test_amount': '0.02',
+            'quota_times': [
+                {'id': 'q1a2b3c4d5', 'kind': 'issue', 'date': '2026-11-07',
+                 'time': '09:00', 'amount_wan': '5000', 'note': '首发 5000 万'},
+                {'kind': 'bargain', 'weekdays': [1, 2, 3, 4, 5, 6],
+                 'time': '00:15'},
+            ],
+        }
+        code, data = self.call('favorites', '--save', stdin=json.dumps(payload))
+        self.assertEqual(code, 0)
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['test_item'],
+                         {'code': 'JX040229', 'amount': '0.02', 'title': '标题'})
+        row = data['favorites'][0]
+        self.assertEqual((row['code'], row['title'], row['test_amount']),
+                         ('JX040229', '标题', '0.02'))
+        issue, bargain = row['quota_times']
+        self.assertEqual((issue['id'], issue['kind'], issue['date'],
+                          issue['time'], issue['amount_wan'],
+                          issue['note']),
+                         ('q1a2b3c4d5', 'issue', '2026-11-07', '09:00',
+                          '5000', '首发 5000 万'))
+        self.assertNotIn('weekdays', issue)
+        self.assertEqual(bargain['weekdays'], [1, 2, 3, 4, 5, 6])
+        self.assertNotIn('date', bargain)
+        self.assertRegex(bargain['id'], r'^q[a-f0-9]{10}$')
+        on_disk = json.loads((nw.STATE / 'favorites.json').read_text(encoding='utf-8'))
+        self.assertEqual(on_disk, data['favorites'])
+
+    def test_favorites_save_rejects_bad_input_without_writing(self):
+        for payload in ('not-json', '[]', '"text"', '5'):
+            with self.subTest(payload=payload):
+                code, data = self.call('favorites', '--save', stdin=payload)
+                self.assertEqual(code, 1)
+                self.assertEqual(data['error'], '收藏设置输入格式无效。')
+                self.assertFalse((nw.STATE / 'favorites.json').exists())
+        code, data = self.call('favorites', '--save', stdin=json.dumps({
+            'code': 'JX040229', 'title': '标题',
+            'quota_times': [{'kind': 'daily', 'time': '09:00'}]}))
+        self.assertEqual(code, 1)
+        self.assertEqual(data['error'], '额度时间类型不正确。')
+        self.assertNotIn('Traceback', json.dumps(data))
+        self.assertFalse((nw.STATE / 'favorites.json').exists())
+
+    def test_favorites_list_includes_quota_times(self):
+        (nw.STATE / 'favorites.json').write_text(json.dumps([{
+            'code': 'JX040229', 'title': '标题', 'quota_times': [
+                {'id': 'q1a2b3c4d5', 'kind': 'issue', 'date': '2026-11-07',
+                 'time': '09:00', 'amount_wan': '5000'},
+                {'kind': 'regular', 'weekdays': [1, 3], 'time': '09:00'},
+            ]}], ensure_ascii=False), encoding='utf-8')
+        code, data = self.call('favorites', '--list')
+        self.assertEqual(code, 0)
+        row = data['favorites'][0]
+        self.assertEqual([entry['kind'] for entry in row['quota_times']],
+                         ['issue', 'regular'])
+        self.assertEqual(row['quota_times'][0]['date'], '2026-11-07')
+        self.assertEqual(row['quota_times'][1]['weekdays'], [1, 3])
+        self.assertIsNone(data['test_item'])
+
     def test_credential_payload_not_echoed(self):
         code, data = self.call('set-login-pattern', stdin='invalid-sensitive-text')
         self.assertEqual(code, 1)

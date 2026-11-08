@@ -34,11 +34,39 @@ export interface Task {
   pid?: number
 }
 
+export type QuotaKind = 'issue' | 'bargain' | 'regular'
+
+/**
+ * One reference quota time from var/favorites-v2-contract.md §1; it never drives
+ * purchasing or watching. The server omits empty fields, so they are optional here.
+ */
+export interface QuotaTime {
+  id?: string
+  kind: QuotaKind
+  date?: string | null
+  time: string
+  weekdays?: number[]
+  amount_wan?: string | null
+  note?: string
+}
+
 export interface Favorite {
   code: string
   title?: string
   /** Set on the one test item; drills use this product and amount by default. */
   test_amount?: string | null
+  /** Reference-only quota times (首发 / 捡漏 / 常规). */
+  quota_times?: QuotaTime[]
+}
+
+/**
+ * PUT /api/favorites/{code}; hand-written like PlanStartRequest because the page
+ * sends only the keys it owns. `test_amount: null` clears, `quota_times: []` empties.
+ */
+export interface FavoriteSettingsRequest {
+  title?: string
+  test_amount?: string | null
+  quota_times?: QuotaTime[]
 }
 
 /** The saved product + amount drills fill in, from the favourites page. */

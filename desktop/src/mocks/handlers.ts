@@ -1,6 +1,19 @@
 import { delay, HttpResponse, http } from 'msw'
-import type { ArmRequest, CancelRequest, Favorite, Mode, Plan, PlanItem, PlanView, Task } from '../api/types'
-import { localISO, parseLocal } from '../lib/utils'
+import type {
+  ArmRequest,
+  CancelRequest,
+  Favorite,
+  FavoriteSettingsRequest,
+  Mode,
+  Plan,
+  PlanItem,
+  PlanView,
+  QuotaKind,
+  QuotaTime,
+  Task,
+} from '../api/types'
+import { MAX_QUOTA_TIMES } from '../lib/favorites'
+import { localISO, parseLocal, validAmount } from '../lib/utils'
 import {
   DEVICE,
   DRILL_SCRIPT,
@@ -36,6 +49,31 @@ const state = {
 }
 const active = () => ['armed', 'preparing', 'waiting', 'firing'].includes(state.task?.phase ?? '')
 const fail = (error: string, status = 400) => HttpResponse.json({ error }, { status })
+
+// Favourite settings (var/favorites-v2-contract.md §1/§4): the mock mirrors the
+// server's canonical rows — kept ids, full-list replacement, generated ids,
+// empty fields omitted, at most one test item.
+const quotaId = () => `q${Math.random().toString(16).slice(2, 12).padEnd(10, '0')}`
+
+function normalizeQuotaTime(entry: QuotaTime, used: Set<string>): QuotaTime {
+  const kind: QuotaKind =
+    entry.kind === 'issue' || entry.kind === 'bargain' || entry.kind === 'regular' ? entry.kind : 'regular'
+  const id = entry.id && /^[A-Za-z0-9_-]{1,24}$/.test(entry.id) && !used.has(entry.id) ? entry.id : quotaId()
+  used.add(id)
+  const normalized: QuotaTime = { id, kind, time: String(entry.time ?? '') }
+  if (kind === 'issue') normalized.date = String(entry.date ?? '')
+  else {
+    normalized.weekdays = [...new Set(entry.weekdays ?? [])]
+      .filter((day) => day >= 1 && day <= 7)
+      .sort((left, right) => left - right)
+  }
+  const amount = (entry.amount_wan ?? '').trim()
+  if (amount) normalized.amount_wan = amount
+  const note = (entry.note ?? '').trim()
+  if (note) normalized.note = note
+  return normalized
+}
+
 const status = () => ({
   ...makeStatus(state.task, state.favorites, state.logs),
   push_configured: state.push.configured,
@@ -335,6 +373,33 @@ export const handlers = [
   }),
   http.delete('/api/favorites/test', () => {
     for (const favorite of state.favorites) delete favorite.test_amount
+    return HttpResponse.json({ favorites: state.favorites, ok: true })
+  }),
+  // Settings dialog: partial update, test item moved/cleared, quota_times replaced.
+  http.put('/api/favorites/:code', async ({ request, params }) => {
+    const body = (await request.json()) as FavoriteSettingsRequest
+    const code = String(params.code)
+    const row = state.favorites.find((favorite) => favorite.code.toLowerCase() === code.toLowerCase())
+    if (!row) return fail('先收藏这个产品，再设置额度时间。')
+    if (typeof body.title === 'string' && body.title.trim()) row.title = body.title.trim()
+    if ('test_amount' in body) {
+      const amount = (body.test_amount ?? '').trim()
+      if (!amount) delete row.test_amount
+      else {
+        if (!validAmount(amount)) return fail('测试金额须为大于 0 的数字，最多两位小数。')
+        for (const favorite of state.favorites) delete favorite.test_amount
+        row.test_amount = amount
+      }
+    }
+    if ('quota_times' in body) {
+      const entries = body.quota_times
+      if (!Array.isArray(entries)) return fail('额度时间格式不正确。')
+      if (entries.length > MAX_QUOTA_TIMES) return fail('额度时间最多 50 条。')
+      const used = new Set<string>()
+      const normalized = entries.map((entry) => normalizeQuotaTime(entry, used))
+      if (normalized.length === 0) delete row.quota_times
+      else row.quota_times = normalized
+    }
     return HttpResponse.json({ favorites: state.favorites, ok: true })
   }),
   http.delete('/api/favorites/:code', ({ params }) => {

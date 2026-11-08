@@ -191,6 +191,7 @@ def parser():
     saved.add_argument('--test-amount')
     saved.add_argument('--clear-test', action='store_true')
     saved.add_argument('--test', action='store_true')
+    saved.add_argument('--save', action='store_true')
     return p
 
 
@@ -258,6 +259,15 @@ def dispatch(a):
     if a.cmd == 'plan-disarm': return watch_plan.disarm()
     if a.cmd == 'plan-clear': return watch_plan.clear()
     if a.cmd == 'favorites':
+        if a.save:
+            try:
+                data = json.loads(sys.stdin.read(65537))
+                if not isinstance(data, dict):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise nw.Abort('收藏设置输入格式无效。')
+            favorites.save_item(data)
+            return {'favorites': favorites.load(), 'test_item': favorites.test_item()}
         if a.add is not None:
             return {'favorites': favorites.add(a.add, a.title or ''),
                     'test_item': favorites.test_item()}

@@ -99,17 +99,24 @@ test('real arm accepts an amount above 60000', async ({ page }) => {
   await expect(dialog.getByTestId('confirm-check')).toBeVisible()
 })
 
+/** Local YYYY-MM-DD offset from today; the fixtures use the same idea for expired demos. */
+function localDate(daysFromToday: number) {
+  const date = new Date(Date.now() + daysFromToday * 86_400_000)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 test('favourites test item fills drills', async ({ page }) => {
   await open(page, '/favorites', 'empty')
   await page.getByPlaceholder('如 JX040229').fill('AB1234')
   await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
   await page.getByRole('button', { name: '添加', exact: true }).click()
-  await page.getByTestId('set-test-AB1234').click()
-  const config = page.getByRole('dialog')
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const config = page.getByTestId('favorite-settings-dialog')
+  await config.getByTestId('test-item-check').check()
   await config.getByTestId('test-amount-input').fill('0.02')
-  await config.getByRole('button', { name: '保存测试项' }).click()
+  await config.getByTestId('save-favorite-settings').click()
   await expect(page.getByTestId('test-tag-AB1234')).toHaveText('测试 ¥0.02')
-  await expect(page.getByTestId('set-test-AB1234')).toHaveText('修改测试')
 
   await page.getByRole('link', { name: '演练' }).click()
   await expect(page.getByTestId('favorite-AB1234')).toContainText('测试 ¥0.02')
@@ -126,10 +133,11 @@ test('test favourite chip fills code and amount in the arm form', async ({ page 
   await page.getByPlaceholder('如 JX040229').fill('AB1234')
   await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
   await page.getByRole('button', { name: '添加', exact: true }).click()
-  await page.getByTestId('set-test-AB1234').click()
-  const config = page.getByRole('dialog')
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const config = page.getByTestId('favorite-settings-dialog')
+  await config.getByTestId('test-item-check').check()
   await config.getByTestId('test-amount-input').fill('0.02')
-  await config.getByRole('button', { name: '保存测试项' }).click()
+  await config.getByTestId('save-favorite-settings').click()
   await expect(page.getByTestId('test-tag-AB1234')).toBeVisible()
 
   await page.getByRole('link', { name: '任务' }).click()
@@ -142,21 +150,24 @@ test('test favourite chip fills code and amount in the arm form', async ({ page 
   await expect(dialog.getByPlaceholder('如 5000')).toHaveValue('0.02')
 })
 
-test('favourites test item can be cleared from the dialog', async ({ page }) => {
+test('favourites test item can be cleared in the settings dialog', async ({ page }) => {
   await open(page, '/favorites', 'empty')
   await page.getByPlaceholder('如 JX040229').fill('AB1234')
   await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
   await page.getByRole('button', { name: '添加', exact: true }).click()
-  await page.getByTestId('set-test-AB1234').click()
-  const config = page.getByRole('dialog')
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const config = page.getByTestId('favorite-settings-dialog')
+  await config.getByTestId('test-item-check').check()
   await config.getByTestId('test-amount-input').fill('0.02')
-  await config.getByRole('button', { name: '保存测试项' }).click()
+  await config.getByTestId('save-favorite-settings').click()
   await expect(page.getByTestId('test-tag-AB1234')).toBeVisible()
+  await expect(config).toBeHidden()
 
-  await page.getByTestId('set-test-AB1234').click()
-  await page.getByRole('dialog').getByRole('button', { name: '取消测试' }).click()
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const reopened = page.getByTestId('favorite-settings-dialog')
+  await reopened.getByTestId('test-item-check').uncheck()
+  await reopened.getByTestId('save-favorite-settings').click()
   await expect(page.getByTestId('test-tag-AB1234')).toBeHidden()
-  await expect(page.getByTestId('set-test-AB1234')).toHaveText('设为测试')
 })
 
 test('favourite row actions fit the minimum window', async ({ page }) => {
@@ -170,8 +181,151 @@ test('favourite row actions fit the minimum window', async ({ page }) => {
   const box = await remove.boundingBox()
   if (!box) throw new Error('delete button has no box')
   expect(box.x + box.width).toBeLessThanOrEqual(940)
-  await expect(page.getByTestId('set-test-AB1234')).toBeVisible()
+  await expect(page.getByTestId('favorite-settings-AB1234')).toBeVisible()
   await expect(page.getByLabel('AB1234 标题')).toBeVisible()
+  await expect(page.getByTestId('quota-times-AB1234')).toContainText('未设置额度时间')
+
+  // The settings editor with one row also stays inside the minimum window.
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const dialog = page.getByTestId('favorite-settings-dialog')
+  await expect(dialog).toBeVisible()
+  await dialog.getByTestId('quota-add').click()
+  const saveButton = dialog.getByTestId('save-favorite-settings')
+  await expect(saveButton).toBeVisible()
+  const saveBox = await saveButton.boundingBox()
+  if (!saveBox) throw new Error('save button has no box')
+  expect(saveBox.x + saveBox.width).toBeLessThanOrEqual(940)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0)
+})
+
+test('favourite settings show kinds, expiry, quota amounts and notes', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const dialog = page.getByTestId('favorite-settings-dialog')
+  await dialog.getByTestId('quota-add').click()
+  await dialog.getByTestId('quota-add').click()
+  await dialog.getByTestId('quota-add').click()
+
+  // 1) An already expired 首发 with 5000 万.
+  await dialog.getByTestId('quota-kind-0').selectOption('issue')
+  await dialog.getByTestId('quota-date-0').fill(localDate(-3))
+  await dialog.getByTestId('quota-time-0').fill('09:00')
+  await dialog.getByTestId('quota-amount-unset-0').uncheck()
+  await dialog.getByTestId('quota-amount-0').fill('5000')
+  await dialog.getByTestId('quota-note-0').fill('首发 5000 万')
+
+  // 2) 捡漏 on 周一～周六 at 00:15 with an open amount.
+  await dialog.getByTestId('quota-kind-1').selectOption('bargain')
+  for (const day of [2, 3, 4, 5, 6]) await dialog.getByTestId(`quota-weekday-1-${day}`).click()
+  await dialog.getByTestId('quota-time-1').fill('00:15')
+
+  // 3) 常规 keeps the defaults (周一 09:00) and records 100 万.
+  await dialog.getByTestId('quota-amount-unset-2').uncheck()
+  await dialog.getByTestId('quota-amount-2').fill('100')
+
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(dialog).toBeHidden()
+
+  const list = page.getByTestId('quota-times-AB1234')
+  await expect(list.locator('li')).toHaveCount(3)
+  await expect(list).toContainText('首发')
+  await expect(list).toContainText('已过期')
+  await expect(list).toContainText('捡漏')
+  await expect(list).toContainText('常规')
+  await expect(list).toContainText('5000 万')
+  await expect(list).toContainText('不定额度')
+  await expect(list).toContainText('周一～周六 00:15')
+  await expect(list).toContainText('100 万')
+  await expect(list).toContainText('首发 5000 万')
+})
+
+test('setting another favourite moves the test item', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  for (const [code, title] of [
+    ['AB1234', '测试产品'],
+    ['CD5678', '第二产品'],
+  ]) {
+    await page.getByPlaceholder('如 JX040229').fill(code)
+    await page.getByPlaceholder('如 招睿丰和 30 天').fill(title)
+    await page.getByRole('button', { name: '添加', exact: true }).click()
+  }
+
+  await page.getByTestId('favorite-settings-AB1234').click()
+  let dialog = page.getByTestId('favorite-settings-dialog')
+  await dialog.getByTestId('test-item-check').check()
+  await dialog.getByTestId('test-amount-input').fill('0.02')
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('test-tag-AB1234')).toHaveText('测试 ¥0.02')
+
+  await page.getByTestId('favorite-settings-CD5678').click()
+  dialog = page.getByTestId('favorite-settings-dialog')
+  await dialog.getByTestId('test-item-check').check()
+  await expect(dialog).toContainText('当前测试项是 AB1234')
+  await dialog.getByTestId('test-amount-input').fill('0.05')
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('test-tag-CD5678')).toHaveText('测试 ¥0.05')
+  await expect(page.getByTestId('test-tag-AB1234')).toBeHidden()
+})
+
+test('invalid quota input disables saving settings', async ({ page }) => {
+  await open(page, '/favorites', 'empty')
+  await page.getByPlaceholder('如 JX040229').fill('AB1234')
+  await page.getByPlaceholder('如 招睿丰和 30 天').fill('测试产品')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByTestId('favorite-settings-AB1234').click()
+  const dialog = page.getByTestId('favorite-settings-dialog')
+  const save = dialog.getByTestId('save-favorite-settings')
+  await expect(save).toBeEnabled()
+  await dialog.getByTestId('quota-add').click()
+
+  // 首发 without a date cannot be saved.
+  await dialog.getByTestId('quota-kind-0').selectOption('issue')
+  await expect(save).toBeDisabled()
+  await expect(dialog).toContainText('请选择首发日期。')
+  await dialog.getByTestId('quota-date-0').fill(localDate(-1))
+  await expect(save).toBeEnabled()
+
+  await dialog.getByTestId('quota-add').click()
+  // A weekly entry needs at least one weekday.
+  await dialog.getByTestId('quota-weekday-1-1').click()
+  await expect(save).toBeDisabled()
+  await expect(dialog).toContainText('请至少选择一个星期。')
+  await dialog.getByTestId('quota-weekday-1-1').click()
+  await expect(save).toBeEnabled()
+
+  // 不定额度 off requires a positive amount with at most two decimals.
+  await dialog.getByTestId('quota-amount-unset-1').uncheck()
+  await expect(save).toBeDisabled()
+  await expect(dialog).toContainText('请填写额度数量。')
+  await dialog.getByTestId('quota-amount-1').fill('0.123')
+  await expect(save).toBeDisabled()
+  await dialog.getByTestId('quota-amount-1').fill('5000')
+  await expect(save).toBeEnabled()
+})
+
+test('favourite settings remove and clear quota times', async ({ page }) => {
+  await open(page, '/favorites', 'idle')
+  const list = page.getByTestId('quota-times-JX040229')
+  await expect(list.getByRole('listitem')).toHaveCount(3)
+
+  await page.getByTestId('favorite-settings-JX040229').click()
+  let dialog = page.getByTestId('favorite-settings-dialog')
+  await dialog.getByTestId('quota-remove-0').click()
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('favorite-settings-dialog')).toBeHidden()
+  await expect(list.getByRole('listitem')).toHaveCount(2)
+
+  await page.getByTestId('favorite-settings-JX040229').click()
+  dialog = page.getByTestId('favorite-settings-dialog')
+  await dialog.getByTestId('quota-remove-0').click()
+  await dialog.getByTestId('quota-remove-0').click()
+  await dialog.getByTestId('save-favorite-settings').click()
+  await expect(page.getByTestId('favorite-settings-dialog')).toBeHidden()
+  await expect(list.getByRole('listitem')).toHaveCount(0)
+  await expect(list).toContainText('未设置额度时间')
 })
 
 test('real single buy needs the amount checkbox', async ({ page }) => {
