@@ -242,7 +242,9 @@ export function FavoritesPage() {
       >
         {settings && (
           <div data-testid="favorite-settings-dialog" className="flex min-h-0 flex-1 flex-col gap-4">
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+            {/* -ml-[2px] + pl-[2px]：滚动容器会把横向溢出裁掉，给复选框 1px 外描边留出空间，
+                否则贴左边缘时左侧竖线和圆角会被切掉；负外边距保证内容仍与弹窗标题左对齐。 */}
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 pl-[2px] -ml-[2px]">
               <section className="flex flex-col gap-2">
                 <h3 className="font-medium text-xs">测试项</h3>
                 <Checkbox
