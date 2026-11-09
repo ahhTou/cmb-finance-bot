@@ -24,6 +24,22 @@ async function scrollbarsIn(root: Locator) {
   })
 }
 
+/**
+ * Opens /history and scrolls to the complete-history screen. The page is exactly
+ * two screens tall, so the second screen starts at one scroll-container height.
+ */
+async function openFullHistory(page: Page) {
+  await open(page, '/history')
+  await expect(page.getByTestId('history-scroll-hint')).toBeVisible()
+  await page.getByTestId('history-scroll-hint').click()
+  const full = page.getByTestId('history-full')
+  await expect(full).toBeInViewport({ ratio: 0.9 })
+  await expect
+    .poll(() => page.getByTestId('history-scroll').evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(100)
+  return full
+}
+
 test('sidebar switches pages and remembers the last one', async ({ page }) => {
   await open(page, '/tasks')
   await expect(page.getByRole('heading', { level: 1, name: '任务' })).toBeVisible()
@@ -474,12 +490,109 @@ test('favorites add, rename and fill the arm form', async ({ page }) => {
   await expect(page.getByRole('dialog').getByPlaceholder('如 JX040229')).toHaveValue('AB1234')
 })
 
-test('history lists records and shows details', async ({ page }) => {
+test('history opens on a two-screen recent overview', async ({ page }) => {
+  // The minimum window height is the tight case: both screens must still fit exactly.
+  await page.setViewportSize({ width: 940, height: 680 })
   await open(page, '/history')
-  await expect(page.getByText('窗口内无额度')).toBeHidden()
-  await page.getByRole('button', { name: /JX040229/ }).click()
-  await expect(page.getByText('窗口内无额度')).toBeVisible()
-  await expect(page.getByText('模拟器重启后恢复', { exact: false })).toBeVisible()
+  const overview = page.getByTestId('history-overview')
+  await expect(overview).toBeVisible()
+
+  // Recent real successes and failures, with rich card facts.
+  const success = overview.getByTestId('recent-success')
+  const failed = overview.getByTestId('recent-failed')
+  await expect(success).toContainText('135002A')
+  await expect(success).toContainText('提交成功')
+  await expect(success).toContainText('12.0 秒')
+  await expect(failed).toContainText('120084A')
+  await expect(failed).toContainText('购买失败：额度不足')
+  await expect(overview).toContainText('测试代码 133045A')
+
+  // Drills and the saved test item's product code stay off the overview.
+  await expect(success).not.toContainText('133045A')
+  await expect(failed).not.toContainText('133045A')
+  await expect(failed).not.toContainText('GS110021')
+
+  // Exactly two screens tall, no inner scrollbars on the first screen.
+  const scroller = page.getByTestId('history-scroll')
+  const metrics = await scroller.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }))
+  expect(metrics.clientHeight).toBeGreaterThan(300)
+  expect(Math.abs(metrics.scrollHeight - 2 * metrics.clientHeight)).toBeLessThanOrEqual(2)
+  expect(await scrollbarsIn(overview)).toEqual([])
+
+  // The bottom hint stays on the first screen and jumps to the complete history.
+  await expect(page.getByTestId('history-scroll-hint')).toBeInViewport()
+  await page.getByTestId('history-scroll-hint').click()
+  const full = page.getByTestId('history-full')
+  await expect(full).toBeInViewport({ ratio: 0.9 })
+  await expect(full.getByTestId('history-list').getByRole('listitem')).toHaveCount(10)
+})
+
+test('history metric cards filter the complete list', async ({ page }) => {
+  const full = await openFullHistory(page)
+  const list = full.getByTestId('history-list')
+  const rows = list.getByRole('listitem')
+
+  await full.getByTestId('filter-failed').click()
+  await expect(full.getByTestId('filter-failed')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rows).toHaveCount(3)
+  await expect(list).not.toContainText('135002A')
+  await expect(list).toContainText('JX040229')
+  await expect(full).toContainText('3 / 10 条')
+
+  // Clicking the active card again clears the filter.
+  await full.getByTestId('filter-failed').click()
+  await expect(full.getByTestId('filter-failed')).toHaveAttribute('aria-pressed', 'false')
+  await expect(rows).toHaveCount(10)
+
+  // The five cards partition the records: 4 success + 3 failed + 1 cancelled + 2 drills.
+  for (const [kind, count] of [
+    ['success', 4],
+    ['cancelled', 1],
+    ['dry_run', 2],
+  ] as const) {
+    await full.getByTestId(`filter-${kind}`).click()
+    await expect(rows).toHaveCount(count)
+    await full.getByTestId(`filter-${kind}`).click()
+  }
+  await full.getByTestId('filter-dry_run').click()
+  await expect(list).toContainText('演练')
+  await full.getByTestId('filter-all').click()
+  await expect(rows).toHaveCount(10)
+})
+
+test('history overview metric card jumps down with its filter applied', async ({ page }) => {
+  await open(page, '/history')
+  await page.getByTestId('overview-stat-success').click()
+  const full = page.getByTestId('history-full')
+  await expect(full).toBeInViewport({ ratio: 0.9 })
+  await expect(full.getByTestId('filter-success')).toHaveAttribute('aria-pressed', 'true')
+  const list = full.getByTestId('history-list')
+  await expect(list.getByRole('listitem')).toHaveCount(4)
+  // The complete list keeps the test-code record the overview filtered out.
+  await expect(list).toContainText('133045A')
+})
+
+test('history recent card opens that record in the complete history', async ({ page }) => {
+  await open(page, '/history')
+  await page
+    .getByTestId('recent-success')
+    .getByRole('button', { name: /135002A/ })
+    .click()
+  const detail = page.getByTestId('history-detail')
+  await expect(detail).toContainText('135002A')
+  await expect(detail).toContainText('提交成功')
+  await expect(page.getByTestId('history-full')).toBeInViewport({ ratio: 0.9 })
+})
+
+test('history lists records and shows details', async ({ page }) => {
+  const full = await openFullHistory(page)
+  await full.getByRole('button', { name: /JX040229/ }).click()
+  await expect(full.getByText('窗口内无额度')).toBeVisible()
+  await expect(full.getByText('模拟器重启后恢复', { exact: false })).toBeVisible()
+  await expect(full.getByTestId('history-detail')).toContainText('全程 14 分 16 秒')
 })
 
 test('inline log areas never scroll; the full log opens in a dialog', async ({ page }) => {
@@ -494,15 +607,17 @@ test('inline log areas never scroll; the full log opens in a dialog', async ({ p
   expect(await recent.locator('div').count()).toBe(6)
   expect(await scrollbarsIn(logCard)).toEqual([])
 
-  // 历史 → 值守日志 detail panel (screenshot 2): newest whole lines, no scrollbar.
-  await open(page, '/history')
-  await page.getByRole('button', { name: /JX040229/ }).click()
+  // 历史 → 完整历史屏的值守日志 detail panel (screenshot 2): newest whole lines, no scrollbar.
+  const full = await openFullHistory(page)
+  await full.getByRole('button', { name: /JX040229/ }).click()
   const detail = page.getByTestId('history-detail')
   const historyLog = detail.getByTestId('history-log')
   await expect(historyLog).toBeVisible()
   await expect(historyLog).toContainText('查询门控已挂起')
   expect(await historyLog.locator('div').count()).toBeGreaterThan(1)
-  expect(await scrollbarsIn(detail)).toEqual([])
+  // The log preview and the detail panel itself never scroll; the record list may.
+  expect(await scrollbarsIn(historyLog)).toEqual([])
+  expect(await detail.evaluate((el) => getComputedStyle(el).overflowY)).toBe('hidden')
 
   // Full log is still reachable through the dialog. The first cold WebKit run
   // can take several seconds to mount the Radix portal under parallel load;

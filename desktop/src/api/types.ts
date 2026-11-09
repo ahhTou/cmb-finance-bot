@@ -116,9 +116,12 @@ export interface SystemInfo {
 }
 
 export interface HistoryRecord extends Task {
+  task_id?: string
   ended_at?: string
   fired_at?: string
   result?: string | null
+  /** Terminal outcome written by plan mode: success / failed / dry_run / unknown. */
+  outcome?: 'success' | 'failed' | 'dry_run' | 'unknown' | null
   resumes?: { at?: string; by?: string; reason?: string }[]
 }
 

@@ -12,6 +12,17 @@ const shots = [
   ['app-plan', 'plan', '/plan'],
   ['app-status', 'idle', '/status'],
   ['app-drill', 'idle', '/drill'],
+  // History is two screens tall: the recent overview, then the complete list.
+  ['app-history', 'idle', '/history'],
+  [
+    'app-history-full',
+    'idle',
+    '/history',
+    async (page) => {
+      await page.getByTestId('history-scroll-hint').click()
+      await page.waitForTimeout(800)
+    },
+  ],
   ['app-settings', 'idle', '/settings'],
   // Dedicated notification tab, connection settings first.
   [
