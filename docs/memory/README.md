@@ -10,6 +10,7 @@
 - [界面截图](app-ui-screenshots.md)：`docs/images/` 的截图用 `pnpm screenshots` 在假后端上重拍，不跑真实 `arm`
 - [改完重启 App](restart-app-after-change.md)：改完前端或后端，没有值守时默认重建并重启管理 App
 - [两屏页面分页滚动](paged-scroll.md)：两屏页面（如历史页）累计约 100px 才整屏切换，不能跟手滚动
+- [页面保活](page-keep-alive.md)：切菜单后计划页的草稿、视图和滚动位置要保留；按页面在 `PAGES` 里配 `keepAlive`
 - [内嵌日志不滚动](inline-log-no-scroll.md)：最近日志/值守日志预览不要滚动条，完整日志在弹窗里看
 - [测试速度](test-speed.md)：测试可以写细，但不许耗时；单元测试必须隔离模拟器、网络和 adb
 

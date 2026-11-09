@@ -190,6 +190,37 @@ test('plan page switches between continuous timeline and a 7-day week', async ({
   expect(overflow.y).toBeLessThanOrEqual(0)
 })
 
+test('an unsaved plan draft survives switching sidebar menus', async ({ page }) => {
+  await open(page, '/plan', 'empty')
+  await addItem(page, 0, { code: 'JX040229', amount: '5000', at: at(40) })
+  // The view switch is page-local state too; both it and the draft must come back.
+  await page.getByRole('radio', { name: '周视图' }).click()
+  await expect(page.getByTestId('plan-week')).toBeVisible()
+
+  await page.getByRole('link', { name: '状态' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: '状态' })).toBeVisible()
+  // Kept pages are hidden with `display: none`, not just covered by the new page.
+  await expect(page.getByTestId('plan-week')).toBeHidden()
+
+  await page.getByRole('link', { name: '计划' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: '计划' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '周视图' })).toBeChecked()
+  await page.getByRole('radio', { name: '时间线' }).click()
+  await expect(page.getByTestId('plan-item-code-0')).toHaveValue('JX040229')
+  await expect(page.getByTestId('plan-item-amount-0')).toHaveValue('5000')
+})
+
+test('the tasks focus view keeps a kept page mounted behind it', async ({ page }) => {
+  await open(page, '/plan', 'armed')
+  await page.getByTestId('plan-add').click()
+  await page.getByTestId('plan-item-code-0').fill('JX040229')
+
+  await page.getByRole('link', { name: '任务' }).click()
+  await expect(page.getByTestId('live')).toBeVisible()
+  await page.getByRole('link', { name: '计划' }).click()
+  await expect(page.getByTestId('plan-item-code-0')).toHaveValue('JX040229')
+})
+
 test('finished plan keeps per-item results and can be copied into a draft', async ({ page }) => {
   await open(page, '/plan', 'plan-done')
   await expect(page.getByTestId('plan-status')).toContainText('已完成')

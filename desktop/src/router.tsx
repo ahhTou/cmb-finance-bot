@@ -10,7 +10,7 @@ import {
 } from '@tanstack/react-router'
 import { CalendarClock, FlaskConical, Gauge, History, Layers, RotateCw, Settings, Star } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { q, useRefreshPage, useStatusEvents, useWatch } from './api/hooks'
 import { Spinner } from './components/shared'
 import { Toast } from './components/Toast'
@@ -27,22 +27,68 @@ import { TasksPage } from './pages/Tasks'
 import { useUI } from './store'
 
 const PAGES = [
-  { path: '/tasks', title: '任务', icon: Layers, subtitle: '三种购买模式', component: TasksPage },
+  {
+    path: '/tasks',
+    title: '任务',
+    icon: Layers,
+    subtitle: '三种购买模式',
+    component: TasksPage,
+    keepAlive: false,
+  },
   {
     path: '/plan',
     title: '计划',
     icon: CalendarClock,
     subtitle: '计划模式 · 多个布防自动排程',
     component: PlanPage,
+    // Draft rows and the timeline/week switch live only in the page, so this menu
+    // must not be unmounted on the way out.
+    keepAlive: true,
   },
-  { path: '/status', title: '状态', icon: Gauge, subtitle: '运行环境与设备', component: DashboardPage },
-  { path: '/drill', title: '演练', icon: FlaskConical, subtitle: '测试命令与撤单', component: DrillPage },
-  { path: '/favorites', title: '收藏', icon: Star, subtitle: '常用产品代码', component: FavoritesPage },
-  { path: '/history', title: '历史', icon: History, subtitle: '完成情况与日志', component: HistoryPage },
-  { path: '/settings', title: '设置', icon: Settings, subtitle: '项目与凭据', component: SettingsPage },
+  {
+    path: '/status',
+    title: '状态',
+    icon: Gauge,
+    subtitle: '运行环境与设备',
+    component: DashboardPage,
+    keepAlive: false,
+  },
+  {
+    path: '/drill',
+    title: '演练',
+    icon: FlaskConical,
+    subtitle: '测试命令与撤单',
+    component: DrillPage,
+    keepAlive: false,
+  },
+  {
+    path: '/favorites',
+    title: '收藏',
+    icon: Star,
+    subtitle: '常用产品代码',
+    component: FavoritesPage,
+    keepAlive: false,
+  },
+  {
+    path: '/history',
+    title: '历史',
+    icon: History,
+    subtitle: '完成情况与日志',
+    component: HistoryPage,
+    keepAlive: false,
+  },
+  {
+    path: '/settings',
+    title: '设置',
+    icon: Settings,
+    subtitle: '项目与凭据',
+    component: SettingsPage,
+    keepAlive: false,
+  },
 ] as const
 
-type PagePath = (typeof PAGES)[number]['path']
+type PageDef = (typeof PAGES)[number]
+type PagePath = PageDef['path']
 const LAST_PAGE = 'last-page'
 
 function lastPage(): PagePath {
@@ -51,6 +97,35 @@ function lastPage(): PagePath {
     if (PAGES.some((p) => p.path === saved)) return saved as PagePath
   } catch {}
   return '/tasks'
+}
+
+/**
+ * One menu page is active at a time. A page marked `keepAlive` is mounted on its
+ * first visit and then only hidden while another menu is open, so its local state
+ * survives the round trip; every other page still unmounts and starts fresh.
+ * Page state belongs in the page component — opt in here instead of adding a store.
+ */
+function PageOutlet({ current }: { current: PageDef }) {
+  const [kept, setKept] = useState<PagePath[]>([])
+
+  useEffect(() => {
+    if (!current.keepAlive) return
+    setKept((paths) => (paths.includes(current.path) ? paths : [...paths, current.path]))
+  }, [current])
+
+  return (
+    <>
+      {PAGES.map((page) => {
+        const active = page.path === current.path
+        if (!active && !(page.keepAlive && kept.includes(page.path))) return null
+        return (
+          <div key={page.path} className={active ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+            <page.component />
+          </div>
+        )
+      })}
+    </>
+  )
 }
 
 function Layout() {
@@ -77,16 +152,15 @@ function Layout() {
     <div className="flex h-full">
       <Sidebar current={page.path} active={active} showBubble={active && !live} />
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg">
-        {live ? (
-          <LivePage />
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-[18px]">
-            <Header title={page.title} subtitle={page.subtitle} path={page.path} />
-            <div className="flex min-h-0 flex-1 flex-col pb-[26px]">
-              <page.component />
-            </div>
+        {/* The page stack stays mounted while the focus view is up, so coming back
+            from it never resets keep-alive pages. */}
+        <div className={live ? 'hidden' : 'flex min-h-0 flex-1 flex-col gap-[18px]'}>
+          <Header title={page.title} subtitle={page.subtitle} path={page.path} />
+          <div className="flex min-h-0 flex-1 flex-col pb-[26px]">
+            <PageOutlet current={page} />
           </div>
-        )}
+        </div>
+        {live && <LivePage />}
       </main>
       <Toast top={live ? 20 : 82} />
     </div>
