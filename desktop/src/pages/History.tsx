@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, History as HistoryIcon, PanelLeft } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction, useWatch } from '../api/hooks'
 import type { HistoryRecord } from '../api/types'
@@ -32,6 +32,9 @@ import {
 import { cn, copyText, phaseName, phaseTone, shortTime, type Tone, toneBg, toneText } from '../lib/utils'
 import { useUI } from '../store'
 
+/** Wheel/trackpad distance that flips to the next screen; smaller gestures must not move the page. */
+const WHEEL_TRIGGER_PX = 100
+
 /**
  * History is two screens tall by default: the first screen is a rich overview of
  * the latest real successes and failures (drills and the saved test item's code
@@ -58,6 +61,51 @@ export function HistoryPage() {
   const visible = useMemo(() => filterRecords(records, filter), [records, filter])
   const record = visible.find((row) => recordKey(row) === selectedKey) ?? visible[0]
   const lines = log?.lines ?? []
+
+  // The page is a virtual screen pair: wheel input never moves it continuously. Once
+  // about WHEEL_TRIGGER_PX has accumulated the page flips a whole screen; below that
+  // it stays still. Nested scrollable areas (the record list) keep natural scrolling.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    let acc = 0
+    let at = 0
+    const nestedScrolls = (target: EventTarget | null, direction: number) => {
+      let node = target instanceof HTMLElement ? target : null
+      while (node && node !== el) {
+        const style = getComputedStyle(node)
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          const max = node.scrollHeight - node.clientHeight
+          if (max > 1 && (direction < 0 ? node.scrollTop > 0 : node.scrollTop < max - 1)) return true
+        }
+        node = node.parentElement
+      }
+      return false
+    }
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return
+      const size = el.clientHeight
+      if (size <= 0 || Math.abs(event.deltaY) < 1) return
+      const direction = event.deltaY > 0 ? 1 : -1
+      if (nestedScrolls(event.target, direction)) return
+      event.preventDefault()
+      const now = performance.now()
+      // A pause starts a new gesture; momentum right after a flip is ignored by the clamp.
+      if (now - at > 320) acc = 0
+      at = now
+      const delta =
+        event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * size : event.deltaY
+      acc = Math.sign(acc) === direction ? acc + delta : delta
+      if (Math.abs(acc) < WHEEL_TRIGGER_PX) return
+      acc = 0
+      const from = el.scrollTop > size / 2 ? 1 : 0
+      const to = Math.min(1, Math.max(0, from + direction))
+      if (to === from) return
+      el.scrollTo({ top: to * size, behavior: 'smooth' })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   /** One screen = the scroll container's own height, so the second screen starts there. */
   const scrollToFull = () => {

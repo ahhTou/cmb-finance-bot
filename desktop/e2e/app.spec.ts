@@ -531,6 +531,36 @@ test('history opens on a two-screen recent overview', async ({ page }) => {
   await expect(full.getByTestId('history-list').getByRole('listitem')).toHaveCount(14)
 })
 
+test('history flips a whole screen only after the wheel threshold', async ({ page }) => {
+  await open(page, '/history')
+  const scroller = page.getByTestId('history-scroll')
+  const height = await scroller.evaluate((el) => el.clientHeight)
+  expect(height).toBeGreaterThan(300)
+
+  // Hover a blank spot on the first screen. A gesture below the 100px threshold
+  // must not move the page at all; it never follows the scroll.
+  await page.mouse.move(700, 200)
+  await page.mouse.wheel(0, 60)
+  await page.waitForTimeout(350)
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0)
+
+  // One gesture above the threshold flips exactly one screen.
+  await page.mouse.wheel(0, 150)
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(height)
+
+  // At the last screen there is nothing below it.
+  const filter = await page.getByTestId('filter-all').boundingBox()
+  if (!filter) throw new Error('filter card has no box')
+  await page.mouse.move(filter.x + 20, filter.y + 20)
+  await page.mouse.wheel(0, 400)
+  await page.waitForTimeout(350)
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(height)
+
+  // A full gesture up flips back to the first screen.
+  await page.mouse.wheel(0, -150)
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0)
+})
+
 test('history metric cards filter the complete list', async ({ page }) => {
   const full = await openFullHistory(page)
   const list = full.getByTestId('history-list')
