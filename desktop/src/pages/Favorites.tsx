@@ -1,10 +1,11 @@
+import { useQuery } from '@tanstack/react-query'
 import { Star } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
-import { useAction, useWatch } from '../api/hooks'
+import { q, useAction, useWatch } from '../api/hooks'
 import type { Favorite, FavoriteSettingsRequest, QuotaKind, QuotaTime } from '../api/types'
-import { TestTag } from '../components/shared'
+import { SuccessTag, TestTag } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint } from '../components/ui/card'
 import { Confirm, Dialog } from '../components/ui/dialog'
@@ -25,6 +26,7 @@ import {
   validQuotaTime,
   WEEKDAY_TEXT,
 } from '../lib/favorites'
+import { successCountByCode } from '../lib/history'
 import { cn, validAmount, validCode } from '../lib/utils'
 import { useUI } from '../store'
 
@@ -100,6 +102,11 @@ export function FavoritesPage() {
   const { favorites } = useWatch()
   const busy = useUI((s) => s.busy)
   const action = useAction()
+  const { data: history } = useQuery(q.history)
+  // Green `N 单` tags: successful submissions per product code, same rule as the
+  // history page (drills never count). History is a separate read, so a very old
+  // record beyond the API's 1000-row window is not counted.
+  const successCounts = useMemo(() => successCountByCode(history?.records ?? []), [history])
   const [code, setCode] = useState('')
   const [title, setTitle] = useState('')
   const [removing, setRemoving] = useState<string | null>(null)
@@ -229,6 +236,7 @@ export function FavoritesPage() {
                 >
                   <FavoriteRow
                     row={row}
+                    successCount={successCounts.get(row.code.toUpperCase()) ?? 0}
                     onRemove={() => setRemoving(row.code)}
                     onSettings={() => openSettings(row)}
                   />
@@ -237,7 +245,9 @@ export function FavoritesPage() {
             </AnimatePresence>
           </ul>
         )}
-        <p className="text-[10px] text-muted">测试项只是默认参数，实际付款仍要在确认页勾选金额。</p>
+        <p className="text-[10px] text-muted">
+          测试项只是默认参数，实际付款仍要在确认页勾选金额。绿色「N 单」是历史成功提交次数，演练不计入。
+        </p>
       </Card>
       <Dialog
         open={settings !== null}
@@ -369,10 +379,12 @@ export function FavoritesPage() {
 
 function FavoriteRow({
   row,
+  successCount,
   onRemove,
   onSettings,
 }: {
   row: Favorite
+  successCount: number
   onRemove: () => void
   onSettings: () => void
 }) {
@@ -388,6 +400,7 @@ function FavoriteRow({
           <span data-testid={`favorite-code-${row.code}`} className="font-medium font-mono text-xs">
             {row.code}
           </span>
+          {successCount > 0 && <SuccessTag count={successCount} testId={`success-tag-${row.code}`} />}
           {row.test_amount && <TestTag amount={row.test_amount} testId={`test-tag-${row.code}`} />}
           {row.recent_annualized && (
             <span

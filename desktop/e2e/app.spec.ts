@@ -122,6 +122,20 @@ function localDate(daysFromToday: number) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
+test('favourite code shows its historical success count', async ({ page }) => {
+  await open(page, '/favorites', 'idle')
+  // The demo history has one real successful submission on this favourite's code
+  // (the saved test item), and none for the others.
+  const tag = page.getByTestId('success-tag-133045A')
+  await expect(tag).toBeVisible()
+  await expect(tag).toHaveText('1 单')
+  await expect(page.getByTestId('favorite-code-133045A')).toBeVisible()
+  await expect(page.getByTestId('success-tag-JX040229')).toHaveCount(0)
+  await expect(page.getByTestId('success-tag-GS110021')).toHaveCount(0)
+  // Drills never count: GS110021 only has a 演练 record.
+  await expect(page.getByTestId('test-tag-133045A')).toBeVisible()
+})
+
 test('favourites test item fills drills', async ({ page }) => {
   await open(page, '/favorites', 'empty')
   await page.getByPlaceholder('如 JX040229').fill('AB1234')

@@ -72,6 +72,22 @@ export function outcomeOf(record: HistoryRecord): HistoryOutcome {
 }
 
 /**
+ * Successful submissions per product code (upper-case), for the green `N 单` tag
+ * on the favourites page. It uses the same classification as the history page, so
+ * drills never count; a real submission on the saved test item's code still does,
+ * because that order did reach the bank.
+ */
+export function successCountByCode(records: HistoryRecord[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const item of records) {
+    const code = item.code?.trim().toUpperCase()
+    if (!code || outcomeOf(item) !== 'success') continue
+    counts.set(code, (counts.get(code) ?? 0) + 1)
+  }
+  return counts
+}
+
+/**
  * A record the overview counts as a real task: drills (演练) never are, and the
  * saved favourite test item's product code is treated as a test code as well.
  */

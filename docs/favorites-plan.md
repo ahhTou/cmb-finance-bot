@@ -32,6 +32,12 @@
 - **2026-11-08 v2**：数据增加 `quota_times`（`issue` / `bargain` / `regular`；首发 `date` + `time`，周重复 `weekdays` + `time`；`amount_wan` 以万为单位、省略表示「不定额度」；`note`；单条收藏 ≤50 条），由 `save_item` 保存；CLI 增加 `favorites --save`（stdin JSON），HTTP 增加 `PUT /api/favorites/{code}`（管理 App 设置弹窗保存走它）；`test_amount` 和上面旧接口的语义不变。同日又加 `recent_annualized`（近期年化，参考值，规范化为 `N.NN%`，可空）和额度时间与标题输入框左对齐。细节见 `README.md` 和 `AGENT_WORKFLOW.md` §1。
 - App：2026-11-08 v2 起，每行用「设置」按钮打开设置弹窗，测试项（Checkbox + 金额）和额度时间都在弹窗里配置，保存走 `PUT /api/favorites/{code}`；保存后代码下方显示「测试 ¥…」Tag。布防（仅演练）和单笔购买演练打开时自动填入测试项；收藏快捷选择里的测试项带 Tag 并排在最前，点它同时填入产品和金额。计划页每个布防项也有收藏快捷选择，点测试项会同时填入产品代码和测试金额；计划项不做自动带入（一份计划有多项）。
 
+## 历史成功提交次数 Tag（2026-11-09）
+
+- 收藏页每行产品代码下方显示绿色「N 单」Tag：N 是该产品代码在历史记录里成功提交的订单数。
+- 统计在前端 `desktop/src/lib/history.ts` 的 `successCountByCode()`，复用历史页同一套结果分类：演练、失败、已取消、结果未知不计入，同一代码忽略大小写；没有成功记录时不显示。
+- 只读现有 `GET /api/history`；后端、CLI 与 `var/favorites.json` 均无改动。
+
 ## 不做
 
 - 收藏不存交易凭据或授权信息；只存测试金额和额度时间，且都不当作付款授权。

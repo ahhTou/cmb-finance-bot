@@ -115,6 +115,19 @@ export function TestTag({ amount, testId }: { amount: string; testId?: string })
   )
 }
 
+/** Green tag under a favourite's code: successful submissions found in history. */
+export function SuccessTag({ count, testId }: { count: number; testId?: string }) {
+  return (
+    <span
+      data-testid={testId}
+      title={`历史成功提交 ${count} 单`}
+      className="whitespace-nowrap rounded bg-good/15 px-1.5 py-[1px] font-medium text-[9px] text-good leading-none"
+    >
+      {count} 单
+    </span>
+  )
+}
+
 /** Compact chips that fill product code (and test amount) from saved favorites. */
 export function FavoritePicker({ onPick }: { onPick: (row: Favorite) => void }) {
   const { favorites } = useWatch()

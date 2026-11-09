@@ -17,6 +17,7 @@ import {
   resultText,
   resumeCount,
   sortNewest,
+  successCountByCode,
 } from './history'
 
 const record = (over: Partial<HistoryRecord>): HistoryRecord => ({
@@ -91,6 +92,30 @@ describe('real task filtering', () => {
     const sorted = sortNewest(rows)
     expect(sorted.map((row) => row.code)).toEqual(['135002A', '120084A'])
     expect(rows[0]).toBe(older)
+  })
+})
+
+describe('success counts per product', () => {
+  it('counts successful submissions per code, ignoring case and records without a code', () => {
+    const rows = [
+      record({ code: '135002A', outcome: 'success' }),
+      record({ code: '135002a', phase: 'done', result: '您的交易委托已接受' }),
+      record({ code: ' 135002A ', outcome: 'success' }),
+      record({ code: '120084A', outcome: 'failed' }),
+      record({ code: '120140A', phase: 'disarmed' }),
+      record({ code: 'GS110021', dry_run: true, outcome: 'dry_run' }),
+      record({ code: undefined, outcome: 'success' }),
+    ]
+    const counts = successCountByCode(rows)
+    expect(counts.get('135002A')).toBe(3)
+    expect(counts.get('120084A')).toBeUndefined()
+    expect(counts.get('120140A')).toBeUndefined()
+    expect(counts.get('GS110021')).toBeUndefined()
+    expect([...counts.keys()]).toEqual(['135002A'])
+  })
+
+  it('is empty without history', () => {
+    expect(successCountByCode([]).size).toBe(0)
   })
 })
 
