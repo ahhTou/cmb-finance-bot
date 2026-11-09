@@ -64,6 +64,14 @@ button:not(:disabled) {
   cursor: pointer;
 }
 
+/* History-style pages scroll like a virtual screen: no scrollbar, one screen per swipe. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

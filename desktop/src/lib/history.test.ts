@@ -12,7 +12,7 @@ import {
   modeText,
   outcomeOf,
   realRecords,
-  recentRecords,
+  recentTasks,
   recordKey,
   resultText,
   resumeCount,
@@ -69,15 +69,19 @@ describe('real task filtering', () => {
     expect(realRecords(records, testItem).map((row) => row.code)).toEqual(['135002A', '120084A'])
   })
 
-  it('lists recent successes and failures newest first, limited', () => {
-    const successes = [
+  it('lists the latest real successes and failures together, newest first', () => {
+    const rows = [
       record({ code: 'A', ended_at: '2026-11-01T09:00:00' }),
-      record({ code: 'B', ended_at: '2026-11-03T09:00:00' }),
+      record({ code: 'B', ended_at: '2026-11-03T09:00:00', phase: 'aborted' }),
       record({ code: 'C', ended_at: '2026-11-02T09:00:00' }),
-      record({ code: 'D', ended_at: '2026-11-04T09:00:00' }),
+      record({ code: 'D', ended_at: '2026-11-04T09:00:00', phase: 'aborted' }),
+      // Cancelled and drill records never make the first screen.
+      record({ code: 'E', ended_at: '2026-11-05T09:00:00', phase: 'disarmed' }),
+      record({ code: 'F', ended_at: '2026-11-06T09:00:00', dry_run: true, phase: 'done' }),
     ]
-    expect(recentRecords(successes, null, 'success').map((row) => row.code)).toEqual(['D', 'B', 'C'])
-    expect(recentRecords(successes, null, 'failed')).toEqual([])
+    expect(recentTasks(rows, null).map((row) => row.code)).toEqual(['D', 'B', 'C', 'A'])
+    expect(recentTasks(rows, null, 2).map((row) => row.code)).toEqual(['D', 'B'])
+    expect(recentTasks(rows, 'A')).toHaveLength(3)
   })
 
   it('sorts newest first without mutating the input', () => {

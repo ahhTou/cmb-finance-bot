@@ -24,7 +24,7 @@ import {
   outcomeTone,
   RECENT_LIMIT,
   realRecords,
-  recentRecords,
+  recentTasks,
   recordKey,
   resultText,
   resumeCount,
@@ -48,8 +48,7 @@ export function HistoryPage() {
   const records = useMemo(() => data?.records ?? [], [data])
   const testCode = testItem?.code ?? null
   const real = useMemo(() => realRecords(records, testCode), [records, testCode])
-  const successes = useMemo(() => recentRecords(records, testCode, 'success'), [records, testCode])
-  const failures = useMemo(() => recentRecords(records, testCode, 'failed'), [records, testCode])
+  const recent = useMemo(() => recentTasks(records, testCode), [records, testCode])
   const successCount = useMemo(() => real.filter((row) => outcomeOf(row) === 'success').length, [real])
   const failedCount = useMemo(() => real.filter((row) => outcomeOf(row) === 'failed').length, [real])
   const [filter, setFilter] = useState<HistoryFilter>('all')
@@ -66,10 +65,6 @@ export function HistoryPage() {
     el?.scrollTo({ top: el.clientHeight, behavior: 'smooth' })
   }
   const scrollToTop = () => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' })
-  const jumpToFilter = (kind: HistoryFilter) => {
-    setFilter(kind)
-    scrollToFull()
-  }
   const openRecord = (target: HistoryRecord) => {
     if (!matchFilter(target, filter)) setFilter('all')
     setSelectedKey(recordKey(target))
@@ -91,68 +86,43 @@ export function HistoryPage() {
       <div
         ref={scroller}
         data-testid="history-scroll"
-        className="h-full snap-y snap-mandatory overflow-x-hidden overflow-y-auto"
+        className="no-scrollbar h-full snap-y snap-mandatory overflow-x-hidden overflow-y-auto"
       >
         <section data-testid="history-overview" className="flex h-full snap-start flex-col gap-2.5 px-[26px]">
           <div className="flex shrink-0 items-end gap-3">
             <div className="flex min-w-0 flex-col gap-[3px]">
-              <h2 className="font-semibold text-[13px]">近期真实任务</h2>
+              <h2 className="font-semibold text-[13px]">近期布防</h2>
               <p className="truncate text-[10px] text-muted">
-                已过滤演练记录{testCode ? `与测试代码 ${testCode}` : ''} · 真实任务 {real.length} 条 · 已过滤{' '}
-                {records.length - real.length} 条
+                最近 {recent.length} 条真实布防 · 成功 {successCount} · 失败 {failedCount}
+                {records.length > real.length
+                  ? ` · 已过滤 ${records.length - real.length} 条演练/测试记录`
+                  : ''}
               </p>
             </div>
             <span className="flex-1" />
-            <span className="shrink-0 text-[10px] text-muted">首屏 · 近期成功与失败</span>
+            <span className="shrink-0 text-[10px] text-muted">首屏 · 成功与失败共 {RECENT_LIMIT} 条</span>
           </div>
-          <div className="grid shrink-0 grid-cols-3 gap-2.5">
-            <OverviewStat
-              testId="overview-stat-all"
-              title="真实任务"
-              value={real.length}
-              hint="全部真实记录"
-              pressed={false}
-              onClick={() => jumpToFilter('all')}
-            />
-            <OverviewStat
-              testId="overview-stat-success"
-              title="近期成功"
-              value={successCount}
-              hint="筛选成功的任务"
-              tone="good"
-              pressed={filter === 'success'}
-              onClick={() => jumpToFilter('success')}
-            />
-            <OverviewStat
-              testId="overview-stat-failed"
-              title="近期失败"
-              value={failedCount}
-              hint="筛选失败的任务"
-              tone="warn"
-              pressed={filter === 'failed'}
-              onClick={() => jumpToFilter('failed')}
-            />
-          </div>
-          <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-            <RecentColumn
-              testId="recent-success"
-              title="近期成功"
-              tone="good"
-              records={successes}
-              total={successCount}
-              emptyText="还没有成功的真实任务"
-              onOpen={openRecord}
-            />
-            <RecentColumn
-              testId="recent-failed"
-              title="近期失败"
-              tone="warn"
-              records={failures}
-              total={failedCount}
-              emptyText="最近没有失败的真实任务"
-              onOpen={openRecord}
-            />
-          </div>
+          {recent.length ? (
+            <ul data-testid="recent-list" className="grid min-h-0 flex-1 grid-cols-2 grid-rows-4 gap-2.5">
+              {recent.map((row) => (
+                <li key={recordKey(row)} className="flex min-h-0">
+                  <RecentCard
+                    record={row}
+                    tone={outcomeTone(outcomeOf(row))}
+                    onOpen={() => openRecord(row)}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+              <HistoryIcon className="size-5 text-muted" />
+              <span className="font-medium text-xs">还没有近期布防</span>
+              <span className="text-[10px] text-muted">
+                完成一次真实值守后会自动写入 var/night/history.jsonl。
+              </span>
+            </div>
+          )}
           <button
             type="button"
             data-testid="history-scroll-hint"
@@ -322,99 +292,6 @@ export function HistoryPage() {
       </div>
       <LogDialog open={showLog} onOpenChange={setShowLog} />
     </>
-  )
-}
-
-/** One overview metric card; clicking jumps to the full list with that filter. */
-function OverviewStat({
-  testId,
-  title,
-  value,
-  hint,
-  tone,
-  pressed,
-  onClick,
-}: {
-  testId: string
-  title: string
-  value: number
-  hint: string
-  tone?: Tone
-  pressed: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      aria-pressed={pressed}
-      title={hint}
-      onClick={onClick}
-      className={cn(
-        'relative flex flex-col gap-[3px] rounded-[10px] bg-card px-3 py-[9px] text-left transition-colors hover:bg-card-hover',
-        pressed && 'ring-1 ring-accent/60',
-      )}
-    >
-      <span className="text-[10px] text-muted">{title}</span>
-      <span
-        className={cn(
-          'font-rounded font-semibold text-[17px] tabular-nums',
-          tone ? toneText[tone] : 'text-[#ebebeb]',
-        )}
-      >
-        {value}
-      </span>
-      <span className="text-[9px] text-muted">{pressed ? '当前筛选' : hint}</span>
-    </button>
-  )
-}
-
-function RecentColumn({
-  testId,
-  title,
-  tone,
-  records,
-  total,
-  emptyText,
-  onOpen,
-}: {
-  testId: string
-  title: string
-  tone: Tone
-  records: HistoryRecord[]
-  total: number
-  emptyText: string
-  onOpen: (record: HistoryRecord) => void
-}) {
-  return (
-    <section data-testid={testId} className="flex min-h-0 flex-col gap-2 rounded-[14px] bg-card p-3">
-      <header className="flex shrink-0 items-center gap-2">
-        <span className={cn('size-1.5 shrink-0 rounded-full', toneBg[tone])} />
-        <h3 className="font-semibold text-xs">{title}</h3>
-        <span className="text-[10px] text-muted">最近 {RECENT_LIMIT} 条</span>
-        <span className="flex-1" />
-        <span className="text-[10px] text-muted">共 {total} 条</span>
-      </header>
-      {records.length ? (
-        <>
-          <ul className="flex min-h-0 flex-1 flex-col gap-2">
-            {records.map((record) => (
-              <li key={recordKey(record)} className="flex min-h-0 flex-1">
-                <RecentCard record={record} tone={tone} onOpen={() => onOpen(record)} />
-              </li>
-            ))}
-          </ul>
-          <p className="shrink-0 text-[9px] text-muted">按结束时间倒序；更早记录在下方完整历史中</p>
-        </>
-      ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-center">
-          <span className="font-medium text-[11px]">{emptyText}</span>
-          <span className="text-[10px] text-muted">
-            完成一次真实值守后会自动写入 var/night/history.jsonl。
-          </span>
-        </div>
-      )}
-    </section>
   )
 }
 

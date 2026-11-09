@@ -1,8 +1,8 @@
 import type { HistoryRecord } from '../api/types'
 import { formatAmount, parseLocal, str, type Tone } from './utils'
 
-/** How many cards each 近期成功 / 近期失败 column shows on the overview screen. */
-export const RECENT_LIMIT = 3
+/** How many recent real deployments the first screen shows (successes and failures together). */
+export const RECENT_LIMIT = 8
 
 /**
  * Metric cards on the complete-history screen are also the list's type filter.
@@ -93,14 +93,20 @@ export function sortNewest(records: HistoryRecord[]): HistoryRecord[] {
   return [...records].sort((a, b) => timeOf(b) - timeOf(a))
 }
 
-export function recentRecords(
+/**
+ * The first screen's 近期布防 list: the latest real tasks that either succeeded or
+ * failed, newest first, successes and failures mixed in one list.
+ */
+export function recentTasks(
   records: HistoryRecord[],
   testCode: string | null | undefined,
-  outcome: 'success' | 'failed',
   limit = RECENT_LIMIT,
 ): HistoryRecord[] {
   return sortNewest(realRecords(records, testCode))
-    .filter((record) => outcomeOf(record) === outcome)
+    .filter((record) => {
+      const outcome = outcomeOf(record)
+      return outcome === 'success' || outcome === 'failed'
+    })
     .slice(0, limit)
 }
 

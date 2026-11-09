@@ -497,29 +497,30 @@ test('history opens on a two-screen recent overview', async ({ page }) => {
   const overview = page.getByTestId('history-overview')
   await expect(overview).toBeVisible()
 
-  // Recent real successes and failures, with rich card facts.
-  const success = overview.getByTestId('recent-success')
-  const failed = overview.getByTestId('recent-failed')
-  await expect(success).toContainText('135002A')
-  await expect(success).toContainText('提交成功')
-  await expect(success).toContainText('12.0 秒')
-  await expect(failed).toContainText('120084A')
-  await expect(failed).toContainText('购买失败：额度不足')
-  await expect(overview).toContainText('测试代码 133045A')
+  // 近期布防 mixes the latest real successes and failures: 8 rich cards in total.
+  const recent = overview.getByTestId('recent-list')
+  await expect(recent.getByRole('listitem')).toHaveCount(8)
+  await expect(recent).toContainText('135002A')
+  await expect(recent).toContainText('120084A')
+  await expect(recent).toContainText('购买失败：额度不足')
+  await expect(recent).toContainText('成功')
+  await expect(recent).toContainText('失败')
+  await expect(overview).toContainText('成功 5 · 失败 5')
 
-  // Drills and the saved test item's product code stay off the overview.
-  await expect(success).not.toContainText('133045A')
-  await expect(failed).not.toContainText('133045A')
-  await expect(failed).not.toContainText('GS110021')
+  // Drills and the saved test item's product code stay off the first screen.
+  await expect(recent).not.toContainText('133045A')
+  await expect(recent).not.toContainText('GS110021')
 
-  // Exactly two screens tall, no inner scrollbars on the first screen.
+  // Exactly two screens tall, no page scrollbar and no inner scrollbars on screen 1.
   const scroller = page.getByTestId('history-scroll')
   const metrics = await scroller.evaluate((el) => ({
     scrollHeight: el.scrollHeight,
     clientHeight: el.clientHeight,
+    scrollbarWidth: getComputedStyle(el).scrollbarWidth,
   }))
   expect(metrics.clientHeight).toBeGreaterThan(300)
   expect(Math.abs(metrics.scrollHeight - 2 * metrics.clientHeight)).toBeLessThanOrEqual(2)
+  expect(metrics.scrollbarWidth).toBe('none')
   expect(await scrollbarsIn(overview)).toEqual([])
 
   // The bottom hint stays on the first screen and jumps to the complete history.
@@ -527,7 +528,7 @@ test('history opens on a two-screen recent overview', async ({ page }) => {
   await page.getByTestId('history-scroll-hint').click()
   const full = page.getByTestId('history-full')
   await expect(full).toBeInViewport({ ratio: 0.9 })
-  await expect(full.getByTestId('history-list').getByRole('listitem')).toHaveCount(10)
+  await expect(full.getByTestId('history-list').getByRole('listitem')).toHaveCount(14)
 })
 
 test('history metric cards filter the complete list', async ({ page }) => {
@@ -537,19 +538,19 @@ test('history metric cards filter the complete list', async ({ page }) => {
 
   await full.getByTestId('filter-failed').click()
   await expect(full.getByTestId('filter-failed')).toHaveAttribute('aria-pressed', 'true')
-  await expect(rows).toHaveCount(3)
+  await expect(rows).toHaveCount(5)
   await expect(list).not.toContainText('135002A')
   await expect(list).toContainText('JX040229')
-  await expect(full).toContainText('3 / 10 条')
+  await expect(full).toContainText('5 / 14 条')
 
   // Clicking the active card again clears the filter.
   await full.getByTestId('filter-failed').click()
   await expect(full.getByTestId('filter-failed')).toHaveAttribute('aria-pressed', 'false')
-  await expect(rows).toHaveCount(10)
+  await expect(rows).toHaveCount(14)
 
-  // The five cards partition the records: 4 success + 3 failed + 1 cancelled + 2 drills.
+  // The five cards partition the records: 6 success + 5 failed + 1 cancelled + 2 drills.
   for (const [kind, count] of [
-    ['success', 4],
+    ['success', 6],
     ['cancelled', 1],
     ['dry_run', 2],
   ] as const) {
@@ -557,28 +558,20 @@ test('history metric cards filter the complete list', async ({ page }) => {
     await expect(rows).toHaveCount(count)
     await full.getByTestId(`filter-${kind}`).click()
   }
+  await full.getByTestId('filter-success').click()
+  // The complete list keeps the test-code record the overview filtered out.
+  await expect(list).toContainText('133045A')
+  await full.getByTestId('filter-success').click()
   await full.getByTestId('filter-dry_run').click()
   await expect(list).toContainText('演练')
   await full.getByTestId('filter-all').click()
-  await expect(rows).toHaveCount(10)
-})
-
-test('history overview metric card jumps down with its filter applied', async ({ page }) => {
-  await open(page, '/history')
-  await page.getByTestId('overview-stat-success').click()
-  const full = page.getByTestId('history-full')
-  await expect(full).toBeInViewport({ ratio: 0.9 })
-  await expect(full.getByTestId('filter-success')).toHaveAttribute('aria-pressed', 'true')
-  const list = full.getByTestId('history-list')
-  await expect(list.getByRole('listitem')).toHaveCount(4)
-  // The complete list keeps the test-code record the overview filtered out.
-  await expect(list).toContainText('133045A')
+  await expect(rows).toHaveCount(14)
 })
 
 test('history recent card opens that record in the complete history', async ({ page }) => {
   await open(page, '/history')
   await page
-    .getByTestId('recent-success')
+    .getByTestId('recent-list')
     .getByRole('button', { name: /135002A/ })
     .click()
   const detail = page.getByTestId('history-detail')
