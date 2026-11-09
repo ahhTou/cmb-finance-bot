@@ -318,6 +318,22 @@ def _send_app_exit(sleep, uptime_seconds):
     _log_lifecycle("app_exited", result)
 
 
+def _pause_plan_after_app_exit():
+    """Best-effort: let a running plan pause after its current item.
+
+    The management App is gone, so the plan would otherwise keep arming items
+    unattended. The import is delayed (watch_plan imports night_watch which
+    imports push) and nothing here may affect the exit notification or the
+    watchdog's exit: any failure is only one diagnostic line in push.log.
+    """
+    try:
+        import watch_plan
+        watch_plan.pause_after_app_exit()
+    except Exception as exc:
+        print(f"{_stamp()} 计划自动暂停请求失败：{type(exc).__name__}",
+              file=sys.stderr, flush=True)
+
+
 def _raise_app_exit(signum, frame):
     raise AppExitTriggered()
 
@@ -373,6 +389,10 @@ def app_watch(stream=None, sleep=None):
         _restore_exit_handlers(previous)
 
     _send_app_exit(sleep, time.monotonic() - started_at)
+    try:
+        _pause_plan_after_app_exit()
+    except Exception:
+        pass        # 诊断已在 helper 内写过；退出通知与退出码不受影响
     return 0
 
 

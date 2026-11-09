@@ -13,6 +13,7 @@ SETTINGS = Path(__file__).resolve().parents[1] / "var/night/plan-settings.json"
 
 DEFAULTS = {
     "health_timeout_minutes": 15,  # 布防前健康检查最长等待（分钟）
+    "health_monitor_seconds": 300,  # 计划运行期健康检查间隔（秒）
     "arm_gap_minutes": 2,          # 下一项冷启动至少比上一项结束晚多久
     "first_end_slack_minutes": 2,  # 首发预计结束后再留的提交余量
     "end_timeout_minutes": 5,      # 单项超过预计结束多久就停止
@@ -25,6 +26,7 @@ DEFAULTS = {
 
 LIMITS = {
     "health_timeout_minutes": (1, 60),
+    "health_monitor_seconds": (60, 3600),
     "arm_gap_minutes": (0, 60),
     "first_end_slack_minutes": (0, 60),
     "end_timeout_minutes": (1, 120),

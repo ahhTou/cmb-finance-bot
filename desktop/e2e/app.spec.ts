@@ -676,6 +676,9 @@ test('settings other tab edits plan scheduler values', async ({ page }) => {
   await open(page, '/settings')
   await page.getByRole('radio', { name: '其他' }).click()
   await expect(page.getByTestId('other-settings')).toBeVisible()
+  // Plan-mode health values live next to the monitor fields, with the same defaults as Python.
+  await expect(page.getByLabel('健康检查最长等待')).toHaveValue('15')
+  await expect(page.getByLabel('运行期健康检查间隔')).toHaveValue('300')
   const poll = page.getByLabel('轮询间隔')
   await poll.fill('3')
   await page.getByTestId('other-save').click()

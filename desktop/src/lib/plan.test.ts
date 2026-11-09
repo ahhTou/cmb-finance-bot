@@ -58,10 +58,12 @@ describe('item states', () => {
     expect(planPhaseName(null)).toBe('未计划')
     expect(planPhaseName('idle')).toBe('待开始')
     expect(planPhaseName('running')).toBe('运行中')
+    expect(planPhaseName('paused')).toBe('已暂停')
     expect(planPhaseName('done')).toBe('已完成')
     expect(planPhaseName('aborted')).toBe('已中止')
     expect(planPhaseName('disarmed')).toBe('已取消')
     expect(planPhaseTone('running')).toBe('accent')
+    expect(planPhaseTone('paused')).toBe('warn')
     expect(planPhaseTone('done')).toBe('good')
     expect(planPhaseTone('aborted')).toBe('warn')
     expect(planPhaseTone(null)).toBe('muted')
@@ -80,6 +82,7 @@ describe('status model', () => {
     expect(statusPrimaryTone({ primary: 'done', secondary: 'success' })).toBe('good')
     expect(statusPrimaryTone({ primary: 'failed', secondary: 'purchase_failed' })).toBe('warn')
     expect(statusSecondaryName({ primary: 'failed', secondary: 'result_unknown' })).toBe('结果未知')
+    expect(statusSecondaryName({ primary: 'pending', secondary: 'paused' })).toBe('已暂停')
   })
 
   it('falls back to expired for a pending item whose time passed', () => {
@@ -104,6 +107,11 @@ describe('status model', () => {
     expect(planStatus(plan([], { phase: 'disarmed' }), now)).toMatchObject({
       primary: 'cancelled',
       secondary: 'manual_cancel',
+    })
+    expect(planStatus(plan([], { phase: 'paused' }), now)).toMatchObject({
+      primary: 'pending',
+      secondary: 'paused',
+      description: '计划已暂停',
     })
   })
 })

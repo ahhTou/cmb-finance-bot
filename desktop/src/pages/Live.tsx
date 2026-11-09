@@ -7,6 +7,7 @@ import { q, useAction, useWatch } from '../api/hooks'
 import { ChainProgress } from '../components/ChainProgress'
 import { Button } from '../components/ui/button'
 import { Confirm } from '../components/ui/dialog'
+import { useWindowActive } from '../lib/focus'
 import { readProgress } from '../lib/progress'
 import { clockTime, cn, parseLocal, phaseName, phaseTone, shortTime, toneBg } from '../lib/utils'
 import { useUI } from '../store'
@@ -14,11 +15,15 @@ import { useUI } from '../store'
 /** Countdown to the sale (or to the end of the redemption window), ticking four times a second. */
 export function useCountdown() {
   const w = useWatch()
+  const active = useWindowActive()
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 250)
+    // Refocusing refreshes the countdown at once; in the background a minute is
+    // plenty (nobody is looking) and one tick per minute costs no measurable CPU.
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), active ? 250 : 60_000)
     return () => clearInterval(timer)
-  }, [])
+  }, [active])
   const task = w.task ?? {}
   const redemption = task.mode === 'redemption'
   const target =
@@ -48,11 +53,20 @@ export function useCountdown() {
 /** Solid panel over the animated background. */
 const panel = (boxShadow: string) => ({ boxShadow, background: '#191919' })
 
-function PhaseDot({ phase, size = 7 }: { phase: string; size?: number }) {
+function PhaseDot({ phase, active = true, size = 7 }: { phase: string; active?: boolean; size?: number }) {
   return (
-    <span className="relative flex shrink-0" style={{ width: size, height: size }}>
+    <span
+      data-testid="phase-dot"
+      data-active={active ? 'true' : 'false'}
+      className="relative flex shrink-0"
+      style={{ width: size, height: size }}
+    >
       <span
-        className={cn('absolute inset-0 animate-ping rounded-full opacity-60', toneBg[phaseTone(phase)])}
+        className={cn(
+          'absolute inset-0 rounded-full opacity-60',
+          active && 'animate-ping',
+          toneBg[phaseTone(phase)],
+        )}
       />
       <span className={cn('relative size-full rounded-full', toneBg[phaseTone(phase)])} />
     </span>
@@ -67,6 +81,7 @@ export function LivePage() {
   // The countdown ticks four times a second; keep that re-render inside
   // <CountdownLine> so the log stream and chain rail only render on new data.
   const w = useWatch()
+  const active = useWindowActive()
   const task = w.task ?? {}
   const redemption = task.mode === 'redemption'
   const busy = useUI((s) => s.busy)
@@ -83,18 +98,19 @@ export function LivePage() {
   return (
     <motion.div
       data-testid="live"
-      initial={{ opacity: 0 }}
+      data-window-active={active ? 'true' : 'false'}
+      initial={active ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
-      transition={{ duration: 0.3 }}
+      transition={{ duration: active ? 0.3 : 0 }}
       className="relative flex h-full flex-col overflow-hidden bg-bg"
     >
-      <CodeRain />
-      <Waves phase={w.phase} />
-      <LogStream lines={lines} first={(log?.total ?? 0) - lines.length} />
+      <CodeRain active={active} />
+      <Waves phase={w.phase} active={active} />
+      <LogStream lines={lines} first={(log?.total ?? 0) - lines.length} active={active} />
       {/* The whole top band drags the window; the bar under it only shows text. */}
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-[72px]" />
       <div className="pointer-events-none relative z-10 flex items-center gap-3 px-[30px] pt-6">
-        <PhaseDot phase={w.phase} />
+        <PhaseDot phase={w.phase} active={active} />
         <span className="font-semibold text-[13px]">{phaseName(w.phase)}</span>
         <span className="rounded-full bg-[#383838]/80 px-2 py-[3px] font-medium text-[10px] text-muted">
           {redemption ? '不定时抢购' : '首发模式'}
@@ -109,18 +125,18 @@ export function LivePage() {
           上次刷新 {lastRefresh ? clockTime(lastRefresh) : '尚未刷新'}
         </span>
       </div>
-      <ChainProgress progress={progress} />
+      <ChainProgress progress={progress} active={active} />
       <div className="relative z-10 flex flex-1 items-center justify-center px-[30px] pb-6">
         <motion.section
-          initial={{ opacity: 0, y: 16 }}
+          initial={active ? { opacity: 0, y: 16 } : false}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: [0.2, 0.8, 0.2, 1] }}
+          transition={{ duration: active ? 0.4 : 0, ease: [0.2, 0.8, 0.2, 1] }}
           className="flex w-full max-w-[680px] flex-col gap-[18px] rounded-[20px] p-[26px] ring-[0.6px] ring-white/15"
           style={panel(
             '0 30px 90px rgb(0 0 0 / 0.8), 0 10px 28px rgb(0 0 0 / 0.55), 0 0 120px rgb(224 66 82 / 0.2)',
           )}
         >
-          <CountdownLine />
+          <CountdownLine active={active} />
           <div className="h-[0.6px] bg-white/15" />
           <div className="flex items-end gap-[34px]">
             <Stat title="产品" value={task.code ?? '—'} />
@@ -158,16 +174,17 @@ export function LivePage() {
 /** Running task at the bottom of the sidebar, shown on other pages; a click goes back to the focus view. */
 export function WatchBubble() {
   const navigate = useNavigate()
+  const active = useWindowActive()
   const { w, task, text, hint } = useCountdown()
   return (
     <motion.button
       type="button"
       data-testid="watch-bubble"
       aria-label={`${phaseName(w.phase)} ${task.code ?? ''}，${hint} ${text}，回到值守页`}
-      initial={{ opacity: 0, y: 6 }}
+      initial={active ? { opacity: 0, y: 6 } : false}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 6 }}
-      transition={{ duration: 0.18 }}
+      exit={active ? { opacity: 0, y: 6 } : undefined}
+      transition={{ duration: active ? 0.18 : 0 }}
       onClick={() => navigate({ to: '/tasks' })}
       className="flex w-full flex-col gap-1.5 rounded-xl p-3 text-left ring-[0.6px] ring-white/12 transition-colors hover:ring-accent/50"
       style={panel(
@@ -175,7 +192,7 @@ export function WatchBubble() {
       )}
     >
       <span className="flex items-center gap-2 text-[11px] text-muted">
-        <PhaseDot phase={w.phase} />
+        <PhaseDot phase={w.phase} active={active} />
         <span className="truncate">
           {phaseName(w.phase)} · {task.code ?? '—'}
         </span>
@@ -186,18 +203,22 @@ export function WatchBubble() {
   )
 }
 
-function CountdownLine() {
+function CountdownLine({ active }: { active: boolean }) {
   const { text, hint } = useCountdown()
   return (
     <div className="flex items-baseline gap-3.5">
-      <Countdown text={text} />
+      <Countdown text={text} active={active} />
       <span className="text-muted text-xs">{hint}</span>
     </div>
   )
 }
 
-/** Each character slides up when it changes, like a split-flap counter. */
-function Countdown({ text }: { text: string }) {
+/**
+ * Each character slides up when it changes, like a split-flap counter. While the
+ * window is in the background the digits are plain text: no AnimatePresence, no
+ * spring, and the countdown only updates once a minute.
+ */
+function Countdown({ text, active }: { text: string; active: boolean }) {
   return (
     <span
       data-testid="countdown"
@@ -211,18 +232,22 @@ function Countdown({ text }: { text: string }) {
           key={`${text.length}-${index}`}
           className="relative inline-block overflow-hidden"
         >
-          <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span
-              key={char}
-              className="inline-block"
-              initial={{ y: '60%', opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: '-60%', opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-            >
-              {char}
-            </motion.span>
-          </AnimatePresence>
+          {active ? (
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.span
+                key={char}
+                className="inline-block"
+                initial={{ y: '60%', opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: '-60%', opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+              >
+                {char}
+              </motion.span>
+            </AnimatePresence>
+          ) : (
+            <span className="inline-block">{char}</span>
+          )}
         </span>
       ))}
     </span>
@@ -242,7 +267,15 @@ function Stat({ title, value }: { title: string; value: string }) {
  * Real watch.log, newest at the bottom. Lines are stacked from the bottom up
  * (no scrolling), the newest glows, and new lines rise in.
  */
-const LogStream = memo(function LogStream({ lines, first }: { lines: string[]; first: number }) {
+const LogStream = memo(function LogStream({
+  lines,
+  first,
+  active,
+}: {
+  lines: string[]
+  first: number
+  active: boolean
+}) {
   const shown = lines.slice(-36)
   const offset = first + lines.length - shown.length
   return (
@@ -257,10 +290,10 @@ const LogStream = memo(function LogStream({ lines, first }: { lines: string[]; f
             <motion.div
               // biome-ignore lint/suspicious/noArrayIndexKey: offset + index is the absolute line number
               key={offset + index}
-              initial={{ opacity: 0, y: 10 }}
+              initial={active ? { opacity: 0, y: 10 } : false}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.35 }}
+              exit={active ? { opacity: 0 } : undefined}
+              transition={{ duration: active ? 0.35 : 0 }}
               className={cn(
                 'shrink-0 truncate py-[1.5px] font-mono text-[11px] transition-colors duration-700',
                 newest ? 'text-[#e6e6e6]' : 'text-[#7a7a7a]',
@@ -307,17 +340,27 @@ function CodeColumn({
   lines,
   duration,
   className,
+  active,
 }: {
   lines: string[]
   duration: number
   className: string
+  active: boolean
 }) {
   const reduce = useReducedMotion()
   return (
     <div className={cn('absolute top-0 bottom-0 overflow-hidden', className)}>
       <div
         className="flex flex-col gap-[5px] font-mono text-[10px] text-white/[0.075] leading-[1.5]"
-        style={reduce ? undefined : { animation: `code-scroll ${duration}s linear infinite` }}
+        // Pausing keeps the current offset, so no layout or visual jump on blur.
+        style={
+          reduce
+            ? undefined
+            : {
+                animation: `code-scroll ${duration}s linear infinite`,
+                animationPlayState: active ? 'running' : 'paused',
+              }
+        }
       >
         {[...lines, ...lines].map((line, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: static duplicated text
@@ -330,17 +373,20 @@ function CodeColumn({
   )
 }
 
-function CodeRain() {
+function CodeRain({ active }: { active: boolean }) {
   return (
     <div
       aria-hidden
+      data-testid="code-rain"
+      data-active={active ? 'true' : 'false'}
       className="pointer-events-none absolute inset-0 [mask-image:linear-gradient(to_bottom,transparent,black_20%,black_70%,transparent)]"
     >
-      <CodeColumn lines={CODE} duration={70} className="right-[4%] w-[30%]" />
+      <CodeColumn lines={CODE} duration={70} className="right-[4%] w-[30%]" active={active} />
       <CodeColumn
         lines={[...CODE.slice(9), ...CODE.slice(0, 9)]}
         duration={110}
         className="right-[36%] w-[30%] opacity-60"
+        active={active}
       />
     </div>
   )
@@ -354,7 +400,7 @@ const WAVES = [
 ]
 
 /** Layered glowing sine waves on a canvas; faster as the task gets closer to submitting. */
-function Waves({ phase }: { phase: string }) {
+function Waves({ phase, active }: { phase: string; active: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const reduce = useReducedMotion()
   const speed = useRef(1)
@@ -363,7 +409,9 @@ function Waves({ phase }: { phase: string }) {
   useEffect(() => {
     const el = canvas.current
     const ctx = el?.getContext('2d')
-    if (!el || !ctx) return
+    // Nothing draws in the background: no frame loop is scheduled. The cleanup
+    // cancels the pending frame, and the effect reruns (resizing first) on refocus.
+    if (!el || !ctx || !active) return
     let width = 0
     let height = 0
     const resize = () => {
@@ -442,7 +490,15 @@ function Waves({ phase }: { phase: string }) {
       observer.disconnect()
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [reduce])
+  }, [reduce, active])
 
-  return <canvas ref={canvas} aria-hidden className="pointer-events-none absolute inset-0 size-full" />
+  return (
+    <canvas
+      ref={canvas}
+      aria-hidden
+      data-testid="waves"
+      data-active={active ? 'true' : 'false'}
+      className="pointer-events-none absolute inset-0 size-full"
+    />
+  )
 }

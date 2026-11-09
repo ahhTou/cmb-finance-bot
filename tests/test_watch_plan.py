@@ -45,6 +45,12 @@ class PlanTestBase(unittest.TestCase):
         self.stack.enter_context(patch.object(nw, "arm_health", return_value=[]))
         # 任何真实等待都必须被测试挡掉；计划进程轮询间隔是 2 秒。
         self.stack.enter_context(patch.object(watch_plan.time, "sleep"))
+        # 运行期健康检查的外部世界默认“正常可用”；单个用例再覆盖。
+        for name, value in [("emulator_running", True), ("booted", True),
+                            ("network_state", "up")]:
+            self.stack.enter_context(patch.object(nw, name, return_value=value))
+        self.stack.enter_context(patch.object(nw, "reconnect_wifi"))
+        self.stack.enter_context(patch.object(nw, "restart_emulator"))
         self.now = datetime.now().replace(microsecond=0)
 
     def tearDown(self):
@@ -226,10 +232,12 @@ class ScheduleTest(PlanTestBase):
         self.assertNotIn("prep_at", watch_plan.load_plan()["items"][0])
         self.assertNotIn("end_at", watch_plan.load_plan()["items"][0])
 
-    def test_plan_lead_allows_fourteen_days(self):
-        when = (datetime.now() + timedelta(days=3)).replace(microsecond=0)
+    def test_plan_lead_has_no_fourteen_day_cap(self):
+        when = (datetime.now() + timedelta(days=100)).replace(microsecond=0)
         self.assertEqual(
-            nw.parse_target(iso(when), prep_minutes=7, max_lead=watch_plan.MAX_LEAD), when)
+            nw.parse_target(iso(when), prep_minutes=7, max_lead=watch_plan.ARM_MAX_LEAD),
+            when)
+        # 手动布防仍按 night_watch 自己的 24 小时上限。
         with self.assertRaises(nw.Abort):
             nw.parse_target(iso(when), prep_minutes=7)
 
@@ -243,8 +251,10 @@ class ScheduleTest(PlanTestBase):
         self.assertIn("第 1 项购买时间已过（07:55）。",
                       watch_plan.schedule(past, settings, now)["problems"])
         far = self.save([self.item(code="AAAA", at=now + timedelta(days=14, hours=1))])
-        self.assertIn("第 1 项购买时间超过 14 天。",
-                      watch_plan.schedule(far, settings, now)["problems"])
+        # 计划不再限制 14 天：更远的购买时间也能开始（手动布防仍由 night_watch 限制）。
+        self.assertEqual(watch_plan.schedule(far, settings, now)["problems"], [])
+        farther = self.save([self.item(code="AAAA", at=now + timedelta(days=100))])
+        self.assertEqual(watch_plan.schedule(farther, settings, now)["problems"], [])
         normal = self.save([self.item(code="AAAA", at=now + timedelta(minutes=60)),
                             self.item(code="BBBB", at=now + timedelta(minutes=180))])
         self.assertEqual(watch_plan.schedule(normal, settings, now)["problems"], [])
@@ -385,6 +395,32 @@ class ViewTest(PlanTestBase):
         self.assertEqual(data["status"]["primary"], "running")
         self.assertEqual(data["status"]["secondary"], "preparing")
         self.assertEqual(data["plan"]["items"][0]["status"]["secondary"], "preparing")
+
+    def test_paused_status_model(self):
+        plan = self.running_plan([self.item(at=self.at(90)),
+                                  self.item(at=self.at(120))])
+        plan.update(phase="paused", pause_reason="app_exit", paused_at=iso(self.now))
+        watch_plan.save_plan(plan)
+        data = watch_plan.view()
+        self.assertEqual(data["plan"]["phase"], "paused")
+        self.assertEqual(data["status"]["primary"], "pending")
+        self.assertEqual(data["status"]["secondary"], "paused")
+        self.assertIn("计划已暂停", data["status"]["description"])
+        self.assertIn("管理 App 已退出", data["status"]["description"])
+        self.assertNotIn("当前布防继续执行", data["status"]["description"])
+        # 本计划还有活跃布防正在跑时说明它会继续执行。
+        active = dict(task("t1", "waiting", pid=999), plan_id=plan["plan_id"])
+        with patch.object(nw, "load_task", return_value=active), \
+             patch.object(nw, "alive", return_value=True):
+            data = watch_plan.view()
+        self.assertIn("当前布防继续执行，恢复后继续后续项",
+                      data["status"]["description"])
+        # 手动布防不算本计划的当前布防。
+        manual = dict(task("manual", "waiting", pid=999), plan_id=None)
+        with patch.object(nw, "load_task", return_value=manual), \
+             patch.object(nw, "alive", return_value=True):
+            data = watch_plan.view()
+        self.assertNotIn("当前布防继续执行", data["status"]["description"])
 
     def test_logs_tail(self):
         (self.state / "plan.log").write_text(
@@ -1060,6 +1096,9 @@ class RunnerTest(PlanTestBase):
         plan = self.prepare(self.two_items())
         plan["items"][0].update(state="running", armed_at=iso(self.now), task_id="t1")
         watch_plan.save_plan(plan)
+        # 暂停恢复路径先按 task 记录收口；这里让设置读取在收口前失败。
+        nw.save_task(dict(task("t1", "done", "提交成功"), plan_id=plan["plan_id"],
+                          plan_item=plan["items"][0]["item_id"]))
         with patch.object(nw, "alert"), \
              patch.object(purchase_settings, "load", side_effect=RuntimeError("设置文件坏了")):
             watch_plan.run("gen-run")
@@ -1293,6 +1332,723 @@ class ArmPlanFieldsTest(PlanTestBase):
             with self.assertRaises(nw.Abort):
                 nw.arm_task("TEST01", "0.01", at=self.at(150), dry_run=True,
                             plan_id="wrong-plan", plan_item="item-2")
+
+
+class FakeClock:
+    """Fake monotonic clock: sleeping advances it, so waits cost no real time."""
+    def __init__(self, seconds=0.0):
+        self.seconds = seconds
+
+    def monotonic(self):
+        return self.seconds
+
+    def sleep(self, seconds):
+        self.seconds += seconds
+
+
+class PauseAfterAppExitTest(PlanTestBase):
+    def test_marks_a_running_plan_for_an_app_exit_pause(self):
+        self.running_plan([self.item(at=self.at(90))])
+        self.assertTrue(watch_plan.pause_after_app_exit())
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "running")
+        self.assertTrue(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "app_exit")
+        self.assertIn("管理 App 已退出，计划将在当前布防结束后暂停",
+                      (self.state / "plan.log").read_text(encoding="utf-8"))
+
+    def test_does_not_override_a_manual_pause_or_a_pending_stop(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan.update(pause_requested=True, pause_reason="manual")
+        watch_plan.save_plan(plan)
+        self.assertFalse(watch_plan.pause_after_app_exit())
+        self.assertEqual(watch_plan.load_plan()["pause_reason"], "manual")
+        plan = watch_plan.load_plan()
+        plan.update(pause_requested=False, pause_reason=None, stop_requested=True)
+        watch_plan.save_plan(plan)
+        self.assertFalse(watch_plan.pause_after_app_exit())
+        self.assertFalse(watch_plan.load_plan()["pause_requested"])
+
+    def test_is_a_noop_without_a_running_plan(self):
+        self.assertFalse(watch_plan.pause_after_app_exit())
+        self.save([self.item(at=self.at(90))])
+        self.assertFalse(watch_plan.pause_after_app_exit())
+
+    def test_never_raises_on_a_broken_plan_file(self):
+        (self.state / "plan.json").write_text("{broken", encoding="utf-8")
+        self.assertFalse(watch_plan.pause_after_app_exit())
+
+
+class PauseTest(PlanTestBase):
+    def two_items(self):
+        return [self.item(code="AAAA", at=self.at(90)),
+                self.item(code="BBBB", at=self.at(120))]
+
+    def test_after_current_marks_request_then_worker_pauses(self):
+        plan = self.running_plan(self.two_items())
+        with patch.object(nw, "alive", return_value=True):
+            data = watch_plan.pause()
+        saved = watch_plan.load_plan()
+        self.assertEqual(data["plan"]["phase"], "running")
+        self.assertTrue(data["plan"]["pause_requested"])
+        self.assertTrue(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "manual")
+        self.assertIsNone(saved["paused_at"])
+        with patch.object(watch_plan, "log") as log:
+            watch_plan.run(plan["generation"])
+        paused = watch_plan.load_plan()
+        self.assertEqual(paused["phase"], "paused")
+        self.assertFalse(paused["pause_requested"])
+        self.assertEqual(paused["pause_reason"], "manual")
+        self.assertIsNotNone(paused["paused_at"])
+        self.assertEqual([row["state"] for row in paused["items"]],
+                         ["pending", "pending"])
+        logs = [c.args[0] for c in log.call_args_list if c.args]
+        self.assertIn("计划已暂停：当前布防结束后暂停", logs)
+
+    def test_after_current_on_a_stale_worker_pauses_directly(self):
+        self.running_plan(self.two_items())
+        with patch.object(nw, "alive", return_value=False):
+            data = watch_plan.pause()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "paused")
+        self.assertFalse(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "manual")
+        self.assertIsNotNone(saved["paused_at"])
+        self.assertEqual(data["plan"]["phase"], "paused")
+        self.assertIn("计划已暂停：当前布防结束后暂停",
+                      (self.state / "plan.log").read_text(encoding="utf-8"))
+
+    def test_immediate_stops_the_own_watch_then_pauses(self):
+        plan = self.running_plan(self.two_items())
+        plan["items"][0].update(state="running", task_id="t1", armed_at=iso(self.now))
+        watch_plan.save_plan(plan)
+        active = dict(task("t1", "waiting", pid=999), plan_id=plan["plan_id"])
+        with patch.object(nw, "load_task", return_value=active), \
+             patch.object(nw, "alive", return_value=True), \
+             patch.object(watch_plan, "_stop_plan_process") as stop, \
+             patch.object(nw, "disarm_task") as disarm_task:
+            data = watch_plan.pause("immediate")
+        disarm_task.assert_called_once_with(expected_plan_id=plan["plan_id"],
+                                            expected_task_id="t1")
+        stop.assert_called_once()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "paused")
+        self.assertFalse(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "manual")
+        self.assertIsNotNone(saved["paused_at"])
+        self.assertEqual(saved["items"][0]["state"], "skipped")
+        self.assertEqual(saved["items"][0]["result"], "计划暂停：当前布防已停止")
+        self.assertIsNotNone(saved["items"][0]["ended_at"])
+        self.assertEqual(saved["items"][1]["state"], "pending")
+        self.assertEqual(data["plan"]["phase"], "paused")
+        self.assertIn("计划已暂停：当前布防已停止",
+                      (self.state / "plan.log").read_text(encoding="utf-8"))
+
+    def test_immediate_refuses_a_firing_watch_without_touching_the_plan(self):
+        plan = self.running_plan(self.two_items())
+        plan["items"][0].update(state="running", task_id="t1")
+        watch_plan.save_plan(plan)
+        for firing in (dict(task("t1", "firing", pid=999), plan_id=plan["plan_id"]),
+                       dict(task("t1", "done", "提交成功"), plan_id=plan["plan_id"],
+                            fired_at="marker")):
+            with self.subTest(phase=firing["phase"]), \
+                 patch.object(nw, "load_task", return_value=firing), \
+                 patch.object(nw, "alive", return_value=True), \
+                 patch.object(nw, "disarm_task") as disarm_task, \
+                 patch.object(watch_plan, "_stop_plan_process") as stop:
+                with self.assertRaises(nw.Abort) as ctx:
+                    watch_plan.pause("immediate")
+            self.assertIn("当前布防正在提交，不能暂停", str(ctx.exception))
+            disarm_task.assert_not_called()
+            stop.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "running")
+        self.assertFalse(saved["pause_requested"])
+
+    def test_immediate_does_not_stop_an_unrelated_manual_watch(self):
+        plan = self.running_plan(self.two_items())
+        manual = dict(task("manual", "waiting", pid=999), plan_id=None)
+        with patch.object(nw, "load_task", return_value=manual), \
+             patch.object(nw, "alive", return_value=True), \
+             patch.object(watch_plan, "_stop_plan_process") as stop, \
+             patch.object(nw, "disarm_task") as disarm_task:
+            watch_plan.pause("immediate")
+        disarm_task.assert_not_called()
+        stop.assert_called_once()
+        self.assertEqual(watch_plan.load_plan()["phase"], "paused")
+
+    def test_app_exit_request_pauses_at_the_worker_boundary(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        self.assertTrue(watch_plan.pause_after_app_exit())
+        with patch.object(watch_plan, "log") as log, \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "paused")
+        self.assertEqual(saved["pause_reason"], "app_exit")
+        self.assertTrue(any("管理 App 已退出" in str(c.args[0])
+                            for c in log.call_args_list if c.args))
+
+    def test_pause_during_the_health_check_returns_the_item_to_pending(self):
+        plan = self.running_plan([self.item(code="AAAA", at=self.at(90)),
+                                  self.item(code="BBBB", at=self.at(120))])
+
+        def arm_health(timeout, tick=None, note=None):
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="manual")
+            watch_plan.save_plan(current)
+            return []
+
+        with patch.object(nw, "arm_health", side_effect=arm_health), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        arm.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "paused")
+        self.assertEqual(saved["items"][0]["state"], "pending")
+        self.assertIsNone(saved["items"][0]["armed_at"])
+        self.assertNotIn("health", saved["items"][0])
+
+    def test_pause_requires_a_running_plan(self):
+        with self.assertRaises(nw.Abort) as ctx:
+            watch_plan.pause()
+        self.assertIn("计划没有在运行，不需要暂停", str(ctx.exception))
+        self.save([self.item(at=self.at())])
+        with self.assertRaises(nw.Abort):
+            watch_plan.pause()
+
+    def test_pause_mode_is_validated(self):
+        self.running_plan(self.two_items())
+        with self.assertRaises(nw.Abort):
+            watch_plan.pause("later")
+
+
+class ResumeTest(PlanTestBase):
+    def paused_plan(self):
+        plan = self.running_plan([self.item(code="AAAA", at=self.at(90)),
+                                  self.item(code="BBBB", at=self.at(120))])
+        plan.update(phase="paused", pause_reason="manual",
+                    paused_at=iso(self.now), last_tick=iso(self.now))
+        watch_plan.save_plan(plan)
+        return plan
+
+    def test_resume_spawns_a_new_worker_generation(self):
+        plan = self.paused_plan()
+        fake = types.SimpleNamespace(pid=4321)
+        with patch.object(watch_plan.subprocess, "Popen", return_value=fake) as popen:
+            data = watch_plan.resume()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "running")
+        self.assertEqual(saved["pid"], 4321)
+        self.assertNotEqual(saved["generation"], plan["generation"])
+        self.assertEqual(saved["resume_count"], 1)
+        self.assertFalse(saved["pause_requested"])
+        self.assertIsNone(saved["pause_reason"])
+        self.assertIsNone(saved["paused_at"])
+        self.assertFalse(saved["stop_requested"])
+        self.assertEqual([row["state"] for row in saved["items"]],
+                         ["pending", "pending"])
+        argv = popen.call_args.args[0]
+        self.assertIn("run", argv)
+        self.assertIn("--generation", argv)
+        self.assertIn(saved["generation"], argv)
+        self.assertEqual(data["plan"]["phase"], "running")
+
+    def test_resume_refuses_a_manual_watch(self):
+        self.paused_plan()
+        manual = dict(task("manual", "armed", pid=999), plan_id=None)
+        with patch.object(nw, "load_task", return_value=manual), \
+             patch.object(watch_plan.subprocess, "Popen") as popen:
+            with self.assertRaises(nw.Abort) as ctx:
+                watch_plan.resume()
+        self.assertIn("当前有手动布防", str(ctx.exception))
+        popen.assert_not_called()
+        self.assertEqual(watch_plan.load_plan()["phase"], "paused")
+
+    def test_resume_cancels_a_pending_app_exit_pause(self):
+        self.running_plan([self.item(at=self.at(90))])
+        plan = watch_plan.load_plan()
+        plan.update(pause_requested=True, pause_reason="app_exit",
+                    last_tick=iso(self.now - timedelta(minutes=1)))
+        watch_plan.save_plan(plan)
+        with patch.object(watch_plan.subprocess, "Popen") as popen:
+            data = watch_plan.resume()
+        popen.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "running")
+        self.assertFalse(saved["pause_requested"])
+        self.assertIsNone(saved["pause_reason"])
+        self.assertIsNone(saved["paused_at"])
+        self.assertEqual(saved["resume_count"], 0)
+        self.assertEqual(data["plan"]["phase"], "running")
+
+    def test_resume_requires_a_paused_plan(self):
+        with self.assertRaises(nw.Abort) as ctx:
+            watch_plan.resume()
+        self.assertIn("计划没有暂停，不需要恢复", str(ctx.exception))
+        self.save([self.item(at=self.at())])
+        with self.assertRaises(nw.Abort):
+            watch_plan.resume()
+        self.running_plan([self.item(at=self.at())])
+        with self.assertRaises(nw.Abort):
+            watch_plan.resume()
+
+
+class DisarmModeTest(PlanTestBase):
+    def two_items(self):
+        return [self.item(code="AAAA", at=self.at(90)),
+                self.item(code="BBBB", at=self.at(120))]
+
+    def test_after_current_only_marks_stop_requested(self):
+        self.running_plan(self.two_items())
+        with patch.object(nw, "alive", return_value=True), \
+             patch.object(watch_plan, "_stop_plan_process") as stop, \
+             patch.object(nw, "disarm_task") as disarm_task:
+            data = watch_plan.disarm("after_current")
+        stop.assert_not_called()
+        disarm_task.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "running")
+        self.assertTrue(saved["stop_requested"])
+        self.assertEqual(data["plan"]["phase"], "running")
+
+    def test_after_current_boundary_stops_and_skips_pending_items(self):
+        plan = self.running_plan([self.item(code="AAAA", at=self.at(90)),
+                                  self.item(code="BBBB", at=self.at(120)),
+                                  self.item(code="CCCC", at=self.at(180))])
+        plan["items"][0].update(state="done", result="提交成功", outcome="success")
+        plan["stop_requested"] = True
+        watch_plan.save_plan(plan)
+        with patch.object(watch_plan, "log") as log, \
+             patch.object(nw, "alert") as alert:
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "disarmed")
+        self.assertEqual(saved["result"], "计划已停止：当前布防结束后停止")
+        self.assertIsNotNone(saved["ended_at"])
+        self.assertEqual(saved["items"][0]["state"], "done")
+        self.assertEqual(saved["items"][0]["result"], "提交成功")
+        self.assertEqual(saved["items"][1]["state"], "skipped")
+        self.assertEqual(saved["items"][1]["result"], "计划已停止")
+        self.assertEqual(saved["items"][2]["state"], "skipped")
+        self.assertTrue(any("计划已停止：当前布防结束后停止" in str(c.args[0])
+                            for c in log.call_args_list if c.args))
+        self.assertEqual(alert.call_args.args[0], "计划已取消")
+        self.assertEqual(alert.call_args.kwargs["event"], "plan_cancelled")
+
+    def test_after_current_on_a_stale_worker_degrades_to_immediate(self):
+        self.running_plan(self.two_items())
+        with patch.object(nw, "alive", return_value=False), \
+             patch.object(watch_plan, "_stop_plan_process") as stop, \
+             patch.object(nw, "disarm_task") as disarm_task:
+            watch_plan.disarm("after_current")
+        stop.assert_called_once()
+        disarm_task.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "disarmed")
+        self.assertEqual(saved["result"], "计划已被手动取消")
+        self.assertEqual([row["state"] for row in saved["items"]],
+                         ["skipped", "skipped"])
+
+    def test_immediate_disarm_works_from_paused(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan.update(phase="paused", pause_reason="manual", paused_at=iso(self.now))
+        watch_plan.save_plan(plan)
+        with patch.object(nw, "alive", return_value=False), \
+             patch.object(watch_plan, "_stop_plan_process") as stop, \
+             patch.object(nw, "disarm_task") as disarm_task:
+            data = watch_plan.disarm()
+        stop.assert_called_once()
+        disarm_task.assert_not_called()
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["phase"], "disarmed")
+        self.assertEqual(saved["items"][0]["state"], "skipped")
+        self.assertEqual(data["plan"]["phase"], "disarmed")
+
+    def test_paused_plan_rejects_after_current_disarm(self):
+        plan = self.running_plan([self.item(at=self.at(90))])
+        plan.update(phase="paused", pause_reason="manual", paused_at=iso(self.now))
+        watch_plan.save_plan(plan)
+        with self.assertRaises(nw.Abort) as ctx:
+            watch_plan.disarm("after_current")
+        self.assertIn("计划已暂停，请直接停止或恢复后再操作", str(ctx.exception))
+        self.assertEqual(watch_plan.load_plan()["phase"], "paused")
+
+    def test_disarm_mode_is_validated(self):
+        self.running_plan([self.item(at=self.at(90))])
+        with self.assertRaises(nw.Abort):
+            watch_plan.disarm("later")
+
+
+class RecoveryTest(PlanTestBase):
+    def running_with_item(self, at=None, task_id="t1"):
+        plan = self.running_plan([self.item(code="AAAA", at=at or self.at(90))])
+        plan["items"][0].update(state="running", armed_at=iso(self.now), task_id=task_id)
+        watch_plan.save_plan(plan)
+        return plan
+
+    def test_startup_settles_a_terminal_watch(self):
+        plan = self.running_with_item()
+        nw.save_task(dict(task("t1", "done", "提交成功"), plan_id=plan["plan_id"],
+                          plan_item=plan["items"][0]["item_id"]))
+        with patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        arm.assert_not_called()
+        self.assertEqual(saved["items"][0]["state"], "done")
+        self.assertEqual(saved["items"][0]["outcome"], "success")
+        self.assertEqual(saved["phase"], "done")
+        self.assertIn("完成 1 项", saved["result"])
+
+    def test_startup_puts_an_unarmed_item_back_to_pending(self):
+        # 购买时间已过，便于观察「回 pending 后按过期跳过」而不是被卡在 running。
+        plan = self.running_with_item(at=self.now - timedelta(minutes=5), task_id=None)
+        with patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        arm.assert_not_called()
+        self.assertEqual(saved["items"][0]["state"], "skipped")
+        self.assertEqual(saved["items"][0]["result"], "购买时间已过")
+        self.assertEqual(saved["phase"], "done")
+
+    def test_startup_aborts_as_unknown_when_the_task_record_is_lost(self):
+        plan = self.running_with_item()
+        nw.save_task(dict(task("other", "armed", pid=999), plan_id=plan["plan_id"]))
+        with patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        arm.assert_not_called()
+        self.assertEqual(saved["phase"], "aborted")
+        self.assertEqual(saved["items"][0]["state"], "failed")
+        self.assertEqual(saved["items"][0]["outcome"], "unknown")
+        self.assertIn("结果未知", saved["items"][0]["result"])
+        self.assertIn("请查交易记录", saved["items"][0]["result"])
+
+
+class PlanLimitTest(PlanTestBase):
+    def test_far_plans_can_start_without_a_fourteen_day_cap(self):
+        for days in (20, 100):
+            with self.subTest(days=days):
+                when = (datetime.now() + timedelta(days=days)).replace(microsecond=0)
+                self.save([self.item(code="AAAA", at=when)])
+                fake = types.SimpleNamespace(pid=4321)
+                with patch.object(watch_plan.subprocess, "Popen", return_value=fake):
+                    data = self.start()
+                self.assertEqual(data["plan"]["phase"], "running")
+                self.assertEqual(watch_plan.load_plan()["phase"], "running")
+                self.plan_path().unlink()
+
+    def test_worker_passes_the_large_plan_lead_to_arm_task(self):
+        self.running_plan([self.item(at=self.at(60))])
+        with patch.object(nw, "arm_task", return_value=task("t1", "armed")) as arm, \
+             patch.object(nw, "load_task", return_value=task("t1", "done", "提交成功")), \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        self.assertEqual(arm.call_args.kwargs["max_lead"], watch_plan.ARM_MAX_LEAD)
+
+
+class HealthMonitorTest(PlanTestBase):
+    def item_plan(self):
+        return self.running_plan([self.item(code="AAAA", at=self.at(60))])
+
+    def test_checks_only_after_the_interval(self):
+        plan = self.item_plan()
+        monitor = {"issue": "", "next": 100.0}
+        clock = FakeClock(50.0)
+        with patch.object(watch_plan.time, "monotonic", clock.monotonic), \
+             patch.object(nw, "emulator_running") as running:
+            watch_plan._monitor_health(plan, 0, self.runtime(), monitor)
+        running.assert_not_called()
+        clock.seconds = 100.0
+        with patch.object(watch_plan.time, "monotonic", clock.monotonic), \
+             patch.object(nw, "emulator_running", return_value=True):
+            watch_plan._monitor_health(plan, 0, self.runtime(), monitor)
+        self.assertEqual(monitor["issue"], "")
+        self.assertEqual(monitor["next"], 400.0)   # 100 + 300 秒
+
+    def test_an_issue_is_warned_once_and_recovery_notified(self):
+        plan = self.item_plan()
+        runtime = self.runtime()
+        monitor = {"issue": "", "next": 0.0}
+        with patch.object(nw, "emulator_running", return_value=False), \
+             patch.object(nw, "alert") as alert:
+            watch_plan._monitor_health(plan, 0, runtime, monitor)
+            watch_plan._monitor_health(plan, 0, runtime, monitor)   # 同上一次异常：不重复
+        self.assertEqual(alert.call_count, 1)
+        self.assertEqual(alert.call_args.args[0], "计划运行期健康检查异常")
+        self.assertIn("第 1 项 AAAA：模拟器没有运行", alert.call_args.args[1])
+        self.assertIn("计划继续，请留意", alert.call_args.args[1])
+        self.assertEqual(alert.call_args.args[2], 3)
+        self.assertEqual(alert.call_args.kwargs["event"], "health_warning")
+        clock = FakeClock(monitor["next"] + 1)
+        with patch.object(watch_plan.time, "monotonic", clock.monotonic), \
+             patch.object(nw, "emulator_running", return_value=True), \
+             patch.object(nw, "alert") as recovered:
+            watch_plan._monitor_health(plan, 0, runtime, monitor)
+        self.assertEqual(recovered.call_count, 1)
+        self.assertEqual(recovered.call_args.args[0], "计划运行期健康检查已恢复")
+        self.assertEqual(recovered.call_args.args[2], 3)
+        self.assertEqual(recovered.call_args.kwargs["event"], "network_recovered")
+        self.assertEqual(monitor["issue"], "")
+
+    def test_network_down_reconnects_without_restarting_anything(self):
+        plan = self.item_plan()
+        monitor = {"issue": "", "next": 0.0}
+        with patch.object(nw, "network_state", return_value="down"), \
+             patch.object(nw, "reconnect_wifi") as reconnect, \
+             patch.object(nw, "restart_emulator") as restart, \
+             patch.object(nw, "alert") as alert:
+            watch_plan._monitor_health(plan, 0, self.runtime(), monitor)
+        reconnect.assert_called_once()
+        restart.assert_not_called()
+        self.assertIn("模拟器没有网络", alert.call_args.args[1])
+        self.assertEqual(alert.call_args.kwargs["event"], "health_warning")
+
+    def test_boot_problem_warns_and_does_not_reconnect(self):
+        plan = self.item_plan()
+        monitor = {"issue": "", "next": 0.0}
+        with patch.object(nw, "booted", return_value=False), \
+             patch.object(nw, "reconnect_wifi") as reconnect, \
+             patch.object(nw, "alert") as alert:
+            watch_plan._monitor_health(plan, 0, self.runtime(), monitor)
+        reconnect.assert_not_called()
+        self.assertIn("模拟器没有开机", alert.call_args.args[1])
+
+    def test_a_broken_health_check_never_aborts_the_plan(self):
+        self.running_plan([self.item(code="AAAA", at=self.at(60))],
+                          runtime_settings=self.runtime(health_monitor_seconds=0))
+        with patch.object(nw, "arm_task", return_value=task("t1", "armed")), \
+             patch.object(nw, "load_task", side_effect=[task("t1", "armed"),
+                                                       task("t1", "done", "提交成功")]), \
+             patch.object(nw, "alive", side_effect=[True, False]), \
+             patch.object(nw, "emulator_running",
+                          side_effect=RuntimeError("boom")) as running, \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assertTrue(running.called)
+        self.assertEqual(saved["items"][0]["state"], "done")
+        self.assertEqual(saved["phase"], "done")
+
+
+class FailedHealthCheckRaceTest(PlanTestBase):
+    def test_failed_health_check_does_not_clobber_a_pause_request(self):
+        self.running_plan([self.item(code="AAAA", at=self.at(60)),
+                           self.item(code="BBBB", at=self.at(120))])
+
+        def arm_health(timeout, tick=None, note=None):
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="manual")
+            watch_plan.save_plan(current)          # 健康检查期间用户点了暂停
+            raise nw.Abort("健康检查未通过：模拟器起不来")
+
+        with patch.object(nw, "arm_health", side_effect=arm_health), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alert") as alert:
+            watch_plan.run("gentest")
+        arm.assert_not_called()                     # 没有继续布防
+        saved = watch_plan.load_plan()
+        self.assertEqual(saved["items"][0]["state"], "failed")
+        self.assertIn("健康检查未通过", saved["items"][0]["result"])
+        self.assertIn("模拟器起不来", saved["items"][0]["result"])
+        self.assertEqual(saved["items"][1]["state"], "pending")
+        self.assertEqual(saved["phase"], "paused")  # 请求保住了：计划停在该项之后
+        self.assertFalse(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "manual")
+        self.assertIsNotNone(saved["paused_at"])
+        self.assertTrue(any("计划第 1 项失败" in str(call)
+                            for call in alert.call_args_list))
+
+
+class BoundaryRaceTest(PlanTestBase):
+    """暂停/停止请求落在当前项收口瞬间时不能被旧 plan 字典覆盖。"""
+
+    def two_items(self):
+        return [self.item(code="AAAA", at=self.at(60)),
+                self.item(code="BBBB", at=self.at(120))]
+
+    def test_pause_requested_while_waiting_is_kept(self):
+        self.running_plan(self.two_items())
+
+        def wait(plan, index, end_at, runtime, monitor=None):
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="manual")
+            watch_plan.save_plan(current)
+            return ("success", "提交成功")
+
+        with patch.object(nw, "arm_task", return_value=task("t1", "armed")) as arm, \
+             patch.object(watch_plan, "_wait_item", side_effect=wait), \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assertEqual(arm.call_count, 1)                  # 没有继续布防下一项
+        self.assertEqual(saved["items"][0]["state"], "done")  # 当前项仍正常收口
+        self.assertEqual(saved["items"][0]["result"], "提交成功")
+        self.assertEqual(saved["items"][1]["state"], "pending")
+        self.assertEqual(saved["phase"], "paused")
+        self.assertFalse(saved["pause_requested"])
+        self.assertEqual(saved["pause_reason"], "manual")
+        self.assertIsNotNone(saved["paused_at"])
+
+    def test_stop_requested_while_waiting_is_kept(self):
+        self.running_plan(self.two_items())
+
+        def wait(plan, index, end_at, runtime, monitor=None):
+            current = watch_plan.load_plan()
+            current.update(stop_requested=True)
+            watch_plan.save_plan(current)
+            return ("success", "提交成功")
+
+        with patch.object(nw, "arm_task", return_value=task("t1", "armed")) as arm, \
+             patch.object(watch_plan, "_wait_item", side_effect=wait), \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assertEqual(arm.call_count, 1)
+        self.assertEqual(saved["items"][0]["state"], "done")
+        self.assertEqual(saved["items"][0]["result"], "提交成功")
+        self.assertEqual(saved["items"][1]["state"], "skipped")
+        self.assertEqual(saved["items"][1]["result"], "计划已停止")
+        self.assertEqual(saved["phase"], "disarmed")
+        self.assertEqual(saved["result"], "计划已停止：当前布防结束后停止")
+
+    def test_recovery_keeps_a_stop_requested_while_waiting(self):
+        plan = self.running_plan([self.item(code="AAAA", at=self.at(90))])
+        plan["items"][0].update(state="running", armed_at=iso(self.now), task_id="t1")
+        watch_plan.save_plan(plan)
+        nw.save_task(dict(task("t1", "armed", pid=999), plan_id=plan["plan_id"],
+                          plan_item=plan["items"][0]["item_id"]))
+
+        def wait(plan, index, end_at, runtime, monitor=None):
+            current = watch_plan.load_plan()
+            current.update(stop_requested=True)
+            watch_plan.save_plan(current)
+            return ("success", "提交成功")
+
+        with patch.object(nw, "load_task",
+                          return_value=dict(task("t1", "armed", pid=999),
+                                            plan_id=plan["plan_id"],
+                                            plan_item=plan["items"][0]["item_id"])), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(watch_plan, "_wait_item", side_effect=wait), \
+             patch.object(nw, "alert"):
+            watch_plan.run(plan["generation"])
+        saved = watch_plan.load_plan()
+        arm.assert_not_called()
+        self.assertEqual(saved["items"][0]["state"], "done")
+        self.assertEqual(saved["phase"], "disarmed")
+        self.assertEqual(saved["result"], "计划已停止：当前布防结束后停止")
+
+
+class PausedPlanGuardTest(PlanTestBase):
+    def paused_plan(self):
+        plan = self.running_plan([self.item(code="AAAA", at=self.at(90))])
+        plan.update(phase="paused", pause_reason="manual", paused_at=iso(self.now),
+                    last_tick=iso(self.now))
+        watch_plan.save_plan(plan)
+        return plan
+
+    def test_paused_plan_cannot_be_saved_cleared_or_started(self):
+        self.paused_plan()
+        before = self.plan_path().read_bytes()
+        with self.assertRaises(nw.Abort) as ctx:
+            self.save([self.item(code="BBBB", at=self.at(120))])
+        self.assertIn("计划已暂停；请先继续或停止计划后再保存", str(ctx.exception))
+        with self.assertRaises(nw.Abort) as ctx:
+            watch_plan.clear()
+        self.assertIn("计划已暂停；请先继续或停止计划后再清空", str(ctx.exception))
+        with self.assertRaises(nw.Abort) as ctx:
+            self.start()
+        self.assertIn("计划已暂停；请先继续或停止计划后再开始", str(ctx.exception))
+        self.assertEqual(self.plan_path().read_bytes(), before)
+        self.assertEqual(watch_plan.load_plan()["phase"], "paused")
+
+
+class HealthCheckWriteTest(PlanTestBase):
+    """健康检查期间的 tick/note 只合并进度字段，不覆盖并发写入的暂停/停止请求。"""
+
+    def two_items(self):
+        return [self.item(code="AAAA", at=self.at(60)),
+                self.item(code="BBBB", at=self.at(120))]
+
+    def assert_paused_before_arming(self, arm, saved):
+        arm.assert_not_called()                              # 没有真正布防
+        self.assertEqual(saved["phase"], "paused")
+        self.assertFalse(saved["pause_requested"])
+        self.assertIsNotNone(saved["paused_at"])
+        self.assertEqual(saved["items"][0]["state"], "pending")
+        self.assertIsNone(saved["items"][0]["armed_at"])
+        self.assertNotIn("health", saved["items"][0])
+        self.assertEqual(saved["items"][1]["state"], "pending")
+
+    def test_note_does_not_clobber_a_manual_pause_request(self):
+        self.running_plan(self.two_items())
+
+        def arm_health(timeout, tick=None, note=None):
+            note("连接模拟器")                       # 健康检查进度写盘
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="manual")
+            watch_plan.save_plan(current)           # CLI 在检查期间请求暂停
+            note("恢复屏幕常亮")                     # 后续进度写盘不能覆盖请求
+            return []
+
+        with patch.object(nw, "arm_health", side_effect=arm_health), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assert_paused_before_arming(arm, saved)
+        self.assertEqual(saved["pause_reason"], "manual")
+
+    def test_tick_does_not_clobber_a_manual_pause_request(self):
+        self.running_plan(self.two_items(),
+                          runtime_settings=self.runtime(heartbeat_seconds=0))
+
+        def arm_health(timeout, tick=None, note=None):
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="manual")
+            watch_plan.save_plan(current)
+            tick()                                  # 心跳写盘不能覆盖请求
+            return []
+
+        with patch.object(nw, "arm_health", side_effect=arm_health), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assert_paused_before_arming(arm, saved)
+        self.assertEqual(saved["pause_reason"], "manual")
+
+    def test_app_exit_pause_survives_health_check_writes(self):
+        self.running_plan(self.two_items(),
+                          runtime_settings=self.runtime(heartbeat_seconds=0))
+
+        def arm_health(timeout, tick=None, note=None):
+            current = watch_plan.load_plan()
+            current.update(pause_requested=True, pause_reason="app_exit")
+            watch_plan.save_plan(current)           # App 退出后请求自动暂停
+            note("恢复屏幕常亮")
+            tick()
+            return []
+
+        with patch.object(nw, "arm_health", side_effect=arm_health), \
+             patch.object(nw, "arm_task") as arm, \
+             patch.object(watch_plan, "log") as log, \
+             patch.object(nw, "alert"):
+            watch_plan.run("gentest")
+        saved = watch_plan.load_plan()
+        self.assert_paused_before_arming(arm, saved)
+        self.assertEqual(saved["pause_reason"], "app_exit")   # 原因保留
+        logs = [call.args[0] for call in log.call_args_list if call.args]
+        self.assertIn("计划已暂停：管理 App 已退出", logs)
 
 
 if __name__ == "__main__":

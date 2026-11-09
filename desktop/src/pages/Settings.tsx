@@ -571,6 +571,7 @@ const OTHER_DEFAULTS = {
   kill_wait_seconds: 10,
   heartbeat_timeout_seconds: 60,
   health_timeout_minutes: 15,
+  health_monitor_seconds: 300,
 }
 type OtherKey = keyof typeof OTHER_DEFAULTS
 type OtherValues = Record<OtherKey, string>
@@ -585,6 +586,7 @@ const OTHER_LIMITS: Record<OtherKey, [number, number]> = {
   kill_wait_seconds: [1, 120],
   heartbeat_timeout_seconds: [10, 600],
   health_timeout_minutes: [1, 60],
+  health_monitor_seconds: [60, 3600],
 }
 const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' | 'fixed'; help: string }> = {
   arm_gap_minutes: {
@@ -641,6 +643,12 @@ const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' 
     kind: 'limit',
     help: '布防前检查模拟器和网络，能修好就继续；成功即继续，不会等满；只有一直修不好才让这一项失败。',
   },
+  health_monitor_seconds: {
+    label: '运行期健康检查间隔',
+    unit: '秒',
+    kind: 'fixed',
+    help: '计划运行期间每隔这么久检查一次模拟器和网络；只通知和重连 Wi-Fi，不会重启模拟器或打断当前布防。',
+  },
 }
 
 function validateOther(v: OtherValues) {
@@ -657,7 +665,7 @@ function validateOther(v: OtherValues) {
   return errors
 }
 
-const toOtherValues = (source: Partial<Record<string, unknown>>) =>
+const toOtherValues = (source: Partial<Record<OtherKey, unknown>>) =>
   Object.fromEntries(
     OTHER_KEYS.map((key) => [key, String(source[key] ?? OTHER_DEFAULTS[key])]),
   ) as OtherValues
@@ -729,6 +737,7 @@ function OtherSettings() {
           {field('kill_wait_seconds')}
           {field('heartbeat_timeout_seconds')}
           {field('health_timeout_minutes')}
+          {field('health_monitor_seconds')}
         </div>
       </Card>
 

@@ -1,8 +1,9 @@
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Clock, Hammer, type LucideIcon, Repeat, ShieldCheck, Zap } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { api } from '../api/client'
-import { useAction, useWatch } from '../api/hooks'
+import { q, useAction, useWatch } from '../api/hooks'
 import type { Mode } from '../api/types'
 import { ArmDialog } from '../components/ArmDialog'
 import { Button } from '../components/ui/button'
@@ -19,15 +20,21 @@ export function TasksPage() {
   const [armMode, setArmMode] = useState<Mode | null>(null)
   const [confirmDisarm, setConfirmDisarm] = useState(false)
   const taskMode = w.task?.mode ?? 'first_launch'
+  // Plan mode owns arming while it runs or is paused: manual tasks would collide.
+  const { data: planView } = useQuery(q.plan)
+  const planPhase = planView?.plan?.phase
+  const planMode = planPhase === 'running' || planPhase === 'paused'
 
   function modeCard(mode: Mode) {
     const redemption = mode === 'redemption'
     const mine = w.active && (redemption ? taskMode === 'redemption' : taskMode !== 'redemption')
     const badge: [string, Tone] = mine
       ? [phaseName(w.phase), phaseTone(w.phase)]
-      : w.active
-        ? ['其他值守中', 'warn']
-        : ['可用', 'good']
+      : planMode
+        ? ['计划模式中', 'warn']
+        : w.active
+          ? ['其他值守中', 'warn']
+          : ['可用', 'good']
     const ended = w.task && !w.active && (redemption ? taskMode === 'redemption' : taskMode !== 'redemption')
     return (
       <ModeCard
@@ -49,7 +56,7 @@ export function TasksPage() {
             </>
           ) : (
             <>
-              <Button variant="primary" disabled={w.active} onClick={() => setArmMode(mode)}>
+              <Button variant="primary" disabled={w.active || planMode} onClick={() => setArmMode(mode)}>
                 新建布防
               </Button>
               <Button onClick={() => navigate({ to: '/history' })}>查看历史</Button>
@@ -57,6 +64,11 @@ export function TasksPage() {
           )
         }
       >
+        {planMode && (
+          <p data-testid="plan-mode-hint" className="text-[11px] leading-snug text-warn">
+            当前有计划模式，请回到计划模式中添加任务。
+          </p>
+        )}
         {mine ? (
           <ActiveSummary redemption={redemption} />
         ) : (

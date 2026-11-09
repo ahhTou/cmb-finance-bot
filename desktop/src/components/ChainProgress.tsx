@@ -9,13 +9,20 @@ import { cn } from '../lib/utils'
  * It never takes layout space and ignores the pointer. Done nodes dim, the
  * running one glows and types its real call chain underneath.
  */
-export const ChainProgress = memo(function ChainProgress({ progress }: { progress: Progress }) {
+export const ChainProgress = memo(function ChainProgress({
+  progress,
+  active = true,
+}: {
+  progress: Progress
+  active?: boolean
+}) {
   const done = progress.states.filter((s) => s === 'done').length
   const total = STEPS.length - (progress.dryRun ? 1 : 0)
   const current = progress.active >= 0 ? progress.active : null
   return (
     <section
       data-testid="chain-progress"
+      data-active={active ? 'true' : 'false'}
       aria-label={`购买链路进度 ${done}/${total}`}
       className="pointer-events-none absolute inset-x-[30px] bottom-[5%] z-[5] flex flex-col gap-2.5 font-mono [text-shadow:0_1px_8px_rgb(0_0_0/0.9)]"
     >
@@ -29,24 +36,43 @@ export const ChainProgress = memo(function ChainProgress({ progress }: { progres
       <ol className="flex items-center">
         {STEPS.map((step, i) => (
           <Fragment key={step.id}>
-            {i > 0 && <Link from={progress.states[i - 1]} fired={!!step.fired && !STEPS[i - 1].fired} />}
-            <Node id={step.id} state={progress.states[i]} running={i === current} />
+            {i > 0 && (
+              <Link
+                from={progress.states[i - 1]}
+                fired={!!step.fired && !STEPS[i - 1].fired}
+                active={active}
+              />
+            )}
+            <Node id={step.id} state={progress.states[i]} running={i === current} active={active} />
           </Fragment>
         ))}
       </ol>
-      <Detail progress={progress} current={current} />
+      <Detail progress={progress} current={current} active={active} />
     </section>
   )
 })
 
-function Node({ id, state, running }: { id: string; state: StepState; running: boolean }) {
+function Node({
+  id,
+  state,
+  running,
+  active,
+}: {
+  id: string
+  state: StepState
+  running: boolean
+  active: boolean
+}) {
   return (
     <li aria-current={running ? 'step' : undefined} className="relative flex shrink-0 flex-col items-center">
       <span className="relative flex size-3 items-center justify-center">
-        {running && <span className="absolute inset-[-3px] animate-ping rounded-full bg-accent/40" />}
+        {running && active && (
+          <span className="absolute inset-[-3px] animate-ping rounded-full bg-accent/40" />
+        )}
         <span
           className={cn(
-            'relative rounded-full transition-all duration-500',
+            'relative rounded-full',
+            active && 'transition-all duration-500',
             running && 'size-2.5 bg-accent shadow-[0_0_12px_rgb(224_66_82/0.95)]',
             !running && state === 'done' && 'size-[7px] bg-accent/60',
             state === 'failed' && 'size-2.5 bg-accent ring-2 ring-accent/30',
@@ -57,7 +83,8 @@ function Node({ id, state, running }: { id: string; state: StepState; running: b
       </span>
       <span
         className={cn(
-          'absolute top-[17px] text-[10px] tabular-nums transition-colors duration-500',
+          'absolute top-[17px] text-[10px] tabular-nums',
+          active && 'transition-colors duration-500',
           running || state === 'failed'
             ? 'text-accent'
             : state === 'done'
@@ -72,7 +99,7 @@ function Node({ id, state, running }: { id: string; state: StepState; running: b
 }
 
 /** Connector between two nodes; the one crossing fired_at is dashed red. */
-function Link({ from, fired }: { from: StepState; fired: boolean }) {
+function Link({ from, fired, active }: { from: StepState; fired: boolean; active: boolean }) {
   const lit = from === 'done'
   if (fired)
     return (
@@ -86,7 +113,8 @@ function Link({ from, fired }: { from: StepState; fired: boolean }) {
     <li
       aria-hidden
       className={cn(
-        'h-px min-w-3 flex-1 transition-colors duration-500',
+        'h-px min-w-3 flex-1',
+        active && 'transition-colors duration-500',
         lit ? 'bg-accent/45' : 'bg-white/10',
       )}
     />
@@ -94,7 +122,15 @@ function Link({ from, fired }: { from: StepState; fired: boolean }) {
 }
 
 /** One line under the rail: the running step and its call chain, or a summary. */
-function Detail({ progress, current }: { progress: Progress; current: number | null }) {
+function Detail({
+  progress,
+  current,
+  active,
+}: {
+  progress: Progress
+  current: number | null
+  active: boolean
+}) {
   const reduce = useReducedMotion()
   const step = current !== null ? STEPS[current] : null
   return (
@@ -103,28 +139,28 @@ function Detail({ progress, current }: { progress: Progress; current: number | n
         {step ? (
           <motion.div
             key={step.id}
-            initial={{ opacity: 0, y: 4 }}
+            initial={active ? { opacity: 0, y: 4 } : false}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.25 }}
+            exit={active ? { opacity: 0 } : undefined}
+            transition={{ duration: active ? 0.25 : 0 }}
             className="flex min-w-0 items-baseline gap-2"
           >
             <span className="text-accent">{step.id}</span>
             <span className="shrink-0 font-sans text-white/85 text-xs">{step.name}</span>
             <motion.span
-              initial={reduce ? false : { clipPath: 'inset(0 100% 0 0)' }}
+              initial={reduce || !active ? false : { clipPath: 'inset(0 100% 0 0)' }}
               animate={{ clipPath: 'inset(0 0% 0 0)' }}
-              transition={{ duration: 0.9, ease: 'linear' }}
+              transition={{ duration: active ? 0.9 : 0, ease: 'linear' }}
               className="truncate text-white/55"
             >
               {step.chain}
             </motion.span>
-            <span className="animate-pulse text-accent">▍</span>
+            <span className={cn('text-accent', active && 'animate-pulse')}>▍</span>
           </motion.div>
         ) : (
           <motion.div
             key="summary"
-            initial={{ opacity: 0 }}
+            initial={active ? { opacity: 0 } : false}
             animate={{ opacity: 1 }}
             className="truncate text-white/45"
           >

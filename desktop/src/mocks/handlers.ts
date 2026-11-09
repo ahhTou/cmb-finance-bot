@@ -7,6 +7,7 @@ import type {
   Mode,
   Plan,
   PlanItem,
+  PlanPauseMode,
   PlanView,
   QuotaKind,
   QuotaTime,
@@ -49,7 +50,6 @@ const state = {
 }
 const active = () => ['armed', 'preparing', 'waiting', 'firing'].includes(state.task?.phase ?? '')
 const fail = (error: string, status = 400) => HttpResponse.json({ error }, { status })
-
 // Favourite settings (var/favorites-v2-contract.md §1/§4): the mock mirrors the
 // server's canonical rows — kept ids, full-list replacement, generated ids,
 // empty fields omitted, at most one test item.
@@ -123,7 +123,6 @@ function planProblems(plan: Plan): string[] {
     const at = parseLocal(item.at)
     if (!at) return [`第 ${index + 1} 项购买时间格式无效。`]
     if (at.getTime() <= now) return [`第 ${index + 1} 项购买时间已过（${planClock(item.at)}）。`]
-    if (at.getTime() > now + 14 * 24 * 3600_000) return [`第 ${index + 1} 项购买时间超过 14 天。`]
     return []
   })
   for (let index = 1; index < items.length; index += 1) {
@@ -187,6 +186,15 @@ function planView(): PlanView {
     settings_revision: 'mock-revision',
     now: localISO(new Date()),
   }
+}
+
+/** The armed watch task owned by the running/paused plan, if any. */
+function planWatchTask(): Task | null {
+  const plan = state.plan
+  const task = state.task
+  if (!plan?.plan_id || !task) return null
+  if (!active()) return null
+  return task.plan_id === plan.plan_id ? task : null
 }
 
 function savedPlan(dryRun: boolean, items: { code: string; amount: string; at: string; mode: Mode }[]): Plan {
@@ -489,6 +497,7 @@ export const handlers = [
     }
     await delay(300)
     if (state.plan?.phase === 'running') return fail('计划正在运行，不能修改；先取消计划。')
+    if (state.plan?.phase === 'paused') return fail('计划已暂停，不能修改；先停止计划。')
     const items = body.items ?? []
     if (items.length > 20) return fail('计划最多 20 项。')
     for (const item of items) {
@@ -548,14 +557,89 @@ export const handlers = [
     )
     return HttpResponse.json(planView())
   }),
-  http.post('/api/plan/disarm', async () => {
+  http.post('/api/plan/pause', async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as { mode?: PlanPauseMode }
+    const mode: PlanPauseMode = body.mode === 'immediate' ? 'immediate' : 'after_current'
     await delay(300)
     const plan = state.plan
-    if (plan?.phase !== 'running') return fail('计划没有在运行。')
+    if (!plan) return fail('还没有计划。')
+    if (plan.phase === 'paused') return fail('计划已暂停。')
+    if (plan.phase !== 'running') return fail('计划没有在运行。')
+    const task = planWatchTask()
+    if (mode === 'immediate' && task?.phase === 'firing')
+      return fail('当前布防正在提交，不能立即取消；等这一项结束后再试。')
+    if (mode === 'after_current' && task) {
+      plan.pause_requested = true
+      plan.pause_reason = 'manual'
+      state.planLogs.push(`${planStamp()} 已请求在当前布防结束后暂停`)
+      return HttpResponse.json(planView())
+    }
+    // No armed item (or immediate): the pause boundary is already reached.
+    if (task) state.task = { ...task, phase: 'disarmed' }
+    const now = localISO(new Date())
+    plan.phase = 'paused'
+    plan.pause_requested = false
+    plan.pause_reason = 'manual'
+    plan.paused_at = now
+    plan.pid = null
+    plan.stop_requested = false
+    plan.items = plan.items.map((item) =>
+      item.state === 'running'
+        ? { ...item, state: 'skipped', result: '计划已暂停，当前布防已取消', ended_at: now }
+        : item,
+    )
+    state.planLogs.push(`${planStamp()} 计划已暂停`)
+    return HttpResponse.json(planView())
+  }),
+  http.post('/api/plan/resume', async () => {
+    await delay(300)
+    const plan = state.plan
+    if (!plan) return fail('还没有计划。')
+    if (plan.phase !== 'paused') return fail('计划没有暂停。')
+    if (planWatchTask()) return fail('当前有值守任务在运行；等它结束后再继续计划。')
+    const now = localISO(new Date())
+    plan.phase = 'running'
+    plan.pid = 4242
+    plan.generation = Math.random().toString(16).slice(2, 10)
+    plan.pause_requested = false
+    plan.pause_reason = null
+    plan.paused_at = null
+    plan.stop_requested = false
+    plan.resume_count = (plan.resume_count ?? 0) + 1
+    plan.last_tick = now
+    const next = plan.items.findIndex((item) => item.state === 'pending')
+    if (next >= 0)
+      plan.items = plan.items.map((item, index) =>
+        index === next ? { ...item, state: 'running', armed_at: now } : item,
+      )
+    state.planLogs.push(`${planStamp()} 计划已继续（第 ${plan.resume_count} 次）`)
+    return HttpResponse.json(planView())
+  }),
+  http.post('/api/plan/disarm', async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as { mode?: PlanPauseMode }
+    const mode: PlanPauseMode = body.mode === 'after_current' ? 'after_current' : 'immediate'
+    await delay(300)
+    const plan = state.plan
+    if (!plan || (plan.phase !== 'running' && plan.phase !== 'paused')) return fail('计划没有在运行。')
+    if (mode === 'after_current' && plan.phase === 'paused')
+      return fail('计划已暂停；只能停止当前布防并停止。')
+    const task = planWatchTask()
+    if (mode === 'immediate' && task?.phase === 'firing')
+      return fail('当前布防正在提交，不能立即取消；等这一项结束后再试。')
+    if (mode === 'after_current' && task) {
+      plan.stop_requested = true
+      state.planLogs.push(`${planStamp()} 已请求在当前布防结束后停止计划`)
+      return HttpResponse.json(planView())
+    }
+    if (task) state.task = { ...task, phase: 'disarmed' }
     const now = localISO(new Date())
     plan.phase = 'disarmed'
     plan.ended_at = now
     plan.pid = null
+    plan.pause_requested = false
+    plan.pause_reason = null
+    plan.paused_at = null
+    plan.stop_requested = false
     plan.result = '计划已被手动取消'
     plan.items = plan.items.map((item) =>
       item.state === 'running' || item.state === 'pending'

@@ -32,6 +32,8 @@ cd /Users/ahhtou/Dev/cmb-finance-bot
 
 ## 1. 当前状态
 
+- **2026-11-09 计划模式第二轮与 Live 视图失焦优化**：① 计划状态卡片新增「暂停 / 开始（继续）/ 停止」图标：暂停默认在当前布防结束后生效（当前项继续跑完），`immediate` 会先取消当前布防再暂停（提交阶段拒绝）；点暂停/停止时若当前项已布防，弹三选项对话框「在当前布防结束后…」「停止当前布防并…」「算了，我点错了」，无当前布防则直接生效。`plan.json` 新增 `paused` phase 与 `pause_requested`/`pause_reason`（`manual`/`app_exit`）/`paused_at`/`stop_requested`/`resume_count`，暂停中的计划保存/清空/开始一律拒绝。② 第一次保存计划后自动开始：演练直接开始，真实自动打开既有确认框（仍须勾选「已核对」后才开始，不绕过付款确认）；当前有手动布防时不自动开始并提示「当前有手动布防，请在布防结束后开始计划。」计划运行或暂停期间任务页/演练页禁用新建布防并提示回计划页。③ 管理 App 退出时 `push.py app-watch` 在管道 EOF 后 best-effort 调 `watch_plan.pause_after_app_exit()`，运行中的计划在当前布防结束后自动暂停；App 重新打开时前端自动 `resume()`——只有 `pause_reason=app_exit` 才自动恢复，手动暂停永不自动恢复，有手动布防则提示不恢复。④ 取消计划 14 天上限：`watch_plan.MAX_LEAD` 与 schedule problem 删除，计划 arm 时传 `ARM_MAX_LEAD`；前端文案同步。注意计划进程轮到时立即布防（不等 `prep_at`），远期项会让值守进程长时间等待，Mac 需保持供电、不睡眠。⑤ 计划运行期间持续健康检查：`plan_settings.health_monitor_seconds`（默认 300、范围 60–3600，固定）在 `_wait_item` 轮询里按间隔检查模拟器/网络，只在状态变化时推送 `health_warning` / `network_recovered`，网络 down 只做非阻塞 `reconnect_wifi()`，不重启模拟器、不打断当前布防；健康检查期间的心跳/进度写盘改为按字段合并（不覆盖并发暂停/停止请求）。⑥ Live 专注视图：新增 `useWindowActive()`（window focus/blur + visibilitychange），窗口失焦后关闭 CodeRain/Waves/PhaseDot/字符翻转/日志进出/入场/链路进度全部动画，倒计时从 250ms 改为 60s 更新一次，重新聚焦立即恢复；不暂停任何轮询、SSE 或后端调用。范围边界：不执行真实交易/真实计划；手动布防、暂停/停止对话框与 App 退出自动暂停的真实窗口验收由账户持有人完成。验证：Python 全量 **467 项**通过（`.venv`，约 1.9 秒）；前端 `pnpm check`（0 error，1 个既有 warning / 5 infos）、`pnpm test`（77 项）、`pnpm build` 通过，`pnpm e2e` 122 项（WebKit + Chromium）通过；Tauri Release 构建通过，管理 App 已重建并重启。
+
 - **2026-11-09 计划模式：每项布防前先做健康检查（修复 21:20 真实计划 1 秒失败）**：2026-11-09 21:20 开始的一份真实计划（00:15 120084A 5000 元、09:00 133078A 15000 元）在第 1 秒就两项全部失败，原因是 `night_watch._arm()` 只做「模拟器没有在运行」硬检查，`watch_plan.run()` 捕获后直接记 failed、没有任何修复尝试。现在 `src/night_watch.py` 新增 `arm_health(timeout_minutes, tick=None, note=None)`：模拟器未运行 → `manage.start()` 并轮询 `booted()`；网络 down → 循环 `reconnect_wifi()`，`no-device` 或仍不通 → `restart_emulator()`；开机后恢复屏幕常亮（失败只记录）；所有等待按 2 秒分片并调用 `tick()` 续计划心跳，用户可见进度只走 `note()`（不写 watch.log）；失败统一抛 `Abort("健康检查未通过：<原因>；已尝试<…>（最长等待 N 分钟）。")`，返回修复项列表。`restart_emulator(tick=None)` 增加可选心跳回调。`src/watch_plan.py` 的 `run()` 在每项 `arm_task()` 前（两项之间也）调用健康检查：进入 running 即写 `health="正在做布防前健康检查"`，进度通过 `note()` 写 `plan.log`（前缀「健康检查：」）并写进该项 `health` 字段，页面在进入任务阶段前用 `health` 作为 description（`_item_status()`，时间线行内也显示运行中描述）；修好后记「健康检查：已…」「健康检查通过」再布防；健康检查失败只把该项记 failed（结果以「健康检查未通过：…」开头）、推送一条通知，然后继续下一项，不中止整份计划。新增 `plan_settings.health_timeout_minutes`（默认 15、范围 1–60，标注「限度」）与管理 App「设置 → 其他 → 进程监控 → 健康检查最长等待」；CLI 与 `/api/settings/other` 走通用映射，无需单独改。手动单独布防保持原硬检查（快速失败），本轮只改计划模式。范围边界：不改购买链路与交易动作，本轮未执行真实交易/真实计划；真实窗口验收由账户持有人在模拟器未启动时清空并重新保存、开始计划完成。验证：Python 全量 **417 项**通过（`.venv`，+16 项隔离测试，约 1.7 秒）；前端 `pnpm check`（0 error，1 个既有 warning / 5 infos）、`pnpm test`（72 项）、`pnpm build` 通过，`pnpm e2e` 110 项（WebKit + Chromium）通过；Tauri Release 构建通过，管理 App 已重建并重启。
 
 - **2026-11-09 侧边栏页面保活（目前只开计划页）**：侧边栏切菜单会卸载页面组件，计划页里未保存的多行草稿、时间线/周视图选择、滚动位置跟着消失。`desktop/src/router.tsx` 的 `PAGES` 新增 `keepAlive` 配置：标为 true 的页面第一次打开后一直挂载，切到别的菜单时用 `display: none` 隐藏（`hidden` class），回来时组件状态原样保留；没标的页面保持原来的卸载/重挂行为。目前只给「计划」页开保活。值守中的任务页专注视图（`LivePage`）打开时，整块页面栈也保持挂载只隐藏，从专注视图切回计划页同样不丢草稿；专注视图本身的行为不变。约定：页面状态仍放在页面组件里，需要跨菜单保留就在 `PAGES` 里开 `keepAlive`，不要为此另建全局 store 或把草稿搬进 TanStack Query。e2e 新增两个用例：计划草稿 + 周视图切「状态」再回来仍在、页面确实被隐藏；值守中从计划切到任务专注视图再回来草稿仍在。范围边界：只改前端与文档，后端、CLI、计划进程无改动，本轮未执行真实交易。验证：Python 全量 401 项通过（`.venv`，约 1.6 秒；未改后端）；前端 `pnpm check`（0 error，1 个既有 warning / 5 infos）、`pnpm test`（72 项）、`pnpm build` 通过，`pnpm e2e` 110 项（WebKit + Chromium）通过；Tauri Release 构建通过，管理 App 已重建并重启。
@@ -216,6 +218,7 @@ App 启动时会拉起一个 Python 看门狗（`src/push.py app-watch`），负
 | `desktop/src` 前端、`src-tauri`（Rust） | 要 | 要 |
 | `src/admin_server.py` | 不用 | 要 |
 | `admin_cli.py`、`night_watch.py`、`query_gate.py`/`.js`、`purchase_settings.py`、`plan_settings.py` 等 | 不用 | 不用 |
+| `src/push.py`（尤其是 `app-watch` 退出回调和计划自动暂停） | 不用 | 要（看门狗由 App 启动时拉起） |
 
 后端每个请求都会新起子进程运行 `admin_cli`，下一次请求或下一次布防就用上新代码。**已布防的任务沿用布防时保存的配置快照**，改设置不会影响它。
 
@@ -445,27 +448,31 @@ tail -f var/night/watch.log              # 每次打开均记录；附已确认�
 
 ### 5B.1 规则
 
-- 一项 = 购买时间 + 模式（首发/不定时抢购）+ 产品代码 + 金额；最多 **20 项**，购买时间须在未来 **14 天**内，按时间排序保存。
+- 一项 = 购买时间 + 模式（首发/不定时抢购）+ 产品代码 + 金额；最多 **20 项**，购买时间须在未来，按时间排序保存。2026-11-09 起**取消 14 天上限**：计划进程轮到时立即布防（不等 `prep_at`），所以远期的项会让值守进程长时间等待；长周期计划依赖 Mac 保持供电、不睡眠，合盖/断电仍会错过。
 - 相邻两项必须满足：`下一项冷启动时间 ≥ 上一项预计结束时间 + 2 分钟`。上一项预计结束时间：首发按「开售 + 查询窗口 + 2 分钟提交余量」，不定时按「开始 + 窗口分钟数」。不满足时保存可以成功，但 `problems` 会给出至少需要的间隔、**不能开始**。
 - 程序启动计划进程后逐项执行：上一项结束（`done` 或 `aborted`）后才处理下一项；某项失败会在计划日志/推送里记录并继续下一项；**用户手动取消当前布防（任务页「取消布防」）会让整份计划停止**。
-- 计划开始后不能修改计划（只能取消/清空）；计划期间手动单独布防会被拒绝（`_arm` 计划互斥）。计划开始时快照购买配置；运行期间修改配置时，若当前项未进入提交，中止计划并取消当前布防；已进入提交则等结果，并在下一项布防前停止；最后一项按快照执行完后结束。管理 App 在运行中显示配置变化提示，展示使用开始时的快照。
+- 计划生命周期：保存后第一次自动开始——演练计划直接开始，真实计划自动打开确认框（仍须勾选核对后点「确认真实支付」，不绕过确认）；当前有手动布防时不自动开始，提示「当前有手动布防，请在布防结束后开始计划。」计划运行中/暂停中，管理 App 会禁用任务页、演练页的新建布防并提示「当前有计划模式，请回到计划模式中添加任务。」
+- 暂停 / 恢复 / 停止（`watch_plan.pause()/resume()/disarm()`）：状态卡片有暂停、开始（继续）、停止图标。暂停默认只阻止后续项——当前已布防项继续执行到结束；`immediate` 会先取消当前布防再暂停（提交阶段一律拒绝）。点暂停/停止时若当前项已布防，弹三选项对话框：「在当前布防结束后暂停/停止」「停止当前布防并暂停/停止」「算了，我点错了」；没有当前布防时直接生效。暂停中的计划只能继续或停止，`plan-save`/`plan-clear`/`plan-start` 都会被拒绝。管理 App 退出时由 `push.py app-watch` 的 EOF 回调 best-effort 调 `pause_after_app_exit()`，计划在当前布防结束后自动暂停；App 重新打开时前端自动 `resume()`（`pause_reason=app_exit` 才自动恢复，`manual` 永不自动恢复；有手动布防则提示不恢复）。
+- 计划开始后不能修改计划（只能暂停/停止/取消）；计划运行或暂停期间管理 App 禁用新建布防（后端 `_arm` 互斥仍兜底），暂停中保存/清空/开始也被后端拒绝。计划开始时快照购买配置；运行期间修改配置时，若当前项未进入提交，中止计划并取消当前布防；已进入提交则等结果，并在下一项布防前停止；最后一项按快照执行完后结束。管理 App 在运行中显示配置变化提示，展示使用开始时的快照。
 - 真实计划必须显式确认：管理 App 确认框冻结并列出全部产品、金额、模式、购买日期时间，勾选「我已核对产品和金额，确认真实支付 ¥…」；开始请求携带计划 ID、内容版本和配置版本，在计划锁与任务锁内校验。CLI 演练与真实都必须显式带 `--plan-id`、`--content-revision`、`--settings-revision`（分别来自已核对的 `plan` 响应的 `plan.plan_id`、`plan.content_revision` 与顶层 `settings_revision`），真实还必须带 `--confirm-real-payment`。缺版本或版本变化会拒绝，不能自动取最新版本来绕过重新核对。演练计划只输交易密码、不点确定、不提交。
-- 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`/`settings_snapshot`，读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；进程仍存活但心跳超过「设置 → 其他」的阈值时只显示「心跳超时」告警，不据此自动重试交易。
+- 计划项的状态机：`pending → running → done | failed | skipped`，结果未知项额外带 `outcome=unknown`；计划状态：`idle → running ⇄ paused → done | aborted | disarmed`。`plan.json` 里带 `plan_id`/`generation`/`pid`/`last_tick`/`settings_snapshot`，暂停/停止相关字段为 `pause_requested`/`pause_reason`（`manual` / `app_exit`）/`paused_at`/`stop_requested`/`resume_count`；读取接口另返回 `content_revision`。进程退出时页面显示「进程已退出」，可用「取消计划」收口；进程仍存活但心跳超过「设置 → 其他」的阈值时只显示「心跳超时」告警，不据此自动重试交易。
 - 页面状态统一用 `status: {primary, secondary, description}`：主状态为 `pending / running / done / failed / skipped / cancelled / expired / unknown`，决定颜色；副状态是枚举（已排程、立即准备、准备中、等待查询、提交中、成功、演练完成、结果未知、配置已变、无额度、时间已过、手动取消、心跳超时、进程已退出等）；描述是可选的文本。计划时间段已过且未在应用/计划进程运行期间执行时，主状态为「已过期」，只提示，不补单。
 - 任务终态按 `outcome=success/failed/dry_run/unknown` 判断，不以 `phase=done` 代替购买成功。明确失败（布防/准备失败、窗口内没买到、页面明确失败）记 `failed` 并继续；明确成功或演练完成记 `done`。旧记录只接受明确结果白名单，不熟悉的结果保守视为未知。watch 进程消失后等 15 秒宽限：能证明未进入提交则记失败继续，仍为 `firing`、有 `fired_at` 或任务记录丢失则记结果未知。**结果未知、提交阶段超时或未捕获异常**会整份中止，不杀提交中进程，不开始下一项，提示「请查交易记录，不要重复提交」。
 - 若计划进程自己异常退出（被 kill、崩溃），`plan.json` 会停在 `running` 且 `pid` 不存活（`stale`），页面显示「进程已退出」，需要人工点「取消计划」收口；此时当前 watch 可能仍在跑，先查是否已提交过。
-- 计划进程内部的轮询/心跳/宽限/超时/终止等待、心跳超时阈值和相邻间隔都在「设置 → 其他」里调（`src/plan_settings.py`，`var/night/plan-settings.json`）。它们不属于购买配置，不改变 `settings_revision`；`plan-start` 时读取并快照到 `plan.json` 的 `runtime_settings`，运行中的计划沿用开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间在未来 14 天内仍是产品约束，不在此页。
+- 计划运行期间由计划进程按 `health_monitor_seconds`（默认 300 秒）持续检查模拟器和网络；发现问题只在状态变化时推送 `health_warning`，网络 down 只做非阻塞的 `reconnect_wifi()`，**绝不重启模拟器或打断当前布防**；恢复后推送 `network_recovered`。
+- 计划进程内部的轮询/心跳/宽限/超时/终止等待、心跳超时阈值、相邻间隔、每项布防前的健康检查最长等待和运行期健康检查间隔都在「设置 → 其他」里调（`src/plan_settings.py`，`var/night/plan-settings.json`）。它们不属于购买配置，不改变 `settings_revision`；`plan-start` 时读取并快照到 `plan.json` 的 `runtime_settings`，运行中的计划沿用开始时的值，之后修改只影响下一份计划。计划项最多 20 项、购买时间须在未来仍是产品约束，不在此页。
 
 ### 5B.2 操作（管理 App「计划」页）
 
 1. 添加布防：填购买时间（可加多行）、选模式、产品代码、金额。产品代码下方有收藏快捷选择，点一下填入产品代码；测试项会连测试金额一并填入，仍可手动修改。
    - 视图：默认「时间线」连续展示全部任务，任务多时在时间线内纵向滚动；「周视图」以今天为首日横向展示 7 天，左右箭头切换 7 天窗口，不出现滚动条，只读。
-2. 保存计划：后端校验格式并算出每项的「冷启动 / 购买 / 预计结束」；时间冲突、过期、超过 14 天等问题会显示在「还不能开始」里。
-3. 选「演练计划」（默认关）或保持真实；点「开始计划」：
+2. 保存计划：后端校验格式并算出每项的「冷启动 / 购买 / 预计结束」；时间冲突、过期等问题会显示在「还不能开始」里。保存成功且计划可开始时会自动开始：演练直接开始，真实自动弹出确认框（仍须勾选核对）；当前有手动布防则只保存并提示。
+3. 选「演练计划」（默认关）或保持真实；也可以随时点「开始计划」手动开始：
    - 演练计划：确认后直接开始，输完密码不提交；
    - 真实计划：确认框列出项数与合计金额，勾选核对后才能开始。
-4. 运行中列表只读，显示每项状态徽标、结果、最近日志和下一项倒计时；点「取消计划」会先停计划进程，再取消当前布防（若当前正在提交，则拒绝取消并提示先查交易记录）。
-5. 结束后按需「清空」计划。
+4. 运行中/暂停中列表只读，显示每项状态徽标、结果、最近日志和下一项倒计时。状态卡片图标：暂停（默认在当前布防结束后暂停，可改成立即停止当前布防）、继续（暂停中）、停止（等同取消整份计划并停止当前布防；提交阶段拒绝）。
+5. 关闭管理 App：运行中的计划在当前布防结束后自动暂停，重新打开 App 自动继续（手动暂停除外）。计划运行或暂停时，任务页/演练页的新建布防禁用并提示回计划页添加。
+6. 结束后按需「清空」计划；暂停中的计划需先继续或停止才能保存/清空。
 
 ### 5B.3 CLI / JSON 接口
 
@@ -474,13 +481,15 @@ python3 -B src/admin_cli.py plan                 # 查看计划（plan/running/s
 python3 -B src/admin_cli.py plan-save < plan.json  # stdin: {"dry_run":false,"items":[{"code":...,"amount":...,"at":"...","mode":"first_launch"}]}
 python3 -B src/admin_cli.py plan-start --plan-id <计划ID> --content-revision <内容版本> \
     --settings-revision <配置版本> --confirm-real-payment   # 版本来自上面已核对的 plan 响应；演练省略付款 flag
-python3 -B src/admin_cli.py plan-disarm          # 取消计划并取消当前布防
+python3 -B src/admin_cli.py plan-pause --mode after_current|immediate   # 暂停计划
+python3 -B src/admin_cli.py plan-resume           # 继续暂停的计划
+python3 -B src/admin_cli.py plan-disarm --mode after_current|immediate  # 停止计划（默认 immediate，兼容旧用法）
 python3 -B src/admin_cli.py plan-clear           # 未运行时清空计划
 python3 -B src/admin_cli.py settings-other        # 查看「设置 → 其他」的计划调度参数
 python3 -B src/admin_cli.py settings-other --poll-seconds 3 --heartbeat-seconds 15
 ```
 
-HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/plan/disarm`、`DELETE /api/plan`。开始请求必须提供 `plan_id/content_revision/settings_revision`，确认内容或配置变化会拒绝，真实计划另需 `confirm_real_payment=true`。
+HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/plan/pause`、`POST /api/plan/resume`、`POST /api/plan/disarm`、`DELETE /api/plan`。开始请求必须提供 `plan_id/content_revision/settings_revision`，确认内容或配置变化会拒绝，真实计划另需 `confirm_real_payment=true`；`pause`/`disarm` 接受可选 `mode=after_current|immediate`，无 body 时 pause 默认 after_current、disarm 默认 immediate（兼容旧行为）。
 
 计划调度参数：`GET/PUT /api/settings/other`，或 `admin_cli.py settings-other`（CLI 参数用 `--poll-seconds` 这类形式）；保存支持部分更新，未知键、越界值和非整数拒绝，且 `poll_seconds` 不得大于 `heartbeat_seconds`。
 
@@ -490,8 +499,8 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 
 | 文件 | 内容 |
 |---|---|
-| `var/night/plan.json` | 计划输入、每项状态、`plan_id`/`generation`/`pid`/心跳；启动时写入 `runtime_settings` 快照；0600、原子写 |
-| `var/night/plan.log` | 计划进程日志：每项布防/完成/失败、降级为立即冷启动、异常中止 |
+| `var/night/plan.json` | 计划输入、每项状态、`plan_id`/`generation`/`pid`/心跳、暂停/停止请求（`pause_requested`/`pause_reason`/`paused_at`/`stop_requested`/`resume_count`）；启动时写入 `runtime_settings` 快照；0600、原子写 |
+| `var/night/plan.log` | 计划进程日志：每项布防/完成/失败、健康检查进度、暂停/停止、降级为立即冷启动、异常中止 |
 | `var/night/plan-settings.json` | 「设置 → 其他」的计划调度参数；0600、原子写 |
 | `var/night/history.jsonl` | 每个计划项仍写一条普通值守历史，额外带 `plan_id`、`plan_item` |
 
@@ -503,6 +512,10 @@ HTTP：`GET /api/plan`、`PUT /api/plan`、`POST /api/plan/start`、`POST /api/p
 | `第 N 项布防失败：健康检查未通过：…` | 在最长等待内没修好模拟器或网络 | 该项记为失败，计划继续下一项；按文案人工检查后再决定是否重排 |
 | `第 N 项剩余时间不足，改为立即冷启动` | 上一项拖到现在或计划启动晚于预算 | 仍会尽力执行一次 |
 | `第 N 项完成：…` / `计划第 N 项失败：…` | 单项结果 | 失败继续下一项；真实结果以银行记录为准 |
+| `计划已暂停：当前布防结束后暂停` / `计划已暂停：当前布防已停止` | 暂停请求已生效（前者当前项继续执行，后者已取消当前布防） | 需要时点继续；手动暂停不会因重开 App 自动恢复 |
+| `计划已停止：当前布防结束后停止` | 停止请求在边界生效（当前项保留实际结果，后续项跳过） | 计划已结束，可清空重排 |
+| `管理 App 已退出，计划将在当前布防结束后暂停` | 管理 App 退出触发的自动暂停请求 | 重新打开 App 会自动继续；想保持暂停需在 App 内手动暂停 |
+| `计划运行期健康检查异常：…` / `计划运行期健康检查已恢复`（推送） | 计划运行期间巡检模拟器/网络异常或恢复 | 只通知和安全重连 Wi-Fi，不重启模拟器、不打断当前布防；持续异常请人工检查 |
 | `计划已中止：值守配置在计划期间被修改` | 计划期间改了设置 | 重新核对配置后重新保存/开始 |
 | `计划已中止：第 N 项布防被取消，计划已停止` | 用户手动取消了当前布防 | 需要的话重新开始剩余项 |
 | `计划进程已退出`（页面） | `plan.json` 仍 running 但进程不在 | 点「取消计划」收口；先查是否已提交过 |

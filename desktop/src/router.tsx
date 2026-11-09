@@ -11,11 +11,13 @@ import {
 import { CalendarClock, FlaskConical, Gauge, History, Layers, RotateCw, Settings, Star } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
+import { api } from './api/client'
 import { q, useRefreshPage, useStatusEvents, useWatch } from './api/hooks'
+import type { PlanView } from './api/types'
 import { Spinner } from './components/shared'
 import { Toast } from './components/Toast'
 import { Button } from './components/ui/button'
-import { clockTime, cn } from './lib/utils'
+import { ACTIVE_PHASES, clockTime, cn } from './lib/utils'
 import { DashboardPage } from './pages/Dashboard'
 import { DrillPage } from './pages/Drill'
 import { FavoritesPage } from './pages/Favorites'
@@ -100,6 +102,42 @@ function lastPage(): PagePath {
 }
 
 /**
+ * Plan recovery on app launch: a plan the app itself paused (`app_exit`) keeps
+ * going, so resume it once per window load. A manual pause is never touched.
+ * Runs before the plan page is opened and warms its cache with the reply.
+ */
+let planRecoveryStarted = false
+
+function usePlanRecovery() {
+  const qc = useQueryClient()
+  useEffect(() => {
+    if (planRecoveryStarted) return
+    planRecoveryStarted = true
+    void (async () => {
+      try {
+        const view = await api<PlanView>('GET', '/api/plan')
+        const plan = view.plan
+        if (!plan) return
+        if (plan.pause_reason !== 'app_exit') return
+        const manualTask =
+          !!view.task && ACTIVE_PHASES.includes(view.task.phase ?? '') && view.task.plan_id !== plan.plan_id
+        if (manualTask) {
+          useUI.getState().setMessage('当前有手动布防，请在布防结束后开始计划。')
+          return
+        }
+        const paused = plan.phase === 'paused'
+        const pendingPause = plan.phase === 'running' && plan.pause_requested === true
+        if (!paused && !pendingPause) return
+        const resumed = await api<PlanView>('POST', '/api/plan/resume')
+        qc.setQueryData(q.plan.queryKey, resumed)
+      } catch {
+        // Launch recovery is best-effort: never block the UI on it.
+      }
+    })()
+  }, [qc])
+}
+
+/**
  * One menu page is active at a time. A page marked `keepAlive` is mounted on its
  * first visit and then only hidden while another menu is open, so its local state
  * survives the round trip; every other page still unmounts and starts fresh.
@@ -130,6 +168,7 @@ function PageOutlet({ current }: { current: PageDef }) {
 
 function Layout() {
   useStatusEvents()
+  usePlanRecovery()
   const qc = useQueryClient()
   const { active } = useWatch()
   const path = useRouterState({ select: (s) => s.location.pathname })

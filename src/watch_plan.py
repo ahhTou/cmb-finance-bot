@@ -44,10 +44,19 @@ import purchase_settings
 import query_gate
 
 MAX_ITEMS = 20                        # 一份计划最多几项（先例：favorites.MAX_ITEMS）
-MAX_LEAD = timedelta(days=14)         # 计划最长 14 天
+ARM_MAX_LEAD = timedelta(days=36500)  # 计划不再限制 14 天（只防 datetime 溢出）
 LOG_LINES = 15                        # view 返回的 plan.log 行数
 CODE = re.compile(r"[A-Za-z0-9]{4,20}")
 ACTIVE_PHASES = ("armed", "preparing", "waiting", "firing")
+PAUSE_MODES = ("after_current", "immediate")
+# plan.json 里新增的暂停/停止状态；旧计划文件缺这些键时按默认值补齐。
+PLAN_STATE_DEFAULTS = {
+    "pause_requested": False,
+    "pause_reason": None,
+    "paused_at": None,
+    "stop_requested": False,
+    "resume_count": 0,
+}
 
 
 # ---------------------------------------------------------------- 存储与锁
@@ -105,6 +114,8 @@ def load_plan():
         raise nw.Abort("计划文件格式无效。")
     if not isinstance(plan, dict):
         raise nw.Abort("计划文件格式无效。")
+    for key, value in PLAN_STATE_DEFAULTS.items():
+        plan.setdefault(key, value)
     return plan
 
 
@@ -235,8 +246,6 @@ def schedule(plan, settings, now, runtime=None):
         at = _plan_at(item)
         if at <= now:
             problems.append(f"第 {index} 项购买时间已过（{at:%H:%M}）。")
-        elif at > now + MAX_LEAD:
-            problems.append(f"第 {index} 项购买时间超过 14 天。")
     for index in range(1, len(items)):
         prev_at = _plan_at(items[index - 1])
         prev_end = datetime.fromisoformat(enriched[index - 1]["end_at"])
@@ -342,6 +351,14 @@ def _plan_status(plan, item_statuses, task, running, stale, heartbeat_stale):
             secondary = item_statuses[current]["secondary"]
             return _status("running", secondary, f"第 {current + 1} 项 {item.get('code', '')}：{item_statuses[current]['description'] or ''}".strip())
         return _status("running", "starting", None)
+    if phase == "paused":
+        reason = ("管理 App 已退出，自动暂停" if plan.get("pause_reason") == "app_exit"
+                  else "手动暂停")
+        description = f"计划已暂停（{reason}）"
+        if (task and task.get("plan_id") == plan.get("plan_id")
+                and task.get("phase") in ACTIVE_PHASES):
+            description += "；当前布防继续执行，恢复后继续后续项"
+        return _status("pending", "paused", description)
     if phase == "done":
         return _status("done", "completed", result or "计划已完成")
     if phase == "aborted":
@@ -450,11 +467,16 @@ def save(raw):
     plan = {"version": 1, "plan_id": uuid.uuid4().hex, "generation": None,
             "created_at": _now_iso(), "started_at": None, "ended_at": None,
             "dry_run": dry_run, "phase": "idle", "pid": None, "last_tick": None,
-            "settings_revision": _settings_revision(), "result": None, "items": items}
+            "settings_revision": _settings_revision(), "result": None, "items": items,
+            **PLAN_STATE_DEFAULTS}
     with plan_lock(False):
         current = load_plan()
         if current and current.get("phase") == "running" and nw.alive(current.get("pid")):
             raise nw.Abort("计划正在运行，不能修改；先取消计划。")
+        if current and current.get("phase") == "paused":
+            # A paused plan is still alive: it must be resumed or stopped, never
+            # silently replaced by a new draft.
+            raise nw.Abort("计划已暂停；请先继续或停止计划后再保存。")
         save_plan(plan)
     return plan
 
@@ -479,6 +501,8 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
         if plan is None:
             raise nw.Abort("还没有计划；先保存计划。")
         phase = plan.get("phase")
+        if phase == "paused":
+            raise nw.Abort("计划已暂停；请先继续或停止计划后再开始。")
         if phase == "running":
             raise nw.Abort("计划正在运行；先取消计划再开始。" if nw.alive(plan.get("pid"))
                            else "计划进程已退出；先取消计划再重新开始。")
@@ -511,7 +535,9 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
             plan.update(phase="running", generation=generation, started_at=now,
                         ended_at=None, pid=None, last_tick=now, result=None,
                         settings_revision=purchase_settings.revision(settings),
-                        settings_snapshot=settings, runtime_settings=runtime)
+                        settings_snapshot=settings, runtime_settings=runtime,
+                        pause_requested=False, pause_reason=None, paused_at=None,
+                        stop_requested=False, resume_count=0)
             for item in plan.get("items", []):
                 item.update(state="pending", task_id=None, result=None,
                             armed_at=None, ended_at=None)
@@ -601,12 +627,153 @@ def _disarm_current_watch(plan, item_index):
             save_plan(current)
 
 
-def disarm():
-    """plan-disarm：先写 disarmed 再停进程，最后把当前值守取消到终态。"""
+def pause(mode="after_current"):
+    """plan-pause：暂停计划。
+
+    after_current（默认）只写请求，计划进程在当前布防项结束后或下一个循环顶
+    置 paused；immediate 会先取消本计划当前的值守（firing 一律拒绝），再停掉
+    计划进程并立即置 paused。没有活跃的计划值守时两者等价。
+    """
+    if mode not in PAUSE_MODES:
+        raise nw.Abort("暂停方式只能是 after_current 或 immediate。")
     with plan_lock(False):
         plan = load_plan()
         if plan is None or plan.get("phase") != "running":
+            raise nw.Abort("计划没有在运行，不需要暂停。")
+        now = _now_iso()
+        if mode == "after_current":
+            plan.update(pause_requested=True, pause_reason="manual", last_tick=now)
+            if nw.alive(plan.get("pid")):
+                save_plan(plan)
+            else:
+                # The worker is gone (stale): nothing will ever apply the
+                # request, so settle the paused state here.
+                plan.update(phase="paused", pause_requested=False, paused_at=now,
+                            pause_reason="manual", last_tick=now)
+                save_plan(plan)
+                _note("计划已暂停：当前布防结束后暂停")
+            return view()
+        # immediate: never stop a submission that may already be firing.
+        # "当前 watch" 必须是本计划、且属于正在跑的项的 task；上一项遗留的终态
+        # task（可能带 fired_at）不算，否则会在两项之间误报“正在提交”。
+        task = nw.load_task()
+        own = task if task and task.get("plan_id") == plan.get("plan_id") else None
+        running = next((row for row in plan.get("items") or []
+                        if row.get("state") == "running"), None)
+        running_task_id = (running or {}).get("task_id")
+        if own and running is not None and not running_task_id:
+            own = own if own.get("plan_item") == running.get("item_id") else None
+        elif own and (running is None or own.get("task_id") != running_task_id):
+            own = None
+        if own and (own.get("phase") == "firing" or own.get("fired_at")):
+            raise nw.Abort("当前布防正在提交，不能暂停；请等结果并查交易记录。")
+        plan.update(pause_requested=True, pause_reason="manual", last_tick=now)
+        save_plan(plan)
+        active = own if own and own.get("phase") in ACTIVE_PHASES else None
+        if active:
+            nw.disarm_task(expected_plan_id=plan.get("plan_id"),
+                           expected_task_id=active.get("task_id"))
+            items = plan.get("items") or []
+            index = next((i for i, item in enumerate(items)
+                          if item.get("task_id") == active.get("task_id")), None)
+            if index is None:
+                index = next((i for i, item in enumerate(items)
+                              if item.get("state") == "running"), None)
+            if index is not None:
+                items[index].update(state="skipped",
+                                    result="计划暂停：当前布防已停止", ended_at=now)
+        try:
+            _stop_plan_process(plan)
+        except (nw.Abort, OSError) as exc:
+            _note(f"计划进程未能确认停止：{exc}")
+        plan.update(phase="paused", pause_requested=False, paused_at=now,
+                    pause_reason="manual", last_tick=now)
+        save_plan(plan)
+        _note("计划已暂停：当前布防已停止")
+    return view()
+
+
+def resume():
+    """plan-resume：恢复暂停的计划（或取消 App 退出留下的自动暂停）。"""
+    with plan_lock(False):
+        plan = load_plan()
+        if plan is None:
+            raise nw.Abort("计划没有暂停，不需要恢复。")
+        phase = plan.get("phase")
+        if phase == "running":
+            if plan.get("pause_requested") and plan.get("pause_reason") == "app_exit":
+                # The management App is back before the worker reached a
+                # boundary: simply cancel the pending automatic pause.
+                plan.update(pause_requested=False, pause_reason=None, paused_at=None,
+                            last_tick=_now_iso())
+                save_plan(plan)
+                return view()
+            raise nw.Abort("计划没有暂停，不需要恢复。")
+        if phase != "paused":
+            raise nw.Abort("计划没有暂停，不需要恢复。")
+        task = nw.load_task()
+        if _active_task(task) and task.get("plan_id") != plan.get("plan_id"):
+            raise nw.Abort("当前有手动布防，请在布防结束后开始计划。")
+        generation = uuid.uuid4().hex
+        now = _now_iso()
+        plan.update(phase="running", generation=generation, pid=None, last_tick=now,
+                    pause_requested=False, pause_reason=None, paused_at=None,
+                    stop_requested=False,
+                    resume_count=int(plan.get("resume_count") or 0) + 1)
+        save_plan(plan)
+        try:
+            proc = _spawn(generation)
+        except (OSError, ValueError) as exc:
+            plan.update(phase="paused", result=f"计划进程启动失败：{exc}",
+                        last_tick=_now_iso())
+            save_plan(plan)
+            raise nw.Abort(f"计划进程启动失败：{exc}")
+        plan["pid"] = proc.pid
+        save_plan(plan)
+    return view()
+
+
+def pause_after_app_exit():
+    """Best-effort：管理 App 退出后让运行中的计划在当前布防结束后暂停。
+
+    Called by push.py's lifecycle watchdog; never raises. Does not overwrite a
+    manual pause request or a pending stop.
+    """
+    try:
+        with plan_lock(False):
+            plan = load_plan()
+            if not plan or plan.get("phase") != "running":
+                return False
+            if plan.get("stop_requested") or plan.get("pause_reason") == "manual":
+                return False
+            plan.update(pause_requested=True, pause_reason="app_exit",
+                        last_tick=_now_iso())
+            save_plan(plan)
+        _note("管理 App 已退出，计划将在当前布防结束后暂停")
+        return True
+    except Exception:
+        return False
+
+
+def disarm(mode="immediate"):
+    """plan-disarm：停止计划。
+
+    immediate（默认，兼容旧用法）保持原有行为：立刻写 disarmed 再停进程和当前
+    值守；after_current 只写停止请求，计划进程在当前布防项结束后自己收口。
+    """
+    if mode not in PAUSE_MODES:
+        raise nw.Abort("停止方式只能是 after_current 或 immediate。")
+    with plan_lock(False):
+        plan = load_plan()
+        if plan is None or plan.get("phase") not in ("running", "paused"):
             raise nw.Abort("计划没有在运行。")
+        if plan.get("phase") == "paused" and mode == "after_current":
+            raise nw.Abort("计划已暂停，请直接停止或恢复后再操作。")
+        if mode == "after_current" and nw.alive(plan.get("pid")):
+            plan.update(stop_requested=True, last_tick=_now_iso())
+            save_plan(plan)
+            return view()
+        # immediate, or after_current on a stale worker (degraded to immediate).
         task = nw.load_task()
         if task and task.get("phase") == "firing":
             raise nw.Abort("当前布防正在提交，不能取消计划；请等结果并查交易记录。")
@@ -614,7 +781,7 @@ def disarm():
         running_index = next((index for index, item in enumerate(plan.get("items") or [])
                               if item.get("state") == "running"), None)
         plan.update(phase="disarmed", ended_at=now, result="计划已被手动取消",
-                    last_tick=now)
+                    last_tick=now, stop_requested=False, pause_requested=False)
         for item in plan.get("items", []):
             if item.get("state") in ("pending", "running"):
                 item.update(state="skipped", result="计划已被手动取消", ended_at=now)
@@ -640,11 +807,13 @@ def disarm():
 
 
 def clear():
-    """plan-clear：仅未运行、且没有活跃值守任务时删除 plan.json。"""
+    """plan-clear：仅未运行/未暂停、且没有活跃值守任务时删除 plan.json。"""
     with plan_lock(False):
         plan = load_plan()
         if plan and plan.get("phase") == "running" and nw.alive(plan.get("pid")):
             raise nw.Abort("计划正在运行；先取消计划。")
+        if plan and plan.get("phase") == "paused":
+            raise nw.Abort("计划已暂停；请先继续或停止计划后再清空。")
         if _active_task(nw.load_task()):
             raise nw.Abort("当前仍有值守任务；先取消防守。")
         plan_path().unlink(missing_ok=True)
@@ -673,6 +842,31 @@ def _save_running(plan):
                 or current.get("plan_id") != plan.get("plan_id")):
             return False
         save_plan(plan)
+        return True
+
+
+def _touch_running(plan, *, health=None, item_id=None):
+    """Merge this worker's progress fields into the *current* plan.json.
+
+    Used while the pre-arm health check runs, when the in-memory `plan` snapshot
+    is stale: another process may have written pause_requested /
+    stop_requested / pause_reason meanwhile. Reload under the lock and update
+    only `last_tick` (and the matching item's `health` by item_id); never write
+    the stale snapshot back. Returns False when the plan is no longer running.
+    """
+    with plan_lock():
+        current = load_plan()
+        if (not current or current.get("phase") != "running"
+                or current.get("generation") != plan.get("generation")
+                or current.get("plan_id") != plan.get("plan_id")):
+            return False
+        current["last_tick"] = _now_iso()
+        if health is not None:
+            for row in current.get("items") or []:
+                if item_id is not None and row.get("item_id") == item_id:
+                    row["health"] = health
+                    break
+        save_plan(current)
         return True
 
 
@@ -709,6 +903,33 @@ def _abort(plan, message, item_index=None, item_state="skipped", item_result=Non
         return False
     log(f"计划已中止：{message}")
     nw.alert("计划已中止", message, 5, event='plan_aborted')
+    return True
+
+
+def _pause_boundary(plan):
+    """Worker boundary: persist phase=paused (keeps pause_reason)."""
+    reason = plan.get("pause_reason")
+    now = _now_iso()
+    plan.update(phase="paused", pause_requested=False, paused_at=now, last_tick=now)
+    if not _save_running(plan):
+        return False
+    log("计划已暂停：管理 App 已退出" if reason == "app_exit"
+        else "计划已暂停：当前布防结束后暂停")
+    return True
+
+
+def _stop_boundary(plan):
+    """Worker boundary: stop the plan, skipping items that never ran."""
+    now = _now_iso()
+    plan.update(phase="disarmed", ended_at=now, last_tick=now, stop_requested=False,
+                result="计划已停止：当前布防结束后停止")
+    for item in plan.get("items") or []:
+        if (item.get("state") or "pending") == "pending":
+            item.update(state="skipped", result="计划已停止", ended_at=now)
+    if not _save_running(plan):
+        return False
+    log("计划已停止：当前布防结束后停止")
+    nw.alert("计划已取消", "计划已在当前布防结束后停止。", event="plan_cancelled")
     return True
 
 
@@ -759,7 +980,53 @@ def _safe_abort(plan, message):
     nw.alert("计划已中止", result, 5, event='plan_aborted')
 
 
-def _wait_item(plan, index, end_at, runtime):
+def _new_health_monitor(runtime):
+    """Runtime health-check bookkeeping shared by one plan-worker run."""
+    return {"issue": "", "next": time.monotonic() + runtime["health_monitor_seconds"]}
+
+
+def _monitor_health(plan, index, runtime, monitor):
+    """Best-effort health check while waiting for one item's watch.
+
+    Never restarts or kills anything and never raises: a broken emulator only
+    warns once per state change (`health_warning`) and notifies again when it
+    recovers (`network_recovered`). A down network gets one non-blocking
+    `reconnect_wifi()` attempt per tick; the next tick checks again.
+    """
+    try:
+        now = time.monotonic()
+        if now < monitor["next"]:
+            return
+        monitor["next"] = now + runtime["health_monitor_seconds"]
+        item = (plan.get("items") or [])[index]
+        issue = ""
+        if not nw.emulator_running():
+            issue = "模拟器没有运行"
+        elif not nw.booted():
+            issue = "模拟器没有开机"
+        elif nw.network_state() != "up":
+            issue = "模拟器没有网络"
+            try:
+                nw.reconnect_wifi()      # safe, non-blocking; re-check next tick
+            except Exception:
+                pass
+        if issue == monitor["issue"]:
+            return
+        monitor["issue"] = issue
+        code = item.get("code", "")
+        if issue:
+            nw.alert("计划运行期健康检查异常",
+                     f"第 {index + 1} 项 {code}：{issue}；计划继续，请留意。",
+                     3, event="health_warning")
+        else:
+            nw.alert("计划运行期健康检查已恢复",
+                     f"第 {index + 1} 项 {code}：模拟器与网络已恢复正常；计划继续。",
+                     3, event="network_recovered")
+    except Exception:
+        pass                             # a health check must never abort the plan
+
+
+def _wait_item(plan, index, end_at, runtime, monitor=None):
     """Wait for the armed item's watch process to reach a terminal phase."""
     task_id = plan["items"][index].get("task_id")
     grace = None
@@ -823,7 +1090,107 @@ def _wait_item(plan, index, end_at, runtime):
                 return ("firing-timeout",
                         f"布防超时且无法终止（{exc}）；结果未知，请查交易记录，不要重复提交")
             return "failed", "布防超过预计结束时间仍未结束，已停止"
+        if monitor is not None:
+            _monitor_health(plan, index, runtime, monitor)
         time.sleep(runtime["poll_seconds"])
+
+
+def _settle(plan, index, item, outcome):
+    """Apply one waited item outcome; shared by the loop and pause recovery.
+
+    Returns True when the plan can continue with the next item, False when the
+    worker must stop (plan aborted, cancelled or no longer running).
+    """
+    state, result = outcome
+    if state == "disarmed":
+        _abort(plan, f"第 {index + 1} 项布防被取消，计划已停止",
+               item_index=index, item_state="skipped", item_result="用户取消布防")
+        return False
+    if state == "config-changed":
+        residual = _abort_running_watch(plan)
+        message = f"第 {index + 1} 项：{result}"
+        if residual:
+            message += f"；{residual}"
+        _abort(plan, message, item_index=index, item_state="failed",
+               item_result="值守配置已修改，当前项未提交")
+        return False
+    if state in ("unknown", "firing-timeout"):
+        if not _finish_item(plan, index, "failed", result, outcome="unknown"):
+            return False
+        _abort(plan, f"第 {index + 1} 项{result}")
+        return False
+    if state in ("success", "dry_run"):
+        if not _finish_item(plan, index, "done", result, outcome=state):
+            return False
+        log(f"第 {index + 1} 项完成：{result or '已提交'}")
+        nw.alert(f"计划第 {index + 1} 项完成",
+                 f"{item['code']}：{result or '已提交'}",
+                 3 if plan.get("dry_run") else 5, event='plan_item_completed')
+        return True
+    if not _finish_item(plan, index, "failed", result):
+        return False
+    log(f"第 {index + 1} 项失败：{result or '未知'}")
+    nw.alert(f"计划第 {index + 1} 项失败",
+             f"{item['code']}：{result or '未知原因'}", 5, event='plan_item_failed')
+    return True
+
+
+def _recover_running(plan, runtime, monitor=None):
+    """Settle a `running` item left over by a pause when the worker restarts.
+
+    The item was armed (or about to be) when the previous worker paused/exited:
+    - nothing armed yet → put it back in the pending queue;
+    - its watch is still there (or already terminal) → wait and settle it with
+      the normal outcome rules;
+    - its task record vanished/replaced → unknown, stop the plan.
+    Returns False when the worker must exit.
+    """
+    while True:
+        index = next((i for i, item in enumerate(plan.get("items") or [])
+                      if item.get("state") == "running"), None)
+        if index is None:
+            return True
+        item = plan["items"][index]
+        task = nw.load_task()
+        own = task if task and task.get("plan_id") == plan.get("plan_id") else None
+        if own is not None and item.get("task_id") and own.get("task_id") != item["task_id"]:
+            own = None          # task record replaced by another one: ours is lost
+        if not item.get("task_id"):
+            # A crash between arm_task() and saving task_id leaves the record
+            # tagged with this item's plan_item; anything else means the item
+            # never armed and can go back to pending.
+            adopted = own if own and own.get("plan_item") == item.get("item_id") else None
+            if adopted is None:
+                item.update(state="pending", armed_at=None, ended_at=None, result=None)
+                item.pop("health", None)
+                plan["last_tick"] = _now_iso()
+                if not _save_running(plan):
+                    return False
+                log(f"第 {index + 1} 项上次还没开始布防，已重新排队。")
+                continue
+            item["task_id"] = adopted.get("task_id")
+        elif own is None:
+            result = "结果未知：值守任务记录已丢失；请查交易记录，不要重复提交"
+            if not _finish_item(plan, index, "failed", result, outcome="unknown"):
+                return False
+            _abort(plan, f"第 {index + 1} 项{result}")
+            return False
+        settings = _settings_for(plan)
+        end_at = datetime.fromisoformat(
+            schedule(plan, settings, _now(), runtime)["items"][index]["end_at"])
+        outcome = _wait_item(plan, index, end_at, runtime, monitor)
+        if outcome is None:
+            return False
+        # Another process may have written pause/stop while we waited: settle the
+        # outcome onto the current plan.json, not the copy from before the wait.
+        latest = _read_running(plan)
+        if latest is None:
+            return False
+        plan = latest
+        item = plan["items"][index]
+        if not _settle(plan, index, item, outcome):
+            return False
+        log(f"第 {index + 1} 项已按暂停前的值守结果收口。")
 
 
 def run(generation):
@@ -837,11 +1204,21 @@ def run(generation):
     try:
         runtime = _runtime(plan)
         arm_gap = timedelta(minutes=runtime["arm_gap_minutes"])
+        monitor = _new_health_monitor(runtime)
         nw.alert(f"计划已开始：{len(plan.get('items') or [])} 项（{action}）", event='plan_started')
         log(f"计划开始：{len(plan.get('items') or [])} 项（{action}）")
+        # A pause can leave an item `running`; settle it before anything else.
+        if not _recover_running(plan, runtime, monitor):
+            return
         while True:
             plan = _read_running(plan)
             if plan is None:
+                return
+            if plan.get("stop_requested"):
+                _stop_boundary(plan)
+                return
+            if plan.get("pause_requested"):
+                _pause_boundary(plan)
                 return
             index = _first_pending(plan)
             if index is None:
@@ -882,22 +1259,31 @@ def run(generation):
             log(f"第 {index + 1} 项开始布防：{item['code']} {item['amount']} 元，"
                 f"购买 {at:%H:%M:%S}，冷启动提前 {prep} 分钟。")
             beat = [time.monotonic()]
+            health_item_id = item.get("item_id")
 
             def tick():
-                """Keep the plan heartbeat fresh while the health check waits."""
+                """Keep the plan heartbeat fresh while the health check waits.
+
+                Only last_tick is merged into the current plan.json: the snapshot
+                from before the health check is stale and writing it back would
+                clobber a pause/stop request another process just wrote.
+                """
                 now_mono = time.monotonic()
                 if now_mono - beat[0] < runtime["heartbeat_seconds"]:
                     return
                 beat[0] = now_mono
-                plan["last_tick"] = _now_iso()
-                _save_running(plan)
+                try:
+                    _touch_running(plan)
+                except Exception:
+                    pass             # best-effort: a failed heartbeat never blocks arming
 
             def note(text):
                 """Plan-mode progress: plan.log + the item's health text."""
                 log(f"健康检查：{text}")
-                item["health"] = text
-                plan["last_tick"] = _now_iso()
-                _save_running(plan)
+                try:
+                    _touch_running(plan, health=text, item_id=health_item_id)
+                except Exception:
+                    pass             # best-effort: never let progress writing abort
 
             try:
                 repairs = nw.arm_health(runtime["health_timeout_minutes"],
@@ -906,14 +1292,31 @@ def run(generation):
                 message = str(exc) or "健康检查未通过"
                 if not message.startswith("健康检查未通过"):
                     message = f"健康检查未通过：{message}"
+                # A pause/stop may have been written while the check was running:
+                # settle the failure onto the current plan.json, never the snapshot.
+                latest = _read_running(plan)
+                if latest is None:
+                    return
+                plan = latest
+                item = plan["items"][index]
                 if not _finish_item(plan, index, "failed", message):
                     return
                 log(f"第 {index + 1} 项布防失败：{message}")
                 nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{message}", 5,
                          event='plan_item_failed')
                 continue   # 健康检查失败只让本项失败，继续下一项
-            if _read_running(plan) is None:
+            latest = _read_running(plan)
+            if latest is None:
                 return     # 健康检查期间计划被取消
+            plan = latest
+            item = plan["items"][index]
+            if plan.get("pause_requested"):
+                # 暂停请求落在真正布防之前：这一项退回 pending，计划就地暂停。
+                item.update(state="pending", armed_at=None, ended_at=None, result=None)
+                item.pop("health", None)
+                plan["last_tick"] = _now_iso()
+                _pause_boundary(plan)
+                return
             if repairs:
                 log("健康检查：已" + "、".join(repairs))
             log("健康检查通过")
@@ -928,7 +1331,7 @@ def run(generation):
                                    settings_revision=plan.get("settings_revision"),
                                    plan_id=plan.get("plan_id"),
                                    plan_item=item.get("item_id"),
-                                   max_lead=MAX_LEAD)
+                                   max_lead=ARM_MAX_LEAD)
             except Exception as exc:
                 if not _finish_item(plan, index, "failed", str(exc)):
                     return
@@ -939,40 +1342,18 @@ def run(generation):
             plan["last_tick"] = _now_iso()
             if not _save_running(plan):
                 return
-            outcome = _wait_item(plan, index, end_at, runtime)
+            outcome = _wait_item(plan, index, end_at, runtime, monitor)
             if outcome is None:
                 return
-            state, result = outcome
-            if state == "disarmed":
-                _abort(plan, f"第 {index + 1} 项布防被取消，计划已停止",
-                       item_index=index, item_state="skipped", item_result="用户取消布防")
+            # A pause/stop may have been requested while the item was finishing:
+            # reload first so _settle() never writes the pre-wait plan back.
+            latest = _read_running(plan)
+            if latest is None:
                 return
-            if state == "config-changed":
-                note = _abort_running_watch(plan)
-                message = f"第 {index + 1} 项：{result}"
-                if note:
-                    message += f"；{note}"
-                _abort(plan, message, item_index=index, item_state="failed",
-                       item_result="值守配置已修改，当前项未提交")
+            plan = latest
+            item = plan["items"][index]
+            if not _settle(plan, index, item, outcome):
                 return
-            if state in ("unknown", "firing-timeout"):
-                if not _finish_item(plan, index, "failed", result, outcome="unknown"):
-                    return
-                _abort(plan, f"第 {index + 1} 项{result}")
-                return
-            if state in ("success", "dry_run"):
-                if not _finish_item(plan, index, "done", result, outcome=state):
-                    return
-                log(f"第 {index + 1} 项完成：{result or '已提交'}")
-                nw.alert(f"计划第 {index + 1} 项完成",
-                         f"{item['code']}：{result or '已提交'}",
-                         3 if plan.get("dry_run") else 5, event='plan_item_completed')
-            else:
-                if not _finish_item(plan, index, "failed", result):
-                    return
-                log(f"第 {index + 1} 项失败：{result or '未知'}")
-                nw.alert(f"计划第 {index + 1} 项失败",
-                         f"{item['code']}：{result or '未知原因'}", 5, event='plan_item_failed')
     except Exception as exc:
         _safe_abort(plan, f"{type(exc).__name__}: {exc}")
 

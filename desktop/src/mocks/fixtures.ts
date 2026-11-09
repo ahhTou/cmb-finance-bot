@@ -17,6 +17,8 @@ import { localISO } from '../lib/utils'
  * idle (default), armed, redemption, firing, progress, empty, error, plan.
  * `progress` replays the real 11-05 11:06 drill log step by step.
  * `plan` presets one idle two-item plan for the plan page demo and screenshots.
+ * `plan-paused` is paused by the app exiting (the app open should resume it);
+ * `plan-paused-task` / `plan-running-task` keep a plan-owned armed item around.
  */
 export type Scenario =
   | 'idle'
@@ -29,6 +31,9 @@ export type Scenario =
   | 'plan'
   | 'plan-done'
   | 'plan-expired'
+  | 'plan-paused'
+  | 'plan-paused-task'
+  | 'plan-running-task'
 
 export function scenario(): Scenario {
   const value = new URLSearchParams(location.search).get('scenario')
@@ -45,10 +50,16 @@ export function scenario(): Scenario {
         'plan',
         'plan-done',
         'plan-expired',
+        'plan-paused',
+        'plan-paused-task',
+        'plan-running-task',
       ] as const
     ).find((s) => s === value) ?? 'idle'
   )
 }
+
+/** The plan_id shared by the paused/running fixtures that keep a plan-owned task. */
+const PLAN_TASK_PLAN_ID = 'mock-plan-task'
 
 const inMinutes = (minutes: number) => localISO(new Date(Date.now() + minutes * 60_000))
 
@@ -175,6 +186,21 @@ export function makeTask(kind: Scenario): Task | null {
   if (kind === 'firing') return { ...makeTask('armed'), phase: 'firing' }
   if (kind === 'progress')
     return { ...makeTask('armed'), code: '133045A', amount: '0.01', fire_at: inMinutes(0.5), phase: 'armed' }
+  if (kind === 'plan-running-task' || kind === 'plan-paused-task')
+    return {
+      plan_id: PLAN_TASK_PLAN_ID,
+      code: 'JX040229',
+      amount: '5000',
+      at: inMinutes(4).slice(0, 16).concat(':00'),
+      fire_at: inMinutes(4),
+      end_at: inMinutes(8),
+      mode: 'first_launch',
+      phase: 'waiting',
+      dry_run: true,
+      prep_minutes: 7,
+      patterns_sent: 1,
+      armed_at: inMinutes(-3),
+    }
   if (kind === 'idle')
     return {
       code: '133045A',
@@ -244,6 +270,62 @@ export function makePlan(kind: Scenario): Plan | null {
           armed_at: null,
           ended_at: null,
         },
+      ],
+    }
+  }
+  if (kind === 'plan-paused') {
+    return {
+      version: 1,
+      plan_id: 'mock-plan-paused',
+      generation: null,
+      created_at: inMinutes(-20),
+      started_at: inMinutes(-10),
+      ended_at: null,
+      dry_run: true,
+      phase: 'paused',
+      pid: null,
+      last_tick: inMinutes(-5),
+      pause_requested: false,
+      pause_reason: 'app_exit',
+      paused_at: inMinutes(-5),
+      stop_requested: false,
+      resume_count: 0,
+      settings_revision: 'mock-revision',
+      result: null,
+      items: [
+        planItem('mock-paused-1', 'JX040229', '5000', 40, 'first_launch'),
+        planItem('mock-paused-2', '133045A', '20000', 130, 'redemption'),
+      ],
+    }
+  }
+  if (kind === 'plan-paused-task' || kind === 'plan-running-task') {
+    const paused = kind === 'plan-paused-task'
+    return {
+      version: 1,
+      plan_id: PLAN_TASK_PLAN_ID,
+      generation: 'mock-gen-task',
+      created_at: inMinutes(-20),
+      started_at: inMinutes(-10),
+      ended_at: null,
+      dry_run: true,
+      phase: paused ? 'paused' : 'running',
+      pid: paused ? null : 4242,
+      last_tick: inMinutes(0),
+      pause_requested: false,
+      pause_reason: paused ? 'manual' : null,
+      paused_at: paused ? inMinutes(-2) : null,
+      stop_requested: false,
+      resume_count: paused ? 1 : 0,
+      settings_revision: 'mock-revision',
+      result: null,
+      items: [
+        {
+          ...planItem('mock-task-1', 'JX040229', '5000', 40, 'first_launch'),
+          state: 'running',
+          task_id: 'mock-plan-watch-1',
+          armed_at: inMinutes(-3),
+        },
+        planItem('mock-task-2', '133045A', '20000', 130, 'redemption'),
       ],
     }
   }
@@ -554,6 +636,8 @@ export const PLAN_SETTINGS = {
   heartbeat_seconds: 10,
   kill_wait_seconds: 10,
   heartbeat_timeout_seconds: 60,
+  health_timeout_minutes: 15,
+  health_monitor_seconds: 300,
 }
 
 export const SETTINGS = {

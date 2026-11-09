@@ -30,7 +30,11 @@ export function DrillPage() {
   const refresh = useRefreshPage()
   const shoot = useScreenshot()
   const { data: device } = useQuery(q.device)
+  const { data: planView } = useQuery(q.plan)
   const d = deviceFacts(device)
+  // While a plan runs (or is paused) manual arming would collide with it.
+  const planPhase = planView?.plan?.phase
+  const planMode = planPhase === 'running' || planPhase === 'paused'
 
   const [code, setCode] = useState('')
   const [amount, setAmount] = useState('0.01')
@@ -86,11 +90,16 @@ export function DrillPage() {
           <Button
             variant="primary"
             className="self-start"
-            disabled={busy || w.active}
+            disabled={busy || w.active || planMode}
             onClick={() => setSheet('arm')}
           >
             打开演练布防
           </Button>
+          {planMode && (
+            <p data-testid="plan-mode-hint" className="text-[11px] leading-snug text-warn">
+              当前有计划模式，请回到计划模式中添加任务。
+            </p>
+          )}
           <div className="h-px bg-white/5" />
           <span className="font-medium text-xs">单笔购买演练</span>
           <div className="flex gap-2.5">

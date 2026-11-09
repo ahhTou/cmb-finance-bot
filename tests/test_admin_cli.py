@@ -591,6 +591,59 @@ class AdminTest(unittest.TestCase):
         self.assertIsNone(data['plan'])
         self.assertFalse((Path(nw.STATE) / 'plan.json').exists())
 
+    def paused_plan(self):
+        plan = self.running_plan()
+        plan.update(phase='paused', pause_reason='manual',
+                    paused_at=datetime.now().replace(microsecond=0).isoformat())
+        watch_plan.save_plan(plan)
+        return plan
+
+    def test_plan_pause_and_resume_commands(self):
+        self.running_plan()
+        with patch.object(nw, 'alive', return_value=True):
+            code, data = self.call('plan-pause')
+        self.assertEqual(code, 0)
+        self.assertTrue(data['plan']['pause_requested'])
+        self.assertEqual(data['plan']['pause_reason'], 'manual')
+        # 模拟 worker 在边界暂停。
+        plan = watch_plan.load_plan()
+        plan.update(phase='paused', pause_requested=False,
+                    paused_at=datetime.now().replace(microsecond=0).isoformat())
+        watch_plan.save_plan(plan)
+        fake = types.SimpleNamespace(pid=4321)
+        with patch.object(nw, 'alive', return_value=False), \
+             patch.object(watch_plan.subprocess, 'Popen', return_value=fake) as popen:
+            code, data = self.call('plan-resume')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['plan']['phase'], 'running')
+        self.assertEqual(data['plan']['resume_count'], 1)
+        self.assertIn('--generation', popen.call_args.args[0])
+
+    def test_plan_pause_immediate_and_mode_validation(self):
+        self.running_plan()
+        with patch.object(nw, 'alive', return_value=True), \
+             patch.object(watch_plan, '_stop_plan_process'), \
+             patch.object(nw, 'alert'):
+            code, data = self.call('plan-pause', '--mode', 'immediate')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['plan']['phase'], 'paused')
+        self.assertEqual(self.call('plan-pause', '--mode', 'later')[0], 1)
+
+    def test_plan_disarm_after_current_mode(self):
+        self.running_plan()
+        with patch.object(nw, 'alive', return_value=True):
+            code, data = self.call('plan-disarm', '--mode', 'after_current')
+        self.assertEqual(code, 0)
+        self.assertTrue(watch_plan.load_plan()['stop_requested'])
+        self.assertEqual(data['plan']['phase'], 'running')
+        # 不传 --mode 时保持旧的立即停止行为。
+        with patch.object(nw, 'alive', return_value=False), \
+             patch.object(nw, 'alert'):
+            code, data = self.call('plan-disarm')
+        self.assertEqual(code, 0)
+        self.assertEqual(data['plan']['phase'], 'disarmed')
+        self.assertFalse(watch_plan.load_plan()['stop_requested'])
+
 class SystemParsingTest(unittest.TestCase):
     def test_caffeinate_child_details_match_only_the_task_pid(self):
         for owner, expected in [(321, True), (3210, False), (99, False)]:

@@ -41,7 +41,7 @@ test('sidebar shows the plan page between tasks and status', async ({ page }) =>
   await expect(page.getByTestId('plan-item-code-1')).toHaveValue('133045A')
 })
 
-test('empty plan: add two items, save, start a drill, then cancel', async ({ page }) => {
+test('empty plan: add two items, save, auto-start a drill, then cancel', async ({ page }) => {
   await open(page, '/plan', 'empty')
   await expect(page.getByTestId('plan-status')).toContainText('未计划')
 
@@ -57,15 +57,9 @@ test('empty plan: add two items, save, start a drill, then cancel', async ({ pag
   const first = page.getByTestId('plan-row-0')
   await expect(first).toContainText('冷启动')
   await expect(first).toContainText('预计结束')
-  await expect(page.getByTestId('plan-status')).toContainText('待开始')
-
-  await page.getByTestId('plan-start').click()
-  const confirm = page.getByTestId('plan-confirm')
-  await expect(confirm).toContainText('2 项')
-  await expect(confirm).toContainText('25,000.00')
-  await confirm.getByRole('button', { name: '开始演练' }).click()
-
+  // Saving a drill plan starts it right away; no extra confirmation is needed.
   await expect(page.getByTestId('plan-status')).toContainText('运行中')
+  await expect(page.getByTestId('plan-start')).toHaveCount(0)
   await expect(page.getByTestId('plan-row-0')).toContainText('运行中')
   await expect(page.getByTestId('plan-item-code-0')).toBeDisabled()
 
@@ -85,8 +79,8 @@ test('real confirmation lists every item and sends the reviewed versions', async
   const secondAt = at(130)
   await addItem(page, 0, { code: 'AAAA01', amount: '123.45', at: firstAt })
   await addItem(page, 1, { code: 'BBBB02', amount: '678.90', at: secondAt, mode: 'redemption' })
+  // Saving a real plan opens the existing confirmation dialog instead of starting.
   await page.getByTestId('plan-save').click()
-  await page.getByTestId('plan-start').click()
   const confirm = page.getByTestId('plan-confirm')
   const items = confirm.getByTestId('plan-confirm-items').getByRole('listitem')
   await expect(items).toHaveCount(2)
@@ -139,6 +133,8 @@ test('backend problems disable the start button', async ({ page }) => {
   await expect(problems).toBeVisible()
   await expect(problems).toContainText('间隔太近')
   await expect(page.getByTestId('plan-start')).toBeDisabled()
+  // A blocked plan is saved but never auto-started or auto-confirmed.
+  await expect(page.getByTestId('plan-confirm')).toHaveCount(0)
 })
 
 test('a running plan is read-only', async ({ page }) => {
@@ -271,4 +267,88 @@ test('the test favourite fills code and amount in a plan row', async ({ page }) 
   await chip.click()
   await expect(page.getByTestId('plan-item-code-0')).toHaveValue('AB1234')
   await expect(page.getByTestId('plan-item-amount-0')).toHaveValue('0.02')
+})
+
+test('an armed plan item asks when to pause and when to stop', async ({ page }) => {
+  await open(page, '/plan', 'plan-running-task')
+  await expect(page.getByTestId('plan-status')).toContainText('运行中')
+
+  await page.getByTestId('plan-pause').click()
+  const pause = page.getByTestId('plan-pause-options')
+  await expect(pause).toBeVisible()
+  await expect(pause.getByRole('button', { name: '在当前布防结束后暂停' })).toBeVisible()
+  await expect(pause.getByRole('button', { name: '停止当前布防并暂停' })).toBeVisible()
+  await expect(pause.getByRole('button', { name: '算了，我点错了' })).toBeVisible()
+  const paused = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/plan/pause'),
+  )
+  await pause.getByRole('button', { name: '在当前布防结束后暂停' }).click()
+  expect((await paused).postDataJSON()).toEqual({ mode: 'after_current' })
+  await expect(page.getByText('这一项结束后不会开始下一项', { exact: false })).toBeVisible()
+
+  await page.getByTestId('plan-disarm').click()
+  const stop = page.getByTestId('plan-disarm-options')
+  await expect(stop).toBeVisible()
+  await expect(stop.getByRole('button', { name: '在当前布防结束后停止' })).toBeVisible()
+  await expect(stop.getByRole('button', { name: '停止当前布防并停止' })).toBeVisible()
+  const disarmed = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/plan/disarm'),
+  )
+  await stop.getByRole('button', { name: '停止当前布防并停止' }).click()
+  expect((await disarmed).postDataJSON()).toEqual({ mode: 'immediate' })
+  await expect(page.getByTestId('plan-status')).toContainText('已取消')
+})
+
+test('a running plan without an armed item pauses and resumes directly', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  await page.getByTestId('plan-start').click()
+  await page.getByTestId('plan-confirm').getByRole('button', { name: '开始演练' }).click()
+  await expect(page.getByTestId('plan-status')).toContainText('运行中')
+
+  const paused = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/plan/pause'),
+  )
+  await page.getByTestId('plan-pause').click()
+  expect((await paused).postDataJSON()).toEqual({ mode: 'after_current' })
+  await expect(page.getByTestId('plan-status')).toContainText('已暂停')
+  await expect(page.getByTestId('plan-pause-options')).toHaveCount(0)
+
+  await page.getByTestId('plan-resume').click()
+  await expect(page.getByTestId('plan-status')).toContainText('运行中')
+  await expect(page.getByTestId('plan-resume')).toHaveCount(0)
+})
+
+test('a paused plan with an armed item only offers an immediate stop', async ({ page }) => {
+  await open(page, '/plan', 'plan-paused-task')
+  await expect(page.getByTestId('plan-status')).toContainText('已暂停')
+  await expect(page.getByTestId('plan-resume')).toBeVisible()
+
+  await page.getByTestId('plan-disarm').click()
+  const stop = page.getByTestId('plan-disarm-options')
+  await expect(stop).toBeVisible()
+  await expect(stop.getByRole('button', { name: '停止当前布防并停止' })).toBeVisible()
+  await expect(stop.getByRole('button', { name: '在当前布防结束后停止' })).toHaveCount(0)
+  await expect(stop.getByRole('button', { name: '算了，我点错了' })).toBeVisible()
+})
+
+test('plan mode disables manual arming on the tasks and drill pages', async ({ page }) => {
+  await open(page, '/tasks', 'plan-paused')
+  const hints = page.getByTestId('plan-mode-hint')
+  await expect(hints.first()).toContainText('当前有计划模式，请回到计划模式中添加任务。')
+  await expect(page.getByTestId('mode-first_launch').getByRole('button', { name: '新建布防' })).toBeDisabled()
+  await expect(page.getByTestId('mode-redemption').getByRole('button', { name: '新建布防' })).toBeDisabled()
+
+  await page.getByRole('link', { name: '演练' }).click()
+  await expect(page.getByTestId('plan-mode-hint')).toBeVisible()
+  await expect(page.getByRole('button', { name: '打开演练布防' })).toBeDisabled()
+})
+
+test('app launch resumes a plan the app paused on exit', async ({ page }) => {
+  const resumed = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/plan/resume'),
+  )
+  await open(page, '/plan', 'plan-paused')
+  await resumed
+  await expect(page.getByTestId('plan-status')).toContainText('运行中')
+  await expect(page.getByTestId('plan-resume')).toHaveCount(0)
 })

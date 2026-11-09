@@ -1,9 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { Pause, Play, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction } from '../api/hooks'
-import type { Mode, PlanItem, PlanRequest, PlanStartRequest, PlanView } from '../api/types'
+import type {
+  Mode,
+  PlanDisarmRequest,
+  PlanItem,
+  PlanPauseMode,
+  PlanPauseRequest,
+  PlanRequest,
+  PlanStartRequest,
+  PlanView,
+  Task,
+} from '../api/types'
 import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
 import { Badge, Card, Hint, Metric, MetricGrid } from '../components/ui/card'
@@ -28,11 +38,14 @@ import {
   statusPrimaryTone,
   statusSecondaryName,
 } from '../lib/plan'
-import { cn, parseLocal, toneBg } from '../lib/utils'
+import { ACTIVE_PHASES, cn, parseLocal, toneBg } from '../lib/utils'
 import { useUI } from '../store'
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const pad2 = (value: number) => String(value).padStart(2, '0')
+
+/** True while a watch task is still armed (firing included). */
+const activeTask = (task: Task | null | undefined) => !!task && ACTIVE_PHASES.includes(task.phase ?? '')
 
 function startOfDay(value: Date) {
   const copy = new Date(value)
@@ -81,6 +94,8 @@ export function PlanPage() {
   const [editingTerminal, setEditingTerminal] = useState(false)
   const [viewMode, setViewMode] = useState<'timeline' | 'week'>('timeline')
   const [weekStart, setWeekStart] = useState(() => startOfDay(new Date()))
+  /** Which pause/stop dialog is open; null when closed. */
+  const [control, setControl] = useState<'pause' | 'disarm' | null>(null)
 
   // The status card shows a countdown; a one-second tick is enough.
   useEffect(() => {
@@ -104,10 +119,13 @@ export function PlanPage() {
   const phase = plan?.phase ?? null
   const status = view?.status ?? plan?.status ?? planStatus(plan, now)
   const secondary = statusSecondaryName(status)
+  /** The armed item belongs to this plan (so pausing/stopping has two flavours). */
+  const ownTask = activeTask(view?.task) && !!plan?.plan_id && view?.task?.plan_id === plan.plan_id
   const terminal =
     !!plan && !running && !stale && (phase === 'done' || phase === 'aborted' || phase === 'disarmed')
   const resultView = terminal && !editingTerminal
-  const readOnly = running || stale || resultView
+  // Paused plans are still a live plan: keep the list read-only until they resume or stop.
+  const readOnly = running || phase === 'paused' || stale || resultView
   const problems = view?.problems ?? []
   const warnings = view?.warnings ?? []
   const totals = planTotals(plan)
@@ -172,6 +190,20 @@ export function PlanPage() {
     return result
   }
 
+  /** Starts a freshly saved dry-run plan directly; real plans use the existing confirm dialog. */
+  async function autoBegin(result: PlanView) {
+    const saved = result.plan
+    if (!saved?.plan_id || !saved.content_revision || !result.settings_revision) return
+    const body: PlanStartRequest = {
+      plan_id: saved.plan_id,
+      content_revision: saved.content_revision,
+      settings_revision: result.settings_revision,
+      confirm_real_payment: false,
+    }
+    const started = await run('开始演练计划', () => api<PlanView>('POST', '/api/plan/start', body))
+    if (!started) await qc.invalidateQueries({ queryKey: q.plan.queryKey })
+  }
+
   async function save() {
     if (localProblems.length) {
       useUI.getState().setMessage(localProblems[0])
@@ -186,7 +218,24 @@ export function PlanPage() {
         mode: item.mode,
       })),
     }
-    await run('保存计划', () => api<PlanView>('PUT', '/api/plan', body))
+    const result = await run('保存计划', () => api<PlanView>('PUT', '/api/plan', body))
+    const saved = result?.plan
+    if (!saved) return
+    if (saved.phase !== 'idle') return
+    if (activeTask(result.task) && result.task?.plan_id !== saved.plan_id) {
+      useUI.getState().setMessage('当前有手动布防，请在布防结束后开始计划。')
+      return
+    }
+    // Auto-start only a runnable plan; an empty or blocked plan stays in the editor.
+    if (saved.items.length === 0 || result.problems.length > 0) return
+    if (saved.dry_run) {
+      await autoBegin(result)
+      return
+    }
+    // Real plans keep the checkbox + confirm click; never bypass the payment confirmation.
+    setConfirmation(structuredClone(result))
+    setConfirmed(false)
+    setConfirming(true)
   }
 
   function openConfirm() {
@@ -216,8 +265,31 @@ export function PlanPage() {
     if (!result) await qc.invalidateQueries({ queryKey: q.plan.queryKey })
   }
 
-  async function disarm() {
-    await run('取消计划', () => api<PlanView>('POST', '/api/plan/disarm'))
+  async function pause(mode: PlanPauseMode) {
+    const body: PlanPauseRequest = { mode }
+    await run('暂停计划', () => api<PlanView>('POST', '/api/plan/pause', body))
+  }
+
+  async function resume() {
+    await run('继续计划', () => api<PlanView>('POST', '/api/plan/resume'))
+  }
+
+  async function disarm(mode: PlanPauseMode = 'immediate') {
+    const body: PlanDisarmRequest = { mode }
+    await run('停止计划', () => api<PlanView>('POST', '/api/plan/disarm', body))
+  }
+
+  /** No armed item: pausing/stopping applies at once, no extra dialog. */
+  function askPause() {
+    if (!view || busy) return
+    if (ownTask) setControl('pause')
+    else void pause('after_current')
+  }
+
+  function askDisarm() {
+    if (!view || busy) return
+    if (ownTask) setControl('disarm')
+    else void disarm('immediate')
   }
 
   async function clear() {
@@ -264,10 +336,12 @@ export function PlanPage() {
         title="计划状态"
         subtitle={
           running
-            ? '计划正在按时间顺序执行；下方列表只读，可随时取消。'
-            : resultView
-              ? '计划已结束；这里保留每项状态、原因和实际时间。'
-              : '只填购买时间；保存后程序算出每项的冷启动与预计结束时间。'
+            ? '计划正在按时间顺序执行；下方列表只读，可暂停或停止。'
+            : phase === 'paused'
+              ? '计划已暂停；继续会从下一项接着执行，停止则结束这份计划。'
+              : resultView
+                ? '计划已结束；这里保留每项状态、原因和实际时间。'
+                : '只填购买时间；保存后程序算出每项的冷启动与预计结束时间。'
         }
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -304,17 +378,61 @@ export function PlanPage() {
                 查看执行结果
               </Button>
             )}
-            {(running || stale) && (
-              <Button data-testid="plan-disarm" variant="primary" disabled={busy} onClick={disarm}>
-                取消计划
+            {running && (
+              <Button
+                data-testid="plan-pause"
+                size="icon"
+                className="size-8"
+                aria-label="暂停计划"
+                title="暂停计划"
+                disabled={busy || plan?.pause_requested === true}
+                onClick={askPause}
+              >
+                <Pause className="size-3.5" />
+              </Button>
+            )}
+            {phase === 'paused' && !stale && (
+              <Button
+                data-testid="plan-resume"
+                variant="primary"
+                size="icon"
+                className="size-8"
+                aria-label="继续计划"
+                title="继续计划"
+                disabled={busy}
+                onClick={resume}
+              >
+                <Play className="size-3.5" />
+              </Button>
+            )}
+            {(running || stale || phase === 'paused') && (
+              <Button
+                data-testid="plan-disarm"
+                variant="primary"
+                size="icon"
+                className="size-8"
+                aria-label="停止计划"
+                title="停止计划"
+                disabled={busy || plan?.stop_requested === true}
+                onClick={askDisarm}
+              >
+                <Square className="size-3.5" />
               </Button>
             )}
             {!running && !stale && phase === 'idle' && (
-              <Button data-testid="plan-start" variant="primary" disabled={!canStart} onClick={openConfirm}>
+              <Button
+                data-testid="plan-start"
+                variant="primary"
+                aria-label="开始计划"
+                title="开始计划"
+                disabled={!canStart}
+                onClick={openConfirm}
+              >
+                <Play className="size-3.5" />
                 开始计划
               </Button>
             )}
-            {!running && !stale && plan && (
+            {!running && !stale && phase !== 'paused' && plan && (
               <Button data-testid="plan-clear" disabled={busy} onClick={clear}>
                 清空
               </Button>
@@ -337,13 +455,20 @@ export function PlanPage() {
           />
         </MetricGrid>
         {stale && (
-          <Hint tone="warn">计划进程已退出，但计划仍标记为运行中。请点「取消计划」止损后重新保存。</Hint>
+          <Hint tone="warn">计划进程已退出，但计划仍标记为运行中。请点「停止计划」止损后重新保存。</Hint>
+        )}
+        {!stale && running && (plan?.pause_requested === true || plan?.stop_requested === true) && (
+          <Hint>
+            {plan?.stop_requested === true
+              ? '已请求在当前布防结束后停止计划；这一项结束后不会开始下一项。'
+              : '已请求在当前布防结束后暂停；这一项结束后不会开始下一项。'}
+          </Hint>
         )}
         {!stale && running && heartbeatStale && (
           <Hint tone="warn">
             计划进程仍在，但
             {view.heartbeat_age_s == null ? '没有心跳记录' : `已 ${view.heartbeat_age_s} 秒没有写心跳`}
-            （阈值 {view.heartbeat_timeout_s ?? '—'} 秒）；只提示，不会自动重试交易，可取消计划后检查。
+            （阈值 {view.heartbeat_timeout_s ?? '—'} 秒）；只提示，不会自动重试交易，可停止计划后检查。
           </Hint>
         )}
         {settingsChanged && (running || stale) && (
@@ -388,7 +513,7 @@ export function PlanPage() {
         subtitle={
           resultView
             ? '逐项结果与时间来自开始时的计划快照。'
-            : `最多 ${PLAN_MAX_ITEMS} 项、14 天内；程序严格按购买时间先后串行执行。`
+            : `最多 ${PLAN_MAX_ITEMS} 项；程序严格按购买时间先后串行执行。`
         }
         badge={
           <Button
@@ -457,7 +582,7 @@ export function PlanPage() {
                 <Hint>
                   {resultView
                     ? '这是执行结果；点「编辑 / 复制为新计划」可基于它新建草稿。'
-                    : '运行中不能修改；需要调整请先取消计划。'}
+                    : '计划进行中不能修改；需要调整请先停止计划。'}
                 </Hint>
               ) : (
                 <>
@@ -500,6 +625,79 @@ export function PlanPage() {
           </details>
         </Card>
       )}
+
+      <Dialog
+        open={control !== null}
+        onOpenChange={(open) => !open && setControl(null)}
+        title={control === 'pause' ? '暂停计划' : '停止计划'}
+        subtitle={
+          control === 'pause'
+            ? '当前这一项布防还在执行；选择从什么时候开始暂停后续项。'
+            : '当前这一项布防还在执行；选择从什么时候开始停止这份计划。'
+        }
+        width={420}
+        dismissable={!busy}
+      >
+        <div
+          data-testid={control === 'pause' ? 'plan-pause-options' : 'plan-disarm-options'}
+          className="flex flex-col gap-2"
+        >
+          {control === 'pause' ? (
+            <>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => {
+                  setControl(null)
+                  void pause('after_current')
+                }}
+              >
+                在当前布防结束后暂停
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setControl(null)
+                  void pause('immediate')
+                }}
+              >
+                停止当前布防并暂停
+              </Button>
+            </>
+          ) : (
+            <>
+              {phase !== 'paused' && (
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setControl(null)
+                    void disarm('after_current')
+                  }}
+                >
+                  在当前布防结束后停止
+                </Button>
+              )}
+              <Button
+                variant={phase === 'paused' ? 'primary' : 'default'}
+                disabled={busy}
+                onClick={() => {
+                  setControl(null)
+                  void disarm('immediate')
+                }}
+              >
+                停止当前布防并停止
+              </Button>
+            </>
+          )}
+          <Button variant="ghost" disabled={busy} onClick={() => setControl(null)}>
+            算了，我点错了
+          </Button>
+        </div>
+        <Hint className="text-[10px]">
+          暂停或停止只影响这份计划，不会改动已经发生的交易；结果以银行交易记录为准。
+        </Hint>
+      </Dialog>
 
       <Dialog
         open={confirming}

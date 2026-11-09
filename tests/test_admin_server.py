@@ -197,6 +197,32 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][3:], ['plan-clear'])
 
     @patch('admin_server.subprocess.run')
+    def test_plan_pause_resume_and_disarm_modes(self, run):
+        run.return_value = done({'ok': True, 'plan': {'phase': 'running'}})
+        r = self.call('POST', '/api/plan/pause')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(run.call_args.args[0][3:], ['plan-pause'])
+        # 立即暂停要停计划进程和当前值守，30 秒可能不够。
+        self.assertEqual(run.call_args.kwargs['timeout'], 60)
+        self.call('POST', '/api/plan/pause', json={'mode': 'after_current'})
+        self.assertEqual(run.call_args.args[0][3:], ['plan-pause'])
+        self.call('POST', '/api/plan/pause', json={'mode': 'immediate'})
+        self.assertEqual(run.call_args.args[0][3:], ['plan-pause', '--mode', 'immediate'])
+        r = self.call('POST', '/api/plan/pause', json={'mode': 'later'})
+        self.assertEqual(r.status_code, 422)
+        self.call('POST', '/api/plan/resume')
+        self.assertEqual(run.call_args.args[0][3:], ['plan-resume'])
+        # 无 body 的 disarm 保持旧行为；after_current 显式传参。
+        self.call('POST', '/api/plan/disarm')
+        self.assertEqual(run.call_args.args[0][3:], ['plan-disarm'])
+        self.call('POST', '/api/plan/disarm', json={'mode': 'immediate'})
+        self.assertEqual(run.call_args.args[0][3:], ['plan-disarm'])
+        self.call('POST', '/api/plan/disarm', json={'mode': 'after_current'})
+        self.assertEqual(run.call_args.args[0][3:], ['plan-disarm', '--mode', 'after_current'])
+        r = self.call('POST', '/api/plan/disarm', json={'mode': 'later'})
+        self.assertEqual(r.status_code, 422)
+
+    @patch('admin_server.subprocess.run')
     def test_plan_rejects_unknown_mode(self, run):
         r = self.call('PUT', '/api/plan', json={'items': [
             {'code': 'JX040229', 'amount': '1', 'at': '2026-11-07T09:00:00',

@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import push
+import watch_plan
 
 
 class FakeNtfy:
@@ -79,6 +80,11 @@ class PushTest(unittest.TestCase):
         opener = patch.object(push._OPENER, "open", side_effect=self.open)
         self.mock_open = opener.start()
         self.addCleanup(opener.stop)
+        # 退出时请求计划暂停：默认 mock，避免测试碰到真实的 plan.json。
+        self.real_pause_plan = push._pause_plan_after_app_exit
+        pause_plan = patch.object(push, "_pause_plan_after_app_exit", return_value=False)
+        self.mock_pause_plan = pause_plan.start()
+        self.addCleanup(pause_plan.stop)
 
     def open(self, request, timeout):
         return self.servers[request.full_url].open(request, timeout)
@@ -531,6 +537,41 @@ class PushTest(unittest.TestCase):
         self.assertEqual(len(fake.requests), 2)
         self.assertEqual(json.loads(fake.requests[1]["body"])["title"],
                          "[招行值守] 管理 App 已退出")
+
+    def test_app_watch_requests_plan_pause_after_the_exit_notification(self):
+        fake = self.serve(200)
+        seen = {}
+        self.mock_pause_plan.side_effect = lambda: seen.setdefault(
+            "requests_at_pause", len(fake.requests))
+        result, _ = self.watch(fake)
+        self.assertEqual(result, 0)
+        self.mock_pause_plan.assert_called_once()
+        self.assertEqual(seen["requests_at_pause"], 2)   # 先发退出通知，再请求暂停
+
+    def test_a_failing_plan_pause_never_changes_the_watchdog_result(self):
+        fake = self.serve(200)
+        self.mock_pause_plan.side_effect = RuntimeError("boom")
+        result, err = self.watch(fake)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(fake.requests), 2)
+        self.assertIn("app_exited 已发送", err)
+
+    def test_plan_pause_helper_logs_one_diagnostic_and_never_raises(self):
+        err = io.StringIO()
+        with patch("watch_plan.pause_after_app_exit",
+                   side_effect=RuntimeError("boom")), \
+             contextlib.redirect_stderr(err):
+            self.real_pause_plan()
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("计划自动暂停请求失败", lines[0])
+        self.assertIn("RuntimeError", lines[0])
+        err = io.StringIO()
+        with patch("watch_plan.pause_after_app_exit", return_value=True) as pause, \
+             contextlib.redirect_stderr(err):
+            self.real_pause_plan()
+        pause.assert_called_once()
+        self.assertEqual(err.getvalue(), "")
 
     def test_redirect_handler_refuses_replaying_authorization(self):
         request = push.urllib.request.Request("https://ntfy.example.com/",

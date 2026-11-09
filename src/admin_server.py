@@ -50,6 +50,9 @@ def timeout(args):
     # watch plus adb close time; 30 s could 504 halfway through.
     if args[0] == 'plan-disarm':
         return 60
+    # plan-pause immediate stops the plan worker and the current watch too.
+    if args[0] == 'plan-pause':
+        return 60
     return {'cancel': 300, 'buy': 420}.get(args[0], 30)
 
 
@@ -185,6 +188,14 @@ class PlanStartRequest(BaseModel):
     confirm_real_payment: bool = False
 
 
+class PlanPauseRequest(BaseModel):
+    mode: Literal['after_current', 'immediate'] = 'after_current'
+
+
+class PlanDisarmRequest(BaseModel):
+    mode: Literal['after_current', 'immediate'] = 'immediate'
+
+
 @app.get('/api/health')
 def health():
     return {'ok': True}
@@ -293,9 +304,27 @@ def start_plan(body: PlanStartRequest):
     return run(args)
 
 
+@app.post('/api/plan/pause')
+def pause_plan(body: Optional[PlanPauseRequest] = None):
+    mode = body.mode if body else 'after_current'
+    args = ['plan-pause']
+    if mode != 'after_current':
+        args += ['--mode', mode]
+    return run(args)
+
+
+@app.post('/api/plan/resume')
+def resume_plan():
+    return run(['plan-resume'])
+
+
 @app.post('/api/plan/disarm')
-def disarm_plan():
-    return run(['plan-disarm'])
+def disarm_plan(body: Optional[PlanDisarmRequest] = None):
+    mode = body.mode if body else 'immediate'
+    args = ['plan-disarm']
+    if mode != 'immediate':
+        args += ['--mode', mode]
+    return run(args)
 
 
 @app.delete('/api/plan')

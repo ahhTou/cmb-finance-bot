@@ -128,7 +128,7 @@ def parser():
     sub = p.add_subparsers(dest='cmd', required=True)
     for name in ('status', 'device', 'system', 'disarm', 'keep-awake', 'screenshot',
                  'set-login-pattern', 'set-payment-password', 'agent-release',
-                 'plan', 'plan-save', 'plan-disarm', 'plan-clear',
+                 'plan', 'plan-save', 'plan-resume', 'plan-clear',
                  'push', 'push-save', 'push-test', 'push-clear',
                  'push-preferences', 'push-preferences-save'):
         sub.add_parser(name)
@@ -137,6 +137,12 @@ def parser():
     plan_start.add_argument('--plan-id')
     plan_start.add_argument('--content-revision')
     plan_start.add_argument('--settings-revision')
+    plan_pause = sub.add_parser('plan-pause')
+    plan_pause.add_argument('--mode', choices=('after_current', 'immediate'),
+                            default='after_current')
+    plan_disarm = sub.add_parser('plan-disarm')
+    plan_disarm.add_argument('--mode', choices=('after_current', 'immediate'),
+                             default='immediate')
     history = sub.add_parser('history')
     history.add_argument('--limit', type=int, default=0)
     log = sub.add_parser('log')
@@ -256,7 +262,9 @@ def dispatch(a):
         return watch_plan.start(a.confirm_real_payment, plan_id=a.plan_id,
                                 content_revision=a.content_revision,
                                 settings_revision=a.settings_revision)
-    if a.cmd == 'plan-disarm': return watch_plan.disarm()
+    if a.cmd == 'plan-disarm': return watch_plan.disarm(a.mode)
+    if a.cmd == 'plan-pause': return watch_plan.pause(a.mode)
+    if a.cmd == 'plan-resume': return watch_plan.resume()
     if a.cmd == 'plan-clear': return watch_plan.clear()
     if a.cmd == 'favorites':
         if a.save:

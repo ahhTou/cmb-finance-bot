@@ -12,6 +12,20 @@
 | 7：心跳未用于健康判断 | 新增「设置 → 其他 → 心跳超时」阈值；`view` 返回 `heartbeat_age_s`/`heartbeat_stale`，进程仍在但心跳超时显示「心跳超时」告警，不自动中止或重试交易；进程退出仍显示「进程已退出」 | view 测试覆盖心跳超时、正常心跳和进程存活；页面显示最近心跳秒数和阈值 |
 | 8：布防前只做硬检查，计划一开始就失败（2026-11-09 21:20 真实计划两项 1 秒失败） | 新增 `night_watch.arm_health()`：启动模拟器/等开机/重连 Wi-Fi/必要时重启，等待期间写计划心跳并通过 `note()` 显示进度；`watch_plan.run()` 在每项 `arm_task()` 前调用，修不好只让该项失败并继续下一项；新增「设置 → 其他 → 进程监控 → 健康检查最长等待」（`health_timeout_minutes`，默认 15、范围 1–60） | 新增 16 项隔离测试（`test_night_watch` 9、`test_watch_plan` 6、`test_plan_settings` 1）；Python 全量见 §1 本轮记录 |
 
+## 2026-11-09 第二轮计划模式优化（已完成）
+
+| 项 | 实现 | 验证 |
+|---|---|---|
+| 暂停 / 继续 / 停止 | 状态卡片图标；暂停默认在当前布防结束后生效（当前项跑完），immediate 先取消当前布防（提交阶段拒绝）；有当前布防时弹三选项对话框「在当前布防结束后…」「停止当前布防并…」「算了，我点错了」；`paused` 计划拒绝保存/清空/开始 | Python `test_watch_plan` 新增 pause/resume/disarm 边界与 firing 拒绝；e2e 覆盖有/无当前布防的暂停、恢复、停止对话框 |
+| 首次保存后自动开始 | 演练直接开始；真实自动打开既有确认框（仍须勾选核对，不绕过）；有手动布防时只提示不开始 | e2e「保存演练→自动开始」「保存真实→自动弹确认框」「有阻塞问题→不自动开始」 |
+| 计划模式禁用首页手动布防 | 任务页、演练页在计划 running/paused 时禁用新建布防并提示「当前有计划模式，请回到计划模式中添加任务。」 | e2e 两页禁用与提示 |
+| App 退出自动暂停 / 启动自动恢复 | `push.py app-watch` EOF 回调计划 `pause_after_app_exit()`，当前布防结束后暂停；前端启动时仅对 `pause_reason=app_exit` 自动 resume，`manual` 永不自动恢复，有手动布防则提示 | Python push/watch_plan 测试；e2e 启动自动恢复 mock |
+| 取消 14 天时间上限 | `MAX_LEAD` 与 schedule problem 删除，计划 arm 传 `ARM_MAX_LEAD`；前端文案与 mock 校验同步 | Python 20/100 天计划可开始；e2e 文案 |
+| 运行期持续健康检查 | `health_monitor_seconds`（默认 300，60–3600，固定）；`_wait_item` 轮询里检查模拟器/网络，只在状态变化推送 `health_warning` / `network_recovered`，网络 down 只非阻塞重连 Wi-Fi，不重启模拟器、不打断布防；健康检查期间心跳/进度写盘按字段合并，不覆盖并发暂停/停止 | Python monitor 与并发覆盖测试 |
+| Live 视图失焦优化 | `useWindowActive()` + `data-window-active`；失焦关闭 CodeRain/Waves/PhaseDot/字符翻转/日志进出/入场/链路动画，倒计时 60s 更新，重新聚焦立即恢复 | `focus.test.ts` 5 项 + `e2e/live.spec.ts` |
+
+仍然保留的边界：取消时间上限后计划进程在轮到时立即布防（不等 `prep_at`），远期项会让值守进程长时间等待，长周期计划依赖 Mac 保持供电/不睡眠；App 被 SIGKILL/崩溃时计划是否暂停取决于 `push.py app-watch` 是否还活着（窗口极短）；暂停期间修改列表被前端禁用，CLI 保存/清空/开始由后端拒绝。
+
 ## 后续体验优化
 
 - 编辑时实时预览排程，冲突定位到具体行，提示下一项最早可安排的时间，减少保存后试错。

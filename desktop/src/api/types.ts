@@ -13,12 +13,24 @@ export interface PlanStartRequest {
   settings_revision: string
   confirm_real_payment: boolean
 }
+/** `after_current`: stop at the item boundary; `immediate`: cancel the armed item now. */
+export type PlanPauseMode = 'after_current' | 'immediate'
+/** POST /api/plan/pause; omitted mode means `after_current`. */
+export interface PlanPauseRequest {
+  mode?: PlanPauseMode
+}
+/** POST /api/plan/disarm; no body keeps the old behaviour, which is `immediate`. */
+export interface PlanDisarmRequest {
+  mode?: PlanPauseMode
+}
 export type PushRequest = components['schemas']['PushRequest']
 
 // Responses are whatever admin_cli.py prints; these describe the fields the app reads.
 export type Mode = 'first_launch' | 'redemption'
 
 export interface Task {
+  /** Set when the watch task was armed by plan mode; manual arming leaves it empty. */
+  plan_id?: string | null
   code?: string
   amount?: string
   at?: string
@@ -144,9 +156,23 @@ export interface PurchaseSettings {
   settings_revision: string
 }
 
+/** Settings → 其他: scheduler and runtime monitor values, one key per row. */
+export interface PlanSettingsValues {
+  arm_gap_minutes: number
+  first_end_slack_minutes: number
+  end_timeout_minutes: number
+  grace_seconds: number
+  poll_seconds: number
+  heartbeat_seconds: number
+  kill_wait_seconds: number
+  heartbeat_timeout_seconds: number
+  health_timeout_minutes: number
+  health_monitor_seconds: number
+}
+
 /** Plan scheduler internals from Settings → 其他; no secret and no revision. */
 export interface PlanSettings {
-  settings: Record<string, number>
+  settings: PlanSettingsValues
 }
 
 /** GET/PUT/DELETE /api/push; never includes the token itself. */
@@ -187,7 +213,7 @@ export interface CommandResult {
 // Handwritten per var/team/plan-mode-contract.md §4.5; `schema.d.ts` is
 // regenerated separately and only covers request bodies.
 
-export type PlanPhase = 'idle' | 'running' | 'done' | 'aborted' | 'disarmed'
+export type PlanPhase = 'idle' | 'running' | 'paused' | 'done' | 'aborted' | 'disarmed'
 export type PlanItemState = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
 export type PlanPrimaryStatus =
@@ -242,6 +268,15 @@ export interface Plan {
   phase?: PlanPhase
   pid?: number | null
   last_tick?: string | null
+  /** A pause was requested; the worker pauses once the current item ends. */
+  pause_requested?: boolean
+  /** Who paused it: the user or the app exiting while the plan was running. */
+  pause_reason?: 'manual' | 'app_exit' | null
+  paused_at?: string | null
+  /** A stop was requested at the current item's boundary. */
+  stop_requested?: boolean
+  /** How often the user resumed this plan. */
+  resume_count?: number
   settings_revision?: string | null
   /** Purchase settings frozen when the plan started. */
   settings_snapshot?: Record<string, number> | null

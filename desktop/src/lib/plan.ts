@@ -28,6 +28,7 @@ export function itemStateTone(state: string | null | undefined): Tone {
 const PHASE_NAMES: Record<string, string> = {
   idle: '待开始',
   running: '运行中',
+  paused: '已暂停',
   done: '已完成',
   aborted: '已中止',
   disarmed: '已取消',
@@ -41,6 +42,7 @@ export function planPhaseName(phase: string | null | undefined) {
 
 export function planPhaseTone(phase: string | null | undefined): Tone {
   if (phase === 'running') return 'accent'
+  if (phase === 'paused') return 'warn'
   if (phase === 'done') return 'good'
   if (phase === 'aborted') return 'warn'
   if (phase === 'idle') return 'blue'
@@ -78,6 +80,7 @@ const SECONDARY_NAMES: Record<string, string> = {
   waiting: '等待查询',
   submitting: '提交中',
   starting: '准备中',
+  paused: '已暂停',
   heartbeat_timeout: '心跳超时',
   process_exited: '进程已退出',
   success: '成功',
@@ -148,6 +151,7 @@ export function planStatus(plan: Plan | null | undefined, now: Date = new Date()
   if (plan.status) return plan.status
   const phase = plan.phase ?? 'idle'
   if (phase === 'running') return { primary: 'running', secondary: 'waiting' }
+  if (phase === 'paused') return { primary: 'pending', secondary: 'paused', description: '计划已暂停' }
   if (phase === 'done') return { primary: 'done', secondary: 'completed', description: plan.result }
   if (phase === 'aborted') return { primary: 'failed', secondary: 'aborted', description: plan.result }
   if (phase === 'disarmed')
