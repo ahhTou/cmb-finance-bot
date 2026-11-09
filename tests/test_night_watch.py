@@ -315,5 +315,134 @@ class NightWatchTest(unittest.TestCase):
         self.assertIn(("shell", "dumpsys", "battery", "set", "ac", "1"), calls)
 
 
+class FakeClock:
+    """Fake monotonic clock: sleeping advances it, so waits cost no real time."""
+    def __init__(self):
+        self.seconds = 0.0
+
+    def monotonic(self):
+        return self.seconds
+
+    def sleep(self, seconds):
+        self.seconds += seconds
+
+
+class ArmHealthTest(unittest.TestCase):
+    """布防前健康检查：全部 mock，绝不碰 adb/模拟器/网络，也不真实等待。"""
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.m = {}
+        patchers = {
+            "start": patch.object(nw.manage, "start"),
+            "running": patch.object(nw, "emulator_running", return_value=True),
+            "booted": patch.object(nw, "booted", return_value=True),
+            "network": patch.object(nw, "network_state", return_value="up"),
+            "reconnect": patch.object(nw, "reconnect_wifi"),
+            "restart": patch.object(nw, "restart_emulator"),
+            "screen": patch.object(nw, "keep_screen_on"),
+            "log": patch.object(nw, "log"),
+        }
+        for name, patcher in patchers.items():
+            self.m[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+        for patcher in (patch.object(nw.time, "sleep", self.clock.sleep),
+                        patch.object(nw.time, "monotonic", self.clock.monotonic)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_healthy_device_is_not_touched(self):
+        repairs = nw.arm_health(15)
+        self.assertEqual(repairs, [])
+        self.m["start"].assert_not_called()
+        self.m["restart"].assert_not_called()
+        self.m["reconnect"].assert_not_called()
+        self.m["screen"].assert_called_once()
+        self.m["log"].assert_not_called()
+
+    def test_starts_the_emulator_when_it_is_not_running(self):
+        self.m["running"].side_effect = [False, True]
+        self.m["booted"].side_effect = [False, True, True]
+        notes = []
+        repairs = nw.arm_health(15, note=notes.append)
+        self.assertEqual(repairs, ["启动模拟器"])
+        self.assertIn("模拟器没有在运行，正在启动", notes)
+        self.m["start"].assert_called_once()
+        self.m["restart"].assert_not_called()
+        self.m["log"].assert_not_called()
+
+    def test_boot_timeout_restarts_the_emulator(self):
+        state = {"booted": False}
+        self.m["running"].side_effect = [False, True]
+        self.m["booted"].side_effect = lambda: state["booted"]
+        self.m["restart"].side_effect = lambda tick=None: state.update(booted=True)
+        notes = []
+        repairs = nw.arm_health(1, note=notes.append)
+        self.assertEqual(repairs, ["启动模拟器", "重启模拟器"])
+        self.assertIn("模拟器没有在等待时间内开机，正在重启模拟器", notes)
+        self.assertGreaterEqual(self.clock.seconds, 60)
+        self.m["restart"].assert_called_once()
+        self.assertIsNotNone(self.m["restart"].call_args.kwargs["tick"])
+        self.m["log"].assert_not_called()
+
+    def test_restart_failure_becomes_one_unified_abort(self):
+        self.m["running"].side_effect = [False, True]
+        self.m["booted"].return_value = False
+        self.m["restart"].side_effect = nw.Abort("模拟器重启后 5 分钟仍未开机。")
+        with self.assertRaises(nw.Abort) as ctx:
+            nw.arm_health(1)
+        text = str(ctx.exception)
+        self.assertIn("健康检查未通过", text)
+        self.assertIn("已尝试", text)
+        self.assertIn("启动模拟器", text)
+        self.assertIn("重启模拟器", text)
+        self.assertIn("最长等待 1 分钟", text)
+
+    def test_down_network_reconnects_wifi(self):
+        self.m["network"].side_effect = ["down", "up", "up"]
+        notes = []
+        repairs = nw.arm_health(15, note=notes.append)
+        self.assertEqual(repairs, ["重新连接 Wi-Fi"])
+        self.assertIn("模拟器没有网络，正在重新连接 Wi-Fi", notes)
+        self.assertIn("网络已恢复", notes)
+        self.m["reconnect"].assert_called_once()
+        self.m["restart"].assert_not_called()
+        self.m["log"].assert_not_called()
+
+    def test_no_device_restarts_the_emulator(self):
+        self.m["network"].side_effect = ["no-device", "up"]
+        notes = []
+        repairs = nw.arm_health(15, note=notes.append)
+        self.assertEqual(repairs, ["重启模拟器"])
+        self.assertIn("adb 连不上模拟器，正在重启模拟器", notes)
+        self.m["restart"].assert_called_once()
+        self.m["reconnect"].assert_not_called()
+        self.m["log"].assert_not_called()
+
+    def test_screen_on_failure_is_a_note_not_a_failure(self):
+        self.m["screen"].side_effect = nw.Abort("stay_on 失败")
+        notes = []
+        repairs = nw.arm_health(15, note=notes.append)
+        self.assertEqual(repairs, [])
+        self.assertIn("恢复屏幕常亮失败（Abort），继续布防", notes)
+
+    def test_final_confirmation_aborts_when_network_is_gone(self):
+        self.m["network"].side_effect = ["up", "down"]
+        with self.assertRaises(nw.Abort) as ctx:
+            nw.arm_health(15)
+        self.assertIn("健康检查未通过", str(ctx.exception))
+        self.assertIn("仍然没有网络", str(ctx.exception))
+
+    def test_waiting_ticks_and_notes_without_touching_watch_log(self):
+        self.m["running"].side_effect = [False, True]
+        self.m["booted"].side_effect = [False, False, True, True]
+        ticks, notes = [], []
+        repairs = nw.arm_health(1, tick=lambda: ticks.append(1), note=notes.append)
+        self.assertEqual(repairs, ["启动模拟器"])
+        self.assertGreaterEqual(len(ticks), 2)
+        self.assertIn("模拟器没有在运行，正在启动", notes)
+        self.m["log"].assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

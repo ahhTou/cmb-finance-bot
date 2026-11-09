@@ -67,6 +67,15 @@ class PlanSettingsTest(unittest.TestCase):
                     plan_settings.save({"poll_seconds": 2})
                 self.assertEqual(self.path.read_text(), text)
 
+    def test_health_timeout_minutes_defaults_and_bounds(self):
+        self.assertEqual(plan_settings.DEFAULTS["health_timeout_minutes"], 15)
+        self.assertEqual(plan_settings.load()["health_timeout_minutes"], 15)
+        self.assertEqual(plan_settings.save({"health_timeout_minutes": 1})["health_timeout_minutes"], 1)
+        self.assertEqual(plan_settings.save({"health_timeout_minutes": 60})["health_timeout_minutes"], 60)
+        for value in (0, 61, "15"):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                plan_settings.save({"health_timeout_minutes": value})
+
     def test_snapshot_fills_defaults_and_keeps_snapshot_values(self):
         raw = {"poll_seconds": 4, "grace_seconds": 0, "end_timeout_minutes": -1}
         result = plan_settings.snapshot(raw)
@@ -74,6 +83,8 @@ class PlanSettingsTest(unittest.TestCase):
         self.assertEqual(result["grace_seconds"], 0)
         self.assertEqual(result["end_timeout_minutes"], -1)
         self.assertEqual(result["heartbeat_seconds"], 10)
+        # 旧 plan.json 的 runtime_settings 没有健康检查预算时补默认值。
+        self.assertEqual(result["health_timeout_minutes"], 15)
         # A corrupt snapshot must not become a zero or non-integer sleep.
         self.assertEqual(plan_settings.snapshot({"poll_seconds": "2"}), plan_settings.DEFAULTS)
 

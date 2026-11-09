@@ -512,6 +512,10 @@ def status(_args):
 
 # ---------------------------------------------------------------- device checks
 
+HEALTH_POLL_SECONDS = 2       # 布防前健康检查的轮询分片：与 ensure_network() 的 15×2 秒节奏一致
+HEALTH_RECONNECT_TRIES = 15   # 健康检查里最多重连 Wi-Fi 15 轮，每轮约 10 秒（同 ensure_network 的 15×2 秒）
+
+
 def adb(*args, timeout=20):
     return subprocess.run(secure_input.BASE + list(args), text=True, capture_output=True,
                           timeout=timeout, check=True).stdout
@@ -530,18 +534,25 @@ def emulator_running():
     return manage.owned(item.get("pid", -1), item.get("tokens", ["__missing__"]))
 
 
-def restart_emulator():
+def restart_emulator(tick=None):
     """Reboot the VM. Only returns once the booted emulator has the network;
-    a restart that comes back without Wi-Fi is not a usable restart."""
+    a restart that comes back without Wi-Fi is not a usable restart.
+
+    `tick` is an optional progress callback (default no-op) used by the
+    pre-arm health check to keep the plan heartbeat alive while it waits.
+    """
+    tick = tick or (lambda: None)
     log("重启模拟器")
     manage.stop()
     manage.start()
     end = time.monotonic() + 300
     while time.monotonic() < end:
         if booted():
+            tick()
             time.sleep(10)
             keep_screen_on()
             break
+        tick()
         time.sleep(5)
     else:
         raise Abort("模拟器重启后 5 分钟仍未开机。")
@@ -551,6 +562,7 @@ def restart_emulator():
             log("重启后网络正常")
             return
         reconnect_wifi()
+        tick()
         time.sleep(10 if attempt == 0 else 15)
     raise Abort("模拟器重启后仍然没有网络，开售前无法登录。")
 
@@ -687,6 +699,101 @@ def ensure_network():
             log("Wi-Fi 重连后网络恢复")
             return
     restart_emulator()      # reboot the VM; ensure_network() re-runs after it
+
+
+def arm_health(timeout_minutes, tick=None, note=None):
+    """Plan mode: make the emulator usable before arming one plan item.
+
+    Repairs what can be repaired without asking (start the emulator, wait for
+    boot, re-join Wi-Fi, reboot the VM) and returns the short repair list, e.g.
+    ["启动模拟器", "重新连接 Wi-Fi"]; an already healthy device returns [].
+
+    A failure raises Abort with a unified message:
+    "健康检查未通过：<原因>；已尝试<修复项>（最长等待 N 分钟）。"
+
+    This function never calls log()/writes watch.log: user-visible progress
+    goes through `note(text)` only, and `tick()` runs once per poll slice so
+    the plan heartbeat keeps going while it waits. Both default to no-ops.
+    It only reuses the existing emulator/network helpers and never touches a
+    task or submits anything.
+    """
+    tick = tick or (lambda: None)
+    note = note or (lambda text: None)
+    repairs = []
+    deadline = time.monotonic() + timeout_minutes * 60
+
+    def failure(reason):
+        reason = reason.rstrip("。；;，,")   # 内层异常自带标点时不重复
+        tried = "、".join(repairs) or "无"
+        return Abort(f"健康检查未通过：{reason}；已尝试{tried}"
+                     f"（最长等待 {timeout_minutes} 分钟）。")
+
+    def wait_ready(ready, limit=None):
+        """Poll ready() in HEALTH_POLL_SECONDS slices, ticking once per slice.
+
+        Returns True once ready; False at the optional local limit or at the
+        overall deadline, whichever comes first.
+        """
+        end = None if limit is None else time.monotonic() + limit
+        while True:
+            if ready():
+                return True
+            now = time.monotonic()
+            if now >= deadline or (end is not None and now >= end):
+                return False
+            time.sleep(min(HEALTH_POLL_SECONDS,
+                           deadline - now,
+                           end - now if end is not None else HEALTH_POLL_SECONDS))
+            tick()
+
+    def restart():
+        try:
+            restart_emulator(tick=tick)
+        except Exception as exc:
+            raise failure(f"重启模拟器失败：{exc}") from exc
+        if not booted():
+            raise failure("重启模拟器后仍未开机")
+
+    if not emulator_running():
+        note("模拟器没有在运行，正在启动")
+        repairs.append("启动模拟器")
+        try:
+            manage.start()
+        except Exception as exc:
+            raise failure(f"启动模拟器失败：{exc}") from exc
+    # A running emulator may still be booting (cold start, previous reboot).
+    if not wait_ready(booted):
+        note("模拟器没有在等待时间内开机，正在重启模拟器")
+        repairs.append("重启模拟器")
+        restart()
+    state = network_state()
+    if state == "no-device":
+        note("adb 连不上模拟器，正在重启模拟器")
+        repairs.append("重启模拟器")
+        restart()
+    elif state != "up":
+        note("模拟器没有网络，正在重新连接 Wi-Fi")
+        repairs.append("重新连接 Wi-Fi")
+        for _ in range(HEALTH_RECONNECT_TRIES):
+            reconnect_wifi()
+            if wait_ready(lambda: network_state() == "up", 10):
+                note("网络已恢复")
+                break
+            if time.monotonic() >= deadline:
+                raise failure("等待模拟器网络恢复超时")
+        else:
+            note("重新连接 Wi-Fi 后仍然没有网络，正在重启模拟器")
+            repairs.append("重启模拟器")
+            restart()
+    try:
+        keep_screen_on()
+    except Exception as exc:
+        note(f"恢复屏幕常亮失败（{type(exc).__name__}），继续布防")
+    if not (emulator_running() and booted()):
+        raise failure("最终确认时模拟器没有运行或没有开机")
+    if network_state() != "up":
+        raise failure("最终确认时模拟器仍然没有网络")
+    return repairs
 
 
 # ---------------------------------------------------------------- login

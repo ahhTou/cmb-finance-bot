@@ -898,6 +898,9 @@ function PlanRow({
           {saved && statusSecondaryName(itemStatus(saved, now)) && (
             <span className="text-[10px] text-muted">{statusSecondaryName(itemStatus(saved, now))}</span>
           )}
+          {saved?.state === 'running' && itemStatus(saved, now)?.description && (
+            <span className="text-[10px] text-muted">{itemStatus(saved, now)?.description}</span>
+          )}
           {saved?.result && <span className="text-[10px] text-muted">{saved.result}</span>}
           {problem && (
             <Hint tone="warn" className="text-[10px]">

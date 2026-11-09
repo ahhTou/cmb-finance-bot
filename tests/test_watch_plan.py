@@ -41,6 +41,8 @@ class PlanTestBase(unittest.TestCase):
         self.stack.enter_context(patch.object(nw, "alert"))
         self.stack.enter_context(patch.object(nw, "log"))
         self.stack.enter_context(patch.object(watch_plan, "log"))
+        # 计划项布防前的健康检查必须隔离：现有用例不碰真实 adb/模拟器/网络。
+        self.stack.enter_context(patch.object(nw, "arm_health", return_value=[]))
         # 任何真实等待都必须被测试挡掉；计划进程轮询间隔是 2 秒。
         self.stack.enter_context(patch.object(watch_plan.time, "sleep"))
         self.now = datetime.now().replace(microsecond=0)
@@ -478,6 +480,15 @@ class StartTest(PlanTestBase):
         with self.assertRaises(nw.Abort) as ctx:
             self.start()
         self.assertIn("已结束", str(ctx.exception))
+
+    def test_start_resets_stale_health_text(self):
+        plan = self.save([self.item(at=self.at())])
+        plan["items"][0]["health"] = "旧进度"
+        watch_plan.save_plan(plan)
+        fake = types.SimpleNamespace(pid=4321)
+        with patch.object(watch_plan.subprocess, "Popen", return_value=fake):
+            self.start()
+        self.assertNotIn("health", watch_plan.load_plan()["items"][0])
 
     def test_real_plan_starts_with_confirmation(self):
         self.save([self.item(at=self.at())], dry_run=False)
@@ -1120,6 +1131,132 @@ class RunnerTest(PlanTestBase):
         with patch.object(nw, "arm_task") as arm:
             watch_plan.run("gen-run")
         arm.assert_not_called()
+
+
+class HealthCheckTest(PlanTestBase):
+    """布防前健康检查：能修就修，修不好只让本项失败并继续下一项。"""
+
+    def prepare(self, items, runtime_settings=None):
+        return self.running_plan(items, dry_run=True, generation="gen-health",
+                                 runtime_settings=runtime_settings)
+
+    def two_items(self):
+        return [self.item(code="AAAA", at=self.at(60)),
+                self.item(code="BBBB", at=self.at(120))]
+
+    def test_repairs_then_arms_normally(self):
+        self.prepare(self.two_items())
+        arms = [task("t1", "armed"), task("t2", "armed")]
+        polls = [task("t1", "done", "提交成功"), task("t2", "done", "提交成功")]
+        with patch.object(nw, "arm_health",
+                          return_value=["启动模拟器", "重新连接 Wi-Fi"]) as health, \
+             patch.object(nw, "arm_task", side_effect=arms) as arm, \
+             patch.object(nw, "load_task", side_effect=polls), \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"), \
+             patch.object(watch_plan, "log") as log:
+            watch_plan.run("gen-health")
+        saved = watch_plan.load_plan()
+        self.assertEqual(health.call_count, 2)   # 两项之间也做健康检查
+        self.assertEqual(health.call_args.args[0], 15)
+        self.assertTrue(callable(health.call_args.kwargs["tick"]))
+        self.assertTrue(callable(health.call_args.kwargs["note"]))
+        self.assertEqual(arm.call_count, 2)
+        self.assertEqual(saved["phase"], "done")
+        self.assertEqual([row["state"] for row in saved["items"]], ["done", "done"])
+        self.assertNotIn("health", saved["items"][0])
+        logs = " ".join(str(call.args[0]) for call in log.call_args_list if call.args)
+        self.assertIn("第 1 项开始布防", logs)
+        self.assertIn("健康检查：已启动模拟器、重新连接 Wi-Fi", logs)
+        self.assertIn("健康检查通过", logs)
+
+    def test_failure_only_fails_that_item_and_continues(self):
+        self.prepare(self.two_items())
+        with patch.object(nw, "arm_health",
+                          side_effect=[nw.Abort("模拟器没有网络"), []]) as health, \
+             patch.object(nw, "arm_task", return_value=task("t2", "armed")) as arm, \
+             patch.object(nw, "load_task", return_value=task("t2", "done", "提交成功")), \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert") as alert, \
+             patch.object(watch_plan, "log"):
+            watch_plan.run("gen-health")
+        saved = watch_plan.load_plan()
+        self.assertEqual(health.call_count, 2)   # 第一项失败后继续检查第二项
+        arm.assert_called_once()
+        self.assertEqual(arm.call_args.args[0], "BBBB")
+        self.assertEqual(saved["items"][0]["state"], "failed")
+        self.assertTrue(saved["items"][0]["result"].startswith("健康检查未通过"))
+        self.assertEqual(saved["items"][0]["result"], "健康检查未通过：模拟器没有网络")
+        self.assertEqual(saved["items"][1]["state"], "done")
+        self.assertEqual(saved["phase"], "done")
+        self.assertIn("失败 1 项", saved["result"])
+        alerts = " ".join(str(call) for call in alert.call_args_list)
+        self.assertIn("计划第 1 项失败", alerts)
+        self.assertIn("健康检查未通过", alerts)
+
+    def test_progress_is_written_to_item_health(self):
+        self.prepare(self.two_items())
+        seen = {}
+
+        def fake_health(timeout, tick=None, note=None):
+            if "initial" not in seen:
+                before = watch_plan.load_plan()["items"][0]
+                seen["state"] = before.get("state")
+                seen["initial"] = before.get("health")
+                note("模拟器没有网络，正在重新连接 Wi-Fi")
+                seen["saved"] = watch_plan.load_plan()["items"][0].get("health")
+            return []
+
+        arms = [task("t1", "armed"), task("t2", "armed")]
+        polls = [task("t1", "done", "提交成功"), task("t2", "done", "提交成功")]
+        with patch.object(nw, "arm_health", side_effect=fake_health), \
+             patch.object(nw, "arm_task", side_effect=arms), \
+             patch.object(nw, "load_task", side_effect=polls), \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"):
+            watch_plan.run("gen-health")
+        self.assertEqual(seen["state"], "running")
+        self.assertEqual(seen["initial"], "正在做布防前健康检查")
+        self.assertEqual(seen["saved"], "模拟器没有网络，正在重新连接 Wi-Fi")
+        self.assertNotIn("health", watch_plan.load_plan()["items"][0])
+
+    def test_waiting_updates_last_tick(self):
+        plan = self.prepare(self.two_items(),
+                            runtime_settings=self.runtime(heartbeat_seconds=0))
+        stale = iso(self.now - timedelta(minutes=5))
+        plan["last_tick"] = stale
+        watch_plan.save_plan(plan)
+        seen = {}
+
+        def fake_health(timeout, tick=None, note=None):
+            if "last_tick" not in seen:
+                tick()
+                seen["last_tick"] = watch_plan.load_plan()["last_tick"]
+            return []
+
+        arms = [task("t1", "armed"), task("t2", "armed")]
+        polls = [task("t1", "done", "提交成功"), task("t2", "done", "提交成功")]
+        with patch.object(nw, "arm_health", side_effect=fake_health), \
+             patch.object(nw, "arm_task", side_effect=arms), \
+             patch.object(nw, "load_task", side_effect=polls), \
+             patch.object(nw, "alive", return_value=False), \
+             patch.object(nw, "alert"):
+            watch_plan.run("gen-health")
+        self.assertNotEqual(seen["last_tick"], stale)
+        self.assertEqual(watch_plan.load_plan()["items"][0]["state"], "done")
+
+    def test_item_status_shows_health_before_task_phase(self):
+        item = {"code": "AAAA", "amount": "1000.00", "at": self.at(60),
+                "mode": "first_launch", "state": "running", "task_id": None,
+                "health": "正在做布防前健康检查"}
+        status = watch_plan._item_status(item, None, self.now)
+        self.assertEqual(status["primary"], "running")
+        self.assertEqual(status["secondary"], "starting")
+        self.assertEqual(status["description"], "正在做布防前健康检查")
+        # 已经进入任务阶段（armed）后恢复原描述，不再显示健康检查进度。
+        linked = watch_plan._item_status(item, task("t1", "armed"), self.now)
+        self.assertEqual(linked["secondary"], "preparing")
+        self.assertEqual(linked["description"], watch_plan._TASK_DESCRIPTION["preparing"])
 
 
 class ArmPlanFieldsTest(PlanTestBase):

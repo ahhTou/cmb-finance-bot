@@ -570,6 +570,7 @@ const OTHER_DEFAULTS = {
   heartbeat_seconds: 10,
   kill_wait_seconds: 10,
   heartbeat_timeout_seconds: 60,
+  health_timeout_minutes: 15,
 }
 type OtherKey = keyof typeof OTHER_DEFAULTS
 type OtherValues = Record<OtherKey, string>
@@ -583,6 +584,7 @@ const OTHER_LIMITS: Record<OtherKey, [number, number]> = {
   heartbeat_seconds: [1, 300],
   kill_wait_seconds: [1, 120],
   heartbeat_timeout_seconds: [10, 600],
+  health_timeout_minutes: [1, 60],
 }
 const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' | 'fixed'; help: string }> = {
   arm_gap_minutes: {
@@ -632,6 +634,12 @@ const OTHER_META: Record<OtherKey, { label: string; unit: string; kind: 'limit' 
     unit: '秒',
     kind: 'limit',
     help: 'SIGTERM 后等这么久再 SIGKILL；进程提前退出就继续。',
+  },
+  health_timeout_minutes: {
+    label: '健康检查最长等待',
+    unit: '分钟',
+    kind: 'limit',
+    help: '布防前检查模拟器和网络，能修好就继续；成功即继续，不会等满；只有一直修不好才让这一项失败。',
   },
 }
 
@@ -720,6 +728,7 @@ function OtherSettings() {
           {field('end_timeout_minutes')}
           {field('kill_wait_seconds')}
           {field('heartbeat_timeout_seconds')}
+          {field('health_timeout_minutes')}
         </div>
       </Card>
 

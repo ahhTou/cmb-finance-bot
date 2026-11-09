@@ -285,6 +285,9 @@ def _item_status(item, task, now):
         linked = task if task and (not item.get("task_id") or task.get("task_id") == item.get("task_id")) else None
         phase = (linked or {}).get("phase")
         secondary = _TASK_SECONDARY.get(phase, "starting")
+        # 布防前健康检查的进度：还没有进入任务阶段时，描述直接显示它。
+        if item.get("health") and phase not in _TASK_SECONDARY:
+            return _status("running", secondary, item["health"])
         return _status("running", secondary, _TASK_DESCRIPTION.get(secondary, "正在准备这一项"))
     if state == "done":
         outcome = item.get("outcome")
@@ -512,6 +515,7 @@ def start(confirm_real_payment=False, plan_id=None, content_revision=None,
             for item in plan.get("items", []):
                 item.update(state="pending", task_id=None, result=None,
                             armed_at=None, ended_at=None)
+                item.pop("health", None)
             save_plan(plan)
             try:
                 proc = _spawn(generation)
@@ -871,11 +875,52 @@ def run(generation):
                 log(f"第 {index + 1} 项剩余时间不足，改为立即冷启动。")
             plan["last_tick"] = _now_iso()
             item.update(state="running", armed_at=_now_iso(), ended_at=None,
-                        result=None, task_id=None, prep_minutes=prep)
+                        result=None, task_id=None, prep_minutes=prep,
+                        health="正在做布防前健康检查")
             if not _save_running(plan):
                 return
             log(f"第 {index + 1} 项开始布防：{item['code']} {item['amount']} 元，"
                 f"购买 {at:%H:%M:%S}，冷启动提前 {prep} 分钟。")
+            beat = [time.monotonic()]
+
+            def tick():
+                """Keep the plan heartbeat fresh while the health check waits."""
+                now_mono = time.monotonic()
+                if now_mono - beat[0] < runtime["heartbeat_seconds"]:
+                    return
+                beat[0] = now_mono
+                plan["last_tick"] = _now_iso()
+                _save_running(plan)
+
+            def note(text):
+                """Plan-mode progress: plan.log + the item's health text."""
+                log(f"健康检查：{text}")
+                item["health"] = text
+                plan["last_tick"] = _now_iso()
+                _save_running(plan)
+
+            try:
+                repairs = nw.arm_health(runtime["health_timeout_minutes"],
+                                        tick=tick, note=note)
+            except nw.Abort as exc:
+                message = str(exc) or "健康检查未通过"
+                if not message.startswith("健康检查未通过"):
+                    message = f"健康检查未通过：{message}"
+                if not _finish_item(plan, index, "failed", message):
+                    return
+                log(f"第 {index + 1} 项布防失败：{message}")
+                nw.alert(f"计划第 {index + 1} 项失败", f"{item['code']}：{message}", 5,
+                         event='plan_item_failed')
+                continue   # 健康检查失败只让本项失败，继续下一项
+            if _read_running(plan) is None:
+                return     # 健康检查期间计划被取消
+            if repairs:
+                log("健康检查：已" + "、".join(repairs))
+            log("健康检查通过")
+            item.pop("health", None)
+            plan["last_tick"] = _now_iso()
+            if not _save_running(plan):
+                return
             try:
                 task = nw.arm_task(item["code"], item["amount"], at=item["at"],
                                    dry_run=bool(plan.get("dry_run")),
