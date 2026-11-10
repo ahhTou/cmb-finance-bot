@@ -232,8 +232,93 @@ test('plan page fits the minimum window', async ({ page }) => {
   await page.setViewportSize({ width: 940, height: 680 })
   await open(page, '/plan', 'plan')
   await expect(page.getByTestId('plan-row-1')).toBeVisible()
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)
-  expect(overflow).toBeLessThanOrEqual(0)
+  const overflow = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="plan-page"]')
+    return {
+      docX: document.documentElement.scrollWidth - innerWidth,
+      pageX: root ? root.scrollWidth - root.clientWidth : null,
+      pageY: root ? root.scrollHeight - root.clientHeight : null,
+    }
+  })
+  expect(overflow.docX).toBeLessThanOrEqual(0)
+  expect(overflow.pageX).toBeLessThanOrEqual(0)
+  // The whole page must fit: only the timeline itself may scroll.
+  expect(overflow.pageY).toBeLessThanOrEqual(0)
+})
+
+test('plan page has no page-level scrollbar at the default window', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  await expect(page.getByTestId('plan-status-card')).toBeVisible()
+  const overflow = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="plan-page"]')
+    return {
+      pageX: root ? root.scrollWidth - root.clientWidth : null,
+      pageY: root ? root.scrollHeight - root.clientHeight : null,
+    }
+  })
+  expect(overflow.pageX).toBeLessThanOrEqual(0)
+  expect(overflow.pageY).toBeLessThanOrEqual(0)
+})
+
+test('plan status and plan view carry no card titles or descriptions', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  await expect(page.getByTestId('plan-status-card')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '计划状态' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '计划视图' })).toHaveCount(0)
+  await expect(page.getByText('只填购买时间；保存后程序算出每项的冷启动与预计结束时间。')).toHaveCount(0)
+  await expect(page.getByText('最多 20 项；程序严格按购买时间先后串行执行。')).toHaveCount(0)
+  await expect(page.getByText('连续时间线；任务多时在时间线内纵向滚动。')).toHaveCount(0)
+})
+
+test('plan status strip sits below the plan view with big circular actions', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  const view = await page.getByTestId('plan-view').boundingBox()
+  const status = await page.getByTestId('plan-status-card').boundingBox()
+  expect(view).not.toBeNull()
+  expect(status).not.toBeNull()
+  expect(status?.y ?? 0).toBeGreaterThanOrEqual((view?.y ?? 0) + (view?.height ?? 0))
+  // The idle plan's only control is the round start button.
+  const start = page.getByTestId('plan-start')
+  const startBox = await start.boundingBox()
+  expect(startBox?.width ?? 0).toBeGreaterThanOrEqual(40)
+  expect(startBox?.width).toBe(startBox?.height)
+  await expect(start).toHaveAttribute('aria-label', '开始计划')
+  // The strip keeps its height slim (no title, subtitle or metric grid).
+  expect(status?.height ?? 999).toBeLessThanOrEqual(72)
+
+  // While a plan is running the strip offers round pause/stop controls.
+  await open(page, '/plan', 'plan-running-task')
+  const pause = page.getByTestId('plan-pause')
+  const disarm = page.getByTestId('plan-disarm')
+  for (const control of [pause, disarm]) {
+    const box = await control.boundingBox()
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(40)
+    expect(box?.width).toBe(box?.height)
+  }
+})
+
+test('plan log opens from the header right of refresh, not from a page card', async ({ page }) => {
+  await open(page, '/plan', 'plan')
+  // No inline log card or its old summary on the page body.
+  await expect(page.getByText('计划日志', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('最近 1 行（点击展开/收起）')).toHaveCount(0)
+
+  const logButton = page.getByTestId('plan-log-open')
+  await expect(logButton).toBeVisible()
+  const refreshBox = await page.getByRole('button', { name: '刷新' }).boundingBox()
+  const logBox = await logButton.boundingBox()
+  expect(logBox?.x ?? 0).toBeGreaterThanOrEqual((refreshBox?.x ?? 0) + (refreshBox?.width ?? 0))
+
+  await logButton.click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('/mock/var/night/plan.log')
+  await expect(dialog).toContainText('已保存计划：2 项（演练）')
+  await dialog.getByRole('button', { name: '关闭' }).click()
+  await expect(dialog).toBeHidden()
+
+  // The entry belongs to the plan page only.
+  await page.getByRole('link', { name: '任务' }).click()
+  await expect(page.getByTestId('plan-log-open')).toHaveCount(0)
 })
 
 test('favorite chips fill the product code in a plan row', async ({ page }) => {

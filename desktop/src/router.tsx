@@ -23,7 +23,7 @@ import { DrillPage } from './pages/Drill'
 import { FavoritesPage } from './pages/Favorites'
 import { HistoryPage } from './pages/History'
 import { LivePage, WatchBubble } from './pages/Live'
-import { PlanPage } from './pages/Plan'
+import { PlanLogButton, PlanPage } from './pages/Plan'
 import { SettingsPage } from './pages/Settings'
 import { TasksPage } from './pages/Tasks'
 import { useUI } from './store'
@@ -283,6 +283,7 @@ function Header({ title, subtitle, path }: { title: string; subtitle: string; pa
         <RotateCw className="size-3.5" />
         刷新
       </Button>
+      {path === '/plan' && <PlanLogButton />}
     </header>
   )
 }

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pause, Play, Square, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Pause, Play, ScrollText, Square, Trash2, X } from 'lucide-react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { q, useAction } from '../api/hooks'
 import type {
@@ -16,7 +16,7 @@ import type {
 } from '../api/types'
 import { FavoritePicker, LogText } from '../components/shared'
 import { Button } from '../components/ui/button'
-import { Badge, Card, Hint, Metric, MetricGrid } from '../components/ui/card'
+import { Badge, Hint } from '../components/ui/card'
 import { Dialog } from '../components/ui/dialog'
 import { Checkbox, Field, Input, Segmented, Select, Switch } from '../components/ui/form'
 import {
@@ -73,6 +73,75 @@ function dayLabel(value: Date) {
 
 function weekdayLabel(value: Date) {
   return WEEKDAYS[value.getDay()]
+}
+
+/**
+ * Header entry for the plan log, rendered right of 刷新. The log is not a page card
+ * any more (2026-11-10): it only opens in a dialog when the user asks for it.
+ */
+export function PlanLogButton() {
+  const { data: view } = useQuery(q.plan)
+  const [open, setOpen] = useState(false)
+  const lines = view?.logs ?? []
+  return (
+    <>
+      <Button
+        data-testid="plan-log-open"
+        size="icon"
+        className="ml-2 size-[34px] rounded-lg"
+        aria-label="计划日志"
+        title="计划日志"
+        onClick={() => setOpen(true)}
+      >
+        <ScrollText className="size-4" />
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title="计划日志"
+        subtitle={view?.log_path ?? 'var/night/plan.log'}
+        width={720}
+        height={480}
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <span className="text-[10px] text-muted">最近 {lines.length} 行</span>
+          <LogText lines={lines} className="min-h-0 flex-1 rounded-xl bg-field p-3" />
+        </div>
+      </Dialog>
+    </>
+  )
+}
+
+/** Big circular icon action in the compact bottom status strip. */
+function RoundAction({
+  testId,
+  label,
+  variant = 'default',
+  disabled,
+  onClick,
+  children,
+}: {
+  testId: string
+  label: string
+  variant?: 'default' | 'primary'
+  disabled?: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <Button
+      data-testid={testId}
+      variant={variant}
+      size="icon"
+      className="size-[40px] rounded-full"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  )
 }
 
 /**
@@ -320,54 +389,50 @@ export function PlanPage() {
     setDraft((current) => (current ? current.filter((_, position) => position !== index) : current))
   }
 
+  const nextText = next
+    ? `${running ? '当前项' : '下一项'} ${next.code} · ${countdownText(next.at, now)}`
+    : ''
+  const summaryText = status?.description
+    ? nextText
+      ? `${status.description} · ${nextText}`
+      : status.description
+    : nextText || (plan ? '没有待执行的布防' : '还没有计划')
+  const heartbeatText =
+    view?.heartbeat_age_s != null
+      ? `${view.heartbeat_age_s} 秒前`
+      : plan?.last_tick
+        ? isoClock(plan.last_tick)
+        : '—'
+
   if (!view) {
     return (
-      <div className="flex flex-col gap-3.5 overflow-y-auto px-[26px] pb-2">
-        <Card title="计划状态" subtitle="计划模式 · 多个布防自动排程">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-[26px]">
+        <section className="flex min-h-0 flex-1 items-center justify-center rounded-[14px] bg-card">
           {error ? <Hint tone="warn">{error.message}</Hint> : <Hint>正在读取计划…</Hint>}
-        </Card>
+        </section>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col gap-3.5 overflow-y-auto px-[26px] pb-2">
-      <Card
-        title="计划状态"
-        subtitle={
-          running
-            ? '计划正在按时间顺序执行；下方列表只读，可暂停或停止。'
-            : phase === 'paused'
-              ? '计划已暂停；继续会从下一项接着执行，停止则结束这份计划。'
-              : resultView
-                ? '计划已结束；这里保留每项状态、原因和实际时间。'
-                : '只填购买时间；保存后程序算出每项的冷启动与预计结束时间。'
-        }
+    <div data-testid="plan-page" className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-[26px]">
+      <section
+        data-testid="plan-view"
+        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden rounded-[14px] bg-card px-4 py-3"
       >
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div data-testid="plan-status" className="flex flex-wrap items-center gap-2">
-            <Badge tone={statusPrimaryTone(status)}>{statusPrimaryName(status)}</Badge>
-            {secondary && <Badge tone="muted">{secondary}</Badge>}
-            {plan && (
-              <Badge tone={plan.dry_run ? 'purple' : 'accent'}>
-                {plan.dry_run ? '演练计划' : '真实计划'}
-              </Badge>
-            )}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="w-[190px]">
+            <Segmented
+              label="计划视图"
+              value={viewMode}
+              options={[
+                { value: 'timeline', label: '时间线' },
+                { value: 'week', label: '周视图' },
+              ]}
+              onChange={setViewMode}
+            />
           </div>
-          <span className="text-[11px] text-muted">
-            {status?.description ??
-              (next
-                ? `${running ? '当前项' : '下一项'} ${next.code} · ${countdownText(next.at, now)}`
-                : plan
-                  ? '没有待执行的布防'
-                  : '还没有计划')}
-          </span>
-          {next && status?.description && (
-            <span className="text-[11px] text-muted">
-              {running ? '当前项' : '下一项'} {next.code} · {countdownText(next.at, now)}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {terminal && resultView && (
               <Button data-testid="plan-edit" disabled={busy} onClick={editTerminal}>
                 编辑 / 复制为新计划
@@ -378,82 +443,166 @@ export function PlanPage() {
                 查看执行结果
               </Button>
             )}
-            {running && (
+            <Button
+              data-testid="plan-add"
+              size="compact"
+              disabled={readOnly || busy || rows.length >= PLAN_MAX_ITEMS}
+              onClick={() => {
+                setViewMode('timeline')
+                add()
+              }}
+            >
+              添加布防
+            </Button>
+          </div>
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="flex min-h-0 flex-1 items-center justify-center text-center text-muted text-xs">
+            {plan
+              ? '这份计划还没有布防项。点「添加布防」添加第一项。'
+              : '还没有计划。点「添加布防」填好购买时间，保存后即可开始。'}
+          </p>
+        ) : viewMode === 'timeline' ? (
+          <TimelineView
+            groups={orderedTimeline}
+            readOnly={readOnly}
+            resultMode={resultView}
+            busy={busy}
+            now={now}
+            onPatch={patch}
+            onRemove={remove}
+          />
+        ) : (
+          <WeekView
+            days={weekDays}
+            rows={weekRows}
+            now={now}
+            weekStart={weekStart}
+            onChangeWeek={(days) => setWeekStart(addDays(weekStart, days))}
+            onToday={() => setWeekStart(startOfDay(new Date()))}
+          />
+        )}
+
+        {viewMode === 'timeline' && !readOnly && (
+          <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
+            <Switch
+              label="演练计划：输完交易密码不提交"
+              checked={dryRun}
+              onChange={setDryRun}
+              disabled={busy}
+            />
+            <div className="ml-auto flex items-center gap-2">
+              {dirty && <Hint>列表有未保存的修改，保存后才能开始。</Hint>}
               <Button
-                data-testid="plan-pause"
-                size="icon"
-                className="size-8"
-                aria-label="暂停计划"
-                title="暂停计划"
+                data-testid="plan-save"
+                variant="primary"
+                disabled={busy || localProblems.length > 0}
+                onClick={save}
+              >
+                保存计划
+              </Button>
+            </div>
+          </div>
+        )}
+        {!readOnly && localProblems.length > 0 && <Hint tone="warn">{localProblems[0]}</Hint>}
+      </section>
+
+      {blockingProblems.length > 0 && (
+        <section
+          data-testid="plan-problems"
+          className="flex shrink-0 flex-col gap-1 rounded-[14px] bg-card px-4 py-2.5"
+        >
+          <p className="font-semibold text-[11px] text-warn">还不能开始</p>
+          {blockingProblems.map((problem) => (
+            <p key={problem} className="text-[10px] leading-snug text-warn/90">
+              {problem}
+            </p>
+          ))}
+          <Hint className="text-[10px]">按上面的提示修改购买时间后，再点「保存计划」。</Hint>
+        </section>
+      )}
+
+      <section
+        data-testid="plan-status-card"
+        className="flex shrink-0 flex-col gap-1.5 rounded-[14px] bg-card px-4 py-2.5"
+      >
+        <div className="flex items-center gap-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span data-testid="plan-status" className="flex shrink-0 flex-wrap items-center gap-2">
+                <Badge tone={statusPrimaryTone(status)}>{statusPrimaryName(status)}</Badge>
+                {secondary && <Badge tone="muted">{secondary}</Badge>}
+                {plan && (
+                  <Badge tone={plan.dry_run ? 'purple' : 'accent'}>
+                    {plan.dry_run ? '演练计划' : '真实计划'}
+                  </Badge>
+                )}
+              </span>
+              <span className="min-w-0 truncate text-[11px] text-muted" title={summaryText}>
+                {summaryText}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted tabular-nums">
+              <span>布防 {totals.count} 项</span>
+              <span>合计 ¥ {totals.amount}</span>
+              <span>
+                进度 {finished} / {plan?.items.length ?? 0}
+              </span>
+              <span className={cn(heartbeatStale && 'text-warn')}>心跳 {heartbeatText}</span>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2.5">
+            {running && (
+              <RoundAction
+                testId="plan-pause"
+                label="暂停计划"
                 disabled={busy || plan?.pause_requested === true}
                 onClick={askPause}
               >
-                <Pause className="size-3.5" />
-              </Button>
+                <Pause className="size-[18px]" />
+              </RoundAction>
             )}
             {phase === 'paused' && !stale && (
-              <Button
-                data-testid="plan-resume"
+              <RoundAction
+                testId="plan-resume"
+                label="继续计划"
                 variant="primary"
-                size="icon"
-                className="size-8"
-                aria-label="继续计划"
-                title="继续计划"
                 disabled={busy}
                 onClick={resume}
               >
-                <Play className="size-3.5" />
-              </Button>
+                <Play className="size-[18px]" />
+              </RoundAction>
             )}
             {(running || stale || phase === 'paused') && (
-              <Button
-                data-testid="plan-disarm"
+              <RoundAction
+                testId="plan-disarm"
+                label="停止计划"
                 variant="primary"
-                size="icon"
-                className="size-8"
-                aria-label="停止计划"
-                title="停止计划"
                 disabled={busy || plan?.stop_requested === true}
                 onClick={askDisarm}
               >
-                <Square className="size-3.5" />
-              </Button>
+                <Square className="size-4" />
+              </RoundAction>
+            )}
+            {!running && !stale && phase !== 'paused' && plan && (
+              <RoundAction testId="plan-clear" label="清空计划" disabled={busy} onClick={clear}>
+                <Trash2 className="size-4" />
+              </RoundAction>
             )}
             {!running && !stale && phase === 'idle' && (
-              <Button
-                data-testid="plan-start"
+              <RoundAction
+                testId="plan-start"
+                label="开始计划"
                 variant="primary"
-                aria-label="开始计划"
-                title="开始计划"
                 disabled={!canStart}
                 onClick={openConfirm}
               >
-                <Play className="size-3.5" />
-                开始计划
-              </Button>
-            )}
-            {!running && !stale && phase !== 'paused' && plan && (
-              <Button data-testid="plan-clear" disabled={busy} onClick={clear}>
-                清空
-              </Button>
+                <Play className="size-[18px]" />
+              </RoundAction>
             )}
           </div>
         </div>
-        <MetricGrid>
-          <Metric title="布防项" value={`${totals.count} 项`} />
-          <Metric title="合计金额" value={`¥ ${totals.amount}`} />
-          <Metric title="执行进度" value={plan ? `${finished} / ${plan.items.length} 项已结束` : '—'} />
-          <Metric
-            title="最近心跳"
-            value={
-              view?.heartbeat_age_s != null
-                ? `${view.heartbeat_age_s} 秒前`
-                : plan?.last_tick
-                  ? isoClock(plan.last_tick)
-                  : '—'
-            }
-          />
-        </MetricGrid>
         {stale && (
           <Hint tone="warn">计划进程已退出，但计划仍标记为运行中。请点「停止计划」止损后重新保存。</Hint>
         )}
@@ -491,140 +640,7 @@ export function PlanPage() {
             ))}
           </div>
         )}
-      </Card>
-
-      {blockingProblems.length > 0 && (
-        <section
-          data-testid="plan-problems"
-          className="flex flex-col gap-1.5 rounded-[14px] bg-card p-[18px]"
-        >
-          <h2 className="font-semibold text-sm text-warn">还不能开始</h2>
-          {blockingProblems.map((problem) => (
-            <p key={problem} className="text-[11px] leading-snug text-warn/90">
-              {problem}
-            </p>
-          ))}
-          <Hint>按上面的提示修改购买时间后，再点「保存计划」。</Hint>
-        </section>
-      )}
-
-      <Card
-        title={resultView ? '执行结果' : '计划视图'}
-        subtitle={
-          resultView
-            ? '逐项结果与时间来自开始时的计划快照。'
-            : `最多 ${PLAN_MAX_ITEMS} 项；程序严格按购买时间先后串行执行。`
-        }
-        badge={
-          <Button
-            data-testid="plan-add"
-            size="compact"
-            disabled={readOnly || busy || rows.length >= PLAN_MAX_ITEMS}
-            onClick={() => {
-              setViewMode('timeline')
-              add()
-            }}
-          >
-            添加布防
-          </Button>
-        }
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="w-[220px]">
-            <Segmented
-              label="计划视图"
-              value={viewMode}
-              options={[
-                { value: 'timeline', label: '时间线' },
-                { value: 'week', label: '周视图' },
-              ]}
-              onChange={setViewMode}
-            />
-          </div>
-          <Hint className="text-[10px]">
-            {viewMode === 'week'
-              ? '周视图只读；左右切换查看全部时间段，不出现滚动条。'
-              : '连续时间线；任务多时在时间线内纵向滚动。'}
-          </Hint>
-        </div>
-
-        {rows.length === 0 ? (
-          <p className="text-muted text-xs">
-            {plan
-              ? '这份计划还没有布防项。点「添加布防」添加第一项。'
-              : '还没有计划。点「添加布防」填好购买时间，保存后即可开始。'}
-          </p>
-        ) : viewMode === 'timeline' ? (
-          <TimelineView
-            groups={orderedTimeline}
-            readOnly={readOnly}
-            resultMode={resultView}
-            busy={busy}
-            now={now}
-            onPatch={patch}
-            onRemove={remove}
-          />
-        ) : (
-          <WeekView
-            days={weekDays}
-            rows={weekRows}
-            now={now}
-            weekStart={weekStart}
-            onChangeWeek={(days) => setWeekStart(addDays(weekStart, days))}
-            onToday={() => setWeekStart(startOfDay(new Date()))}
-          />
-        )}
-
-        {viewMode === 'timeline' && (
-          <>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {readOnly ? (
-                <Hint>
-                  {resultView
-                    ? '这是执行结果；点「编辑 / 复制为新计划」可基于它新建草稿。'
-                    : '计划进行中不能修改；需要调整请先停止计划。'}
-                </Hint>
-              ) : (
-                <>
-                  <Switch
-                    label="演练计划：输完交易密码不提交"
-                    checked={dryRun}
-                    onChange={setDryRun}
-                    disabled={busy}
-                  />
-                  <div className="ml-auto flex items-center gap-2">
-                    {dirty && <Hint>列表有未保存的修改，保存后才能开始。</Hint>}
-                    <Button
-                      data-testid="plan-save"
-                      variant="primary"
-                      disabled={busy || localProblems.length > 0}
-                      onClick={save}
-                    >
-                      保存计划
-                    </Button>
-                  </div>
-                </>
-              )}
-            </div>
-            {!readOnly && localProblems.length > 0 && <Hint tone="warn">{localProblems[0]}</Hint>}
-            <Hint className="text-[10px]">
-              演练计划只输密码、不点确定、不提交；真实计划到点会按填写金额实际付款，开始前需勾选确认。
-            </Hint>
-          </>
-        )}
-        {viewMode === 'week' && <Hint className="text-[10px]">周视图只读；需要修改时切回「时间线」。</Hint>}
-      </Card>
-
-      {plan && (
-        <Card title="计划日志" subtitle={view.log_path ?? 'var/night/plan.log'}>
-          <details open={running} className="flex flex-col gap-2">
-            <summary className="cursor-pointer text-[11px] text-muted">
-              最近 {view.logs?.length ?? 0} 行（点击展开/收起）
-            </summary>
-            <LogText lines={view.logs ?? []} className="mt-2 max-h-[160px]" />
-          </details>
-        </Card>
-      )}
+      </section>
 
       <Dialog
         open={control !== null}
@@ -811,43 +827,45 @@ function TimelineView({
   return (
     <div
       data-testid="plan-timeline"
-      className="relative flex max-h-[54vh] min-h-[140px] flex-col gap-3 overflow-y-auto pl-5 pr-1"
+      className="no-scrollbar relative flex min-h-0 flex-1 flex-col overflow-y-auto pl-5 pr-1"
     >
-      <span aria-hidden className="absolute top-1 bottom-1 left-[7px] w-px bg-white/10" />
-      {groups.map(([key, group]) => (
-        <div key={key} className="flex flex-col gap-2">
-          <div className="sticky top-0 z-10 -ml-1 w-fit rounded bg-bg/95 px-1.5 py-0.5 font-medium text-[10px] text-muted backdrop-blur">
-            {group.date
-              ? `${group.date.getMonth() + 1} 月 ${group.date.getDate()} 日 · ${weekdayLabel(group.date)}`
-              : '未设置购买时间'}
+      <div className="relative flex flex-col gap-3">
+        <span aria-hidden className="absolute top-1 bottom-1 left-[-13px] w-px bg-white/10" />
+        {groups.map(([key, group]) => (
+          <div key={key} className="flex flex-col gap-2">
+            <div className="sticky top-0 z-10 -ml-1 w-fit rounded bg-bg/95 px-1.5 py-0.5 font-medium text-[10px] text-muted backdrop-blur">
+              {group.date
+                ? `${group.date.getMonth() + 1} 月 ${group.date.getDate()} 日 · ${weekdayLabel(group.date)}`
+                : '未设置购买时间'}
+            </div>
+            {group.rows.map((entry) => {
+              const status = itemStatus(entry.row.saved, now)
+              const tone = statusPrimaryTone(status)
+              return (
+                <div key={entry.row.key} className="relative">
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'absolute top-[18px] -left-[14px] size-2 rounded-full ring-2 ring-bg',
+                      toneBg[tone],
+                    )}
+                  />
+                  <PlanRow
+                    index={entry.index}
+                    row={entry.row}
+                    readOnly={readOnly}
+                    resultMode={resultMode}
+                    busy={busy}
+                    now={now}
+                    onPatch={onPatch}
+                    onRemove={onRemove}
+                  />
+                </div>
+              )
+            })}
           </div>
-          {group.rows.map((entry) => {
-            const status = itemStatus(entry.row.saved, now)
-            const tone = statusPrimaryTone(status)
-            return (
-              <div key={entry.row.key} className="relative">
-                <span
-                  aria-hidden
-                  className={cn(
-                    'absolute top-[18px] -left-[14px] size-2 rounded-full ring-2 ring-bg',
-                    toneBg[tone],
-                  )}
-                />
-                <PlanRow
-                  index={entry.index}
-                  row={entry.row}
-                  readOnly={readOnly}
-                  resultMode={resultMode}
-                  busy={busy}
-                  now={now}
-                  onPatch={onPatch}
-                  onRemove={onRemove}
-                />
-              </div>
-            )
-          })}
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
@@ -868,7 +886,7 @@ function WeekView({
 }) {
   const total = rows.length
   return (
-    <div data-testid="plan-week" className="flex flex-col gap-2 overflow-hidden">
+    <div data-testid="plan-week" className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       <div className="flex flex-wrap items-center gap-2">
         <Button data-testid="plan-week-prev" size="icon" aria-label="上一周" onClick={() => onChangeWeek(-7)}>
           ‹
@@ -884,7 +902,7 @@ function WeekView({
         </Button>
         <span className="ml-auto text-[10px] text-muted">{total} 项</span>
       </div>
-      <div className="grid h-[42vh] max-h-[420px] min-h-[240px] grid-cols-7 gap-1.5 overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-cols-7 gap-1.5 overflow-hidden">
         {days.map((day) => {
           const dayRows = rows.filter((entry) => entry.at && sameDay(entry.at, day))
           const isToday = sameDay(day, new Date())
